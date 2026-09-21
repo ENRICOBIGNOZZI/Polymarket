@@ -130,10 +130,6 @@ result={
   'timestamp_ns':time.time_ns(),
 }
 print('V7_COLLECTION_HEALTH='+json.dumps(result,sort_keys=True,separators=(',',':')))
-if not core_ok:
-    raise SystemExit(42)
-if not full_ok:
-    raise SystemExit(43)
 PY"""
 
 
@@ -167,9 +163,16 @@ def main(argv=None) -> int:
     value["stderr_tail"]=stderr[-1000:]
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    print("collection_health=PASS")
+    print("core_collection_health_ok="+str(bool(value.get("core_collection_health_ok"))).lower())
+    print("full_data_health_ok="+str(bool(value.get("full_data_health_ok"))).lower())
+    print("external_state="+str(value.get("external_state")))
+    print("external_ready_assets="+str(value.get("external_ready_assets")))
+    print("external_missing_assets="+",".join(map(str,value.get("external_missing_assets") or [])))
     print("growth_bytes_10s="+str(value["growth_bytes_10s"]))
-    return 0
+    return 0 if (
+        value.get("core_collection_health_ok") is True
+        and value.get("full_data_health_ok") is True
+    ) else 2
 
 
 if __name__=="__main__":
