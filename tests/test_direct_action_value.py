@@ -3,6 +3,7 @@ import math
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
     FrictionPolicy,
+    bounded_training_states,
     candidate_sizes,
     realized_action_economics,
     realized_action_value,
@@ -222,3 +223,27 @@ def test_model_receipt_lists_execution_frictions_inside_target_and_residuals_out
     assert "post_signal_latency_price_drift_via_arrival_book" in embedded
     assert receipt["residual_policy_frictions"]["capital_charge_bps_per_second"] == 1.0
     assert receipt["mean_covariance_estimation"] is False
+
+
+
+def test_training_state_cap_preserves_market_breadth_deterministically():
+    rows = [
+        row("m" + str(index + 700), signal=1.0 + (index % 3))
+        for index in range(120)
+    ]
+    first = bounded_training_states(rows, 30)
+    second = bounded_training_states(list(reversed(rows)), 30)
+    assert len(first) == 30
+    assert [r["decision_id"] for r in first] == [r["decision_id"] for r in second]
+    assert len({r["market_id"] for r in first}) == 30
+
+    model = DirectActionValueModel(
+        size_grid=(1.0, 5.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        max_training_states=30,
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["training_states_total"] == 120
+    assert receipt["training_states_used"] == 30
+    assert receipt["training_markets_used"] == 30
