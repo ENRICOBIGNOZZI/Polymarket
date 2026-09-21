@@ -251,7 +251,7 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
             minimum = float(origin["minimum_order_microunits"]) / 1_000_000
             if not (
                 105_000_000_000 <= tte <= 120_000_000_000
-                and decision_ask <= .75
+                and decision_ask <= .80
                 and decision_depth + 1e-12 >= 5.0
                 and minimum <= 5.0 + 1e-12
             ):
@@ -265,8 +265,7 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
                 # valid latency proxy for this forward prediction.
                 continue
             cell["arrival_available"] += 1
-            tick = int(origin["tick_e4"]) / 10000
-            limit = min(.75, decision_ask + 2 * tick)
+            limit = min(.80, decision_ask)
             if arrival["ask"] > limit:
                 continue
             filled = min(5.0, arrival["quantity"])
@@ -305,10 +304,10 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
         **PAPER,
         "prediction_threshold_per_share": .01,
         "live_geometry": {
-            "tte_seconds": [105, 120], "maximum_entry_price": .75,
+            "tte_seconds": [105, 120], "maximum_entry_price": .80,
             "target_shares": 5.0, "require_full_visible_decision_depth": True,
             "arrival_rule": "first native 25ms or 50ms label not earlier than inference age",
-            "limit_rule": "min(0.75, decision_ask + 2*tick)",
+            "limit_rule": "decision_ask_zero_chase_capped_at_0.80",
         },
         "prediction_count": len(predictions),
         "origin_join_count": len(origins),
