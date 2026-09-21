@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 import subprocess
 
-from .core import DEFAULT_EPOCH_NS, build_dataset, economic_evaluation, walk_forward
+from .core import DEFAULT_EPOCH_NS, build_dataset, economic_evaluation, fit_full_repricing, walk_forward
 from .report import publish
 
 
@@ -26,7 +26,9 @@ def main():
                          settlement_root=args.settlement_root)
     predictions, fold_receipt = walk_forward(data["decisions"], desired_folds=args.folds)
     economics = economic_evaluation(predictions)
-    publish(args.output, root=root, start_sha=sha, data=data, folds=fold_receipt, economics=economics)
+    final_models = fit_full_repricing(data["decisions"])
+    publish(args.output, root=root, start_sha=sha, data=data, folds=fold_receipt,
+            economics=economics, final_models=final_models)
     print("output=" + str(Path(args.output).resolve()) + " input_state=" + data["input_state"] + " oos=" + str(len(predictions)))
 
 
