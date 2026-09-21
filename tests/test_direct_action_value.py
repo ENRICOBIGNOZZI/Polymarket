@@ -11,6 +11,7 @@ from research.walk_forward_v3.direct_action import (
     FrictionPolicy,
     StreamingRidge,
     candidate_sizes,
+    decision_action_sides,
     realized_action_economics,
     realized_action_value,
     residual_policy_friction,
@@ -65,6 +66,26 @@ def row(market, *, signal=1.0, exit_bid=.55, depth=20.0, ask=.50, minimum=1.0):
         },
     }
 
+
+
+def bilateral_row(market="mb", *, no_depth=7.0):
+    r = row(market, signal=1.0, depth=20.0, ask=.50)
+    r["yes_token_id"] = "yes-" + market
+    r["no_token_id"] = "no-" + market
+    r["token_id"] = r["yes_token_id"]
+    r["pair"] = {
+        "YES": {"bid": .49, "ask": .50, "bid_quantity": 20.0, "ask_quantity": 20.0},
+        "NO": {"bid": .48, "ask": .51, "bid_quantity": no_depth, "ask_quantity": no_depth},
+    }
+    r["arrivals"]["50"]["pair"] = {
+        "YES": {"bid": .49, "ask": .50, "bid_quantity": 20.0, "ask_quantity": 20.0},
+        "NO": {"bid": .48, "ask": .51, "bid_quantity": no_depth, "ask_quantity": no_depth},
+    }
+    r["targets"]["500"]["pair"] = {
+        "YES": {"bid": .45, "ask": .46, "bid_quantity": 20.0, "ask_quantity": 20.0},
+        "NO": {"bid": .56, "ask": .57, "bid_quantity": no_depth, "ask_quantity": no_depth},
+    }
+    return r
 
 def test_candidate_sizes_obey_l1_depth_venue_minimum_and_notional_cap():
     r = row("m1", depth=100.0, ask=.50, minimum=5.0)
@@ -502,3 +523,85 @@ def test_bilateral_builder_rejects_conflicting_future_pair(tmp_path):
     import pytest
     with pytest.raises(ValueError, match="CONFLICTING_BILATERAL_LABEL"):
         build_bilateral_evidence([path])
+
+
+
+def test_bilateral_realized_economics_uses_chosen_side_prices_and_depth():
+    r = bilateral_row("m950", no_depth=7.0)
+    assert decision_action_sides(r) == ("YES", "NO")
+
+    no_value, no_state = realized_action_value(
+        r, size=7.0, horizon_ms=500, latency_ms=50, side="NO")
+    yes_value, yes_state = realized_action_value(
+        r, size=7.0, horizon_ms=500, latency_ms=50, side="YES")
+    assert no_state == "OBSERVED_FULL_FILL"
+    assert yes_state == "OBSERVED_FULL_FILL"
+    assert math.isclose(no_value, 7.0 * (.56 - .51), abs_tol=1e-12)
+    assert math.isclose(yes_value, 7.0 * (.45 - .50), abs_tol=1e-12)
+    assert no_value > 0 > yes_value
+
+    # Opposite-side visible depth is 7 shares, so an 8-share NO action is not admissible.
+    too_large, state = realized_action_value(
+        r, size=8.0, horizon_ms=500, latency_ms=50, side="NO")
+    assert too_large is None
+    assert state == "INSUFFICIENT_DECISION_DEPTH"
+
+
+def test_bilateral_quantity_candidates_use_side_specific_ask_and_capital():
+    r = bilateral_row("m951", no_depth=20.0)
+    # At NO ask=.51, $3 only funds 5.882... shares.
+    sizes = candidate_sizes(
+        r, side="NO", size_grid=(1.0, 5.0, 6.0, 10.0),
+        hard_order_notional=100.0, available_capital=3.0, max_sizes=10)
+    assert max(sizes) <= 3.0 / .51 + 1e-12
+    assert any(math.isclose(q, 3.0 / .51, rel_tol=0, abs_tol=1e-12) for q in sizes)
+
+
+def test_direct_policy_can_choose_no_side_when_its_learned_value_is_higher():
+    import numpy as np
+
+    r = bilateral_row("m952", no_depth=20.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+    )
+    model._configure_levels([r])
+
+    class SideModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in self.names}
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            # NO has side_sign=-1, so a negative coefficient makes NO superior.
+            self.beta[1 + self.names.index("action.side_sign")] = -1.0
+            self.beta[1 + self.names.index("action.size")] = .02
+
+        def predict(self, record):
+            value = float(self.beta[0])
+            for index, name in enumerate(self.names):
+                raw = record["features"].get(name)
+                if isinstance(raw, (int, float)) and math.isfinite(raw):
+                    value += float(self.beta[1 + index]) * float(raw)
+                else:
+                    value += float(self.beta[1 + len(self.names) + index])
+            return value
+
+    model.mean_model = SideModel(model.model_feature_names)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.fitted = True
+
+    selected = model.select_action(
+        r, latency_ms=50, available_capital=100.0, capital_budget=1000.0)
+    assert selected["action"] == "TRADE"
+    assert selected["side"] == "NO"
+    assert math.isclose(
+        selected["notional"], selected["size"] * .51, rel_tol=0, abs_tol=1e-10)
+
+
+def test_legacy_state_without_bilateral_depth_never_invents_opposite_side():
+    r = row("m953")
+    assert decision_action_sides(r) == ("SELECTED",)
