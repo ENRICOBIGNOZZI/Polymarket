@@ -78,7 +78,7 @@ jobs:
                   print('DASHBOARD_ROWS='+json.dumps(rows))
               if table=='folder':
                   print('FOLDER_SAMPLE='+json.dumps(con.execute('select * from folder limit 10').fetchall()))
-          echo '=== UNIFIED RESOURCE ==='
+          print('=== UNIFIED RESOURCE ===')
           if 'resource' in tables:
               cols=[r[1] for r in con.execute('pragma table_info(resource)')]
               print('RESOURCE_COLS='+json.dumps(cols))
