@@ -775,6 +775,13 @@ class Manager:
                 0, self.global_budget_microdollars - self.native_carryover["total_unsettled_microdollars"]
             ),
             "taker_target_quantity_microunits": self.args.target_quantity_microunits,
+            "capital_based_order_sizing": (
+                self.base_risk_receipt.get("target_order_notional_cap_microdollars") is not None
+            ),
+            "target_order_fraction_of_context": self.base_risk_receipt.get(
+                "target_order_fraction_of_context"),
+            "target_order_notional_cap_microdollars": self.base_risk_receipt.get(
+                "target_order_notional_cap_microdollars"),
             "taker_maximum_entry_price_e4": self.args.maximum_entry_price_e4,
             "taker_minimum_tte_ns": self.args.minimum_tte_ns,
             "taker_maximum_tte_ns": self.args.maximum_tte_ns,
@@ -860,7 +867,14 @@ class Manager:
             # CLOB terms are market-scoped remote metadata. Quarantine/retry
             # this context without taking down already-running contexts.
             raise RetryableLaunchError(f"clob_market_terms:{exc}") from exc
-        if minimum_order > self.args.target_quantity_microunits:
+        # Fixed quantity remains a compatibility fallback. Under the capital-
+        # based PAPER contract the engine derives quantity from target notional
+        # and the executable price, so venue-minimum admissibility is checked
+        # causally in the hot path.
+        if (
+            self.base_risk_receipt.get("target_order_notional_cap_microdollars") is None
+            and minimum_order > self.args.target_quantity_microunits
+        ):
             raise RetryableLaunchError("venue_minimum_exceeds_frozen_target_no_automatic_upsizing")
         fee_rate, fee_exponent, fee_source = fee_parameters(market)
         terms = execution_terms_snapshot(market, public_json)
@@ -895,8 +909,24 @@ class Manager:
             raise RetryableLaunchError("signal_confirmation_coinbase_missing")
         if signal_policy and signal_policy["confirmation_venue"] == "BYBIT" and bybit_symbol == "NONE":
             raise RetryableLaunchError("signal_confirmation_bybit_missing")
-        max_market = min(budget_microdollars, self.base_risk_receipt["limits"]["max_market_exposure_microdollars"])
-        max_order = min(max_market, self.base_risk_receipt["limits"]["max_single_order_microdollars"])
+        max_market = min(
+            budget_microdollars,
+            self.base_risk_receipt["limits"]["max_market_exposure_microdollars"])
+        max_order = min(
+            max_market,
+            self.base_risk_receipt["limits"]["max_single_order_microdollars"])
+        fraction = float(
+            self.base_risk_receipt.get("target_order_fraction_of_context") or 0.0)
+        target_cap = int(
+            self.base_risk_receipt.get("target_order_notional_cap_microdollars") or 0)
+        target_notional = 0
+        if fraction > 0 and target_cap > 0:
+            target_notional = min(
+                max_order,
+                target_cap,
+                int(math.floor(budget_microdollars * fraction + 1e-9)))
+            if target_notional <= 0:
+                raise RuntimeError("capital_based_target_notional_zero")
         command = [
             str(self.args.engine),
             "--asset", str(market["asset"]),
@@ -920,6 +950,8 @@ class Manager:
             "--tick-size-e4", str(yes_tick),
             "--min-order-microunits", str(minimum_order),
             "--target-quantity-microunits", str(self.args.target_quantity_microunits),
+            *(["--target-notional-microdollars", str(target_notional)]
+              if target_notional > 0 else []),
             "--maximum-entry-price-e4", str(self.args.maximum_entry_price_e4),
             "--minimum-tte-ns", str(self.args.minimum_tte_ns),
             "--maximum-tte-ns", str(self.args.maximum_tte_ns),
