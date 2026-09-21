@@ -1483,3 +1483,112 @@ def test_partial_pooling_receipt_exposes_training_support_without_outcome_tuning
         isinstance(value, int) and value >= 0
         for value in receipt["regime_action_target_counts"].values()
     )
+
+
+
+def test_bilateral_side_support_does_not_borrow_selected_side_trade_authority():
+    rows = []
+    for index in range(30):
+        item = row(
+            "m" + str(index + 9600),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        item["asset"] = "BTC"
+        item["horizon"] = "M5"
+        item["yes_token_id"] = "yes-" + item["market_id"]
+        item["no_token_id"] = "no-" + item["market_id"]
+        item["token_id"] = item["yes_token_id"]
+        # No bilateral executable pair: training support belongs only to YES.
+        item["pair"] = {"state": "UNAVAILABLE"}
+        rows.append(item)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_side_regime_action_targets=10,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+
+    probe = bilateral_row("m9995", no_depth=20.0)
+    probe["asset"] = "BTC"
+    probe["horizon"] = "M5"
+    probe["signal_age_ns"] = 1_000_000
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    assert {entry["side"] for entry in scored} == {"YES"}
+    assert all(
+        entry["side_regime_action_target_support"] >= 10
+        for entry in scored
+    )
+
+
+def test_bilateral_side_gate_fails_closed_when_every_side_is_under_supported():
+    rows = []
+    for index in range(20):
+        item = row(
+            "m" + str(index + 9700),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        item["yes_token_id"] = "yes-" + item["market_id"]
+        item["no_token_id"] = "no-" + item["market_id"]
+        item["token_id"] = item["yes_token_id"]
+        item["pair"] = {"state": "UNAVAILABLE"}
+        rows.append(item)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_side_regime_action_targets=10_000,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    probe = bilateral_row("m9996", no_depth=20.0)
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert scored == []
+    assert state == "INSUFFICIENT_SIDE_REGIME_SUPPORT"
+    selected = model.select_action(probe, latency_ms=50)
+    assert selected["action"] == "NO_TRADE"
+    assert selected["reason"] == "INSUFFICIENT_SIDE_REGIME_SUPPORT"
+
+
+def test_side_regime_support_receipt_is_explicit_and_separate():
+    rows = []
+    for index in range(24):
+        item = row(
+            "m" + str(index + 9800),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        item["yes_token_id"] = "yes-" + item["market_id"]
+        item["no_token_id"] = "no-" + item["market_id"]
+        item["token_id"] = item["yes_token_id"]
+        item["pair"] = {"state": "UNAVAILABLE"}
+        rows.append(item)
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_side_regime_action_targets=3,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["minimum_side_regime_action_targets"] == 3
+    assert receipt["side_regime_action_target_counts"]
+    assert receipt["bilateral_side_support_semantics"] == (
+        "YES_AND_NO_REQUIRE_THEIR_OWN_CAUSAL_ACTION_TARGET_SUPPORT")
+    assert any(key.startswith("YES::") for key in receipt[
+        "side_regime_action_target_counts"
+    ])
+    assert not any(key.startswith("NO::") for key in receipt[
+        "side_regime_action_target_counts"
+    ])
