@@ -92,21 +92,36 @@ sudo -u "$SERVICE_USER" git -C "$APP" fetch --no-tags origin main
 sudo -u "$SERVICE_USER" git -C "$APP" cat-file -e "$SHA^{{commit}}"
 install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUNTIME_ROOT" "$RUNTIME_ROOT/by-sha"
 
+reuse_build=0
 if [[ -e "$TARGET" ]]; then
-  sudo systemctl stop "$COLLECTION_UNIT" >/dev/null 2>&1 || true
-  sudo -u "$SERVICE_USER" git -C "$APP" worktree remove --force "$TARGET" >/dev/null 2>&1 || true
-  rm -rf -- "$TARGET"
+  if [[ "$(sudo -u "$SERVICE_USER" git -C "$TARGET" rev-parse HEAD 2>/dev/null || true)" == "$SHA" ]] \
+     && [[ -z "$(sudo -u "$SERVICE_USER" git -C "$TARGET" status --porcelain 2>/dev/null || true)" ]] \
+     && [[ -x "$TARGET/build/polymarket_v7_trade_recorder" ]] \
+     && [[ -x "$TARGET/build/polymarket_v7_maker_fillability_observer" ]] \
+     && [[ -x "$TARGET/build/polymarket_v7_external_venue_runtime" ]]; then
+    reuse_build=1
+  else
+    sudo systemctl stop "$COLLECTION_UNIT" >/dev/null 2>&1 || true
+    sudo -u "$SERVICE_USER" git -C "$APP" worktree remove --force "$TARGET" >/dev/null 2>&1 || true
+    rm -rf -- "$TARGET"
+  fi
 fi
-sudo -u "$SERVICE_USER" git -C "$APP" worktree prune
-sudo -u "$SERVICE_USER" git -C "$APP" worktree add --detach "$TARGET" "$SHA" >/dev/null
+if [[ "$reuse_build" == 0 ]]; then
+  sudo -u "$SERVICE_USER" git -C "$APP" worktree prune
+  sudo -u "$SERVICE_USER" git -C "$APP" worktree add --detach "$TARGET" "$SHA" >/dev/null
+fi
 [[ "$(sudo -u "$SERVICE_USER" git -C "$TARGET" rev-parse HEAD)" == "$SHA" ]]
 [[ -z "$(sudo -u "$SERVICE_USER" git -C "$TARGET" status --porcelain)" ]]
 
 command -v cmake >/dev/null
 command -v ninja >/dev/null
 command -v g++ >/dev/null
-sudo -u "$SERVICE_USER" cmake -S "$TARGET" -B "$TARGET/build" -G Ninja   -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF >/dev/null
-sudo -u "$SERVICE_USER" nice -n 10 cmake --build "$TARGET/build" --parallel 2 --target   polymarket_v7_trade_recorder   polymarket_v7_maker_fillability_observer   polymarket_v7_external_venue_runtime
+if [[ "$reuse_build" == 0 ]]; then
+  sudo -u "$SERVICE_USER" cmake -S "$TARGET" -B "$TARGET/build" -G Ninja   -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF >/dev/null
+  sudo -u "$SERVICE_USER" nice -n 10 cmake --build "$TARGET/build" --parallel 2 --target   polymarket_v7_trade_recorder   polymarket_v7_maker_fillability_observer   polymarket_v7_external_venue_runtime
+else
+  echo "collection_build_reused=$SHA"
+fi
 
 bash -n "$TARGET/scripts/v7_collection_plane.sh"
 python3 -m py_compile   "$TARGET/scripts/v7_crypto_universe.py"   "$TARGET/scripts/v7_multi_asset_external_collector.py"   "$TARGET/scripts/v7_rtds_external_fair_monitor.py"   "$TARGET/monitoring/v7_london_buffer_retention.py"
@@ -189,7 +204,20 @@ PY
   then ready=1; break; fi
   sleep 1
 done
-[[ "$ready" == 1 ]]
+if [[ "$ready" != 1 ]]; then
+  echo "COLLECTION_READINESS_FAILED" >&2
+  systemctl --no-pager --full status "$COLLECTION_UNIT" >&2 2>/dev/null || true
+  journalctl -u "$COLLECTION_UNIT" -n 120 --no-pager -o cat >&2 2>/dev/null || true
+  for file in \
+    "$COLLECTION_ROOT/control/runtime_status.json" \
+    "$COLLECTION_ROOT/universe/status.json" \
+    "$COLLECTION_ROOT/external_fair/all_assets_status.json" \
+    "$COLLECTION_ROOT/research/repricing_book/fillability_ws_status.json"; do
+    echo "--- $file ---" >&2
+    cat "$file" >&2 2>/dev/null || true
+  done
+  exit 75
+fi
 
 before="$(python3 - "$COLLECTION_ROOT" <<'PY'
 from pathlib import Path
