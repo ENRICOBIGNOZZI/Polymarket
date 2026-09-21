@@ -38,7 +38,10 @@ def sign(value):
 
 
 def opposite(side):
-    return "NO" if str(side)=="YES" else "YES"
+    side=str(side)
+    if side=="YES": return "NO"
+    if side=="NO": return "YES"
+    return None
 
 
 def side_for_direction(row, desired):
