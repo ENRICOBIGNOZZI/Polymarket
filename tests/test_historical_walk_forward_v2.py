@@ -8,6 +8,7 @@ from research.walk_forward_v2.core import (
     asset_markout_predictors,
     asset_selection_diagnostics,
     live_parity_policy_diagnostics,
+    common_signal_support_diagnostics,
     book_targets,
     build_dataset,
     folds,
@@ -783,3 +784,49 @@ def test_exact_live_policy_replay_geometry_differs_from_research_geometry():
     )
     assert live_early["funnel"]["tte_valid"] is False
     assert live_early["funnel"]["simulated_order"] is False
+
+
+
+def test_common_signal_support_uses_same_shock_floor_and_age_cap_for_all_assets():
+    events = []
+    base = 1_789_921_800_000_000_001
+    specs = [
+        ("BTC", 1.5, 5.0, .02, .03),
+        ("ETH", 1.5, 5.0, .02, .03),
+        ("DOGE", 1.0, 5.0, .02, .03),
+        ("XRP", 1.5, 60.0, .02, .03),
+    ]
+    for index, (asset, shock, age_ms, pooled, specific) in enumerate(specs):
+        row = record("common-" + asset.lower(), decision_ns=base + index)
+        row["asset"] = asset
+        row["signal_age_ns"] = int(age_ms * 1_000_000)
+        row["features"]["binance_return_100ms_bp"] = shock
+        row["targets"] = {
+            "1000": {
+                "state": "OBSERVED",
+                "arrival_bid": .55,
+                "observed_time_ns": row["decision_ns"] + 1_000_000_000,
+            }
+        }
+        events.append({
+            "decision_ns": row["decision_ns"],
+            "decision_id": row["decision_id"],
+            "row": row,
+            "markout_predictions": {"1000": pooled},
+            "asset_markout_predictions": {"1000": specific},
+        })
+
+    diag = common_signal_support_diagnostics(
+        events, horizons=(1000,), common_shock_floor_bp=1.13,
+        age_caps_ms=(10, 100), required_prediction=.01)
+    fast = diag["horizons"]["1000"]["10"]
+    slow = diag["horizons"]["1000"]["100"]
+
+    assert fast["BTC"]["rows"] == 1
+    assert fast["ETH"]["rows"] == 1
+    assert fast["DOGE"]["rows"] == 0
+    assert fast["XRP"]["rows"] == 0
+    assert slow["XRP"]["rows"] == 1
+    assert fast["BTC"]["pooled_passes_required_prediction"] == 1
+    assert fast["ETH"]["asset_passes_required_prediction"] == 1
+    assert diag["common_shock_floor_bp"] == 1.13
