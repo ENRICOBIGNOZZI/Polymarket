@@ -184,8 +184,11 @@ def pm_features(row):
     return out
 
 def row_features(row, tape_index=None, delay_ms=0):
-    features = dict(row.get("features") or {})
-    features.update(pm_features(row))
+    # PM state belongs to the action-time state. External information is delayed
+    # separately. At d>0, never leak the native decision-time external cut.
+    features = pm_features(row)
+    if int(delay_ms) == 0:
+        features.update(dict(row.get("features") or {}))
     tape = None
     if tape_index:
         tape = feature_asof(
