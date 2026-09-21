@@ -80,7 +80,11 @@ def public_economics(economics):
         "prediction_metrics": economics.get("prediction_metrics", {}),
         "pm_edge_distribution": economics.get("pm_edge_distribution", {}),
         "models": {
-            name: {"metrics": value.get("metrics", {}), "uncertainty": value.get("uncertainty", {})}
+            name: {
+                "metrics": value.get("metrics", {}),
+                "uncertainty": value.get("uncertainty", {}),
+                **({"equity_events": value.get("equity_events", [])} if value.get("equity_events") else {}),
+            }
             for name, value in economics.get("models", {}).items()
         },
         "latency": economics.get("latency", {}),
@@ -113,6 +117,7 @@ def chart(output, state, economics):
         "08-pm-baseline-executable-edge", "09-model-logloss-comparison",
         "10-repricing-prediction-quality", "11-pnl-by-asset",
         "12-pnl-by-contract-horizon", "13-friction-decomposition", "14-fill-rate-vs-predicted-edge",
+        "15-equity-drawdown-500-1000-2000ms",
     ]
     try:
         import matplotlib
@@ -138,6 +143,10 @@ def chart(output, state, economics):
     models = economics.get("models", {})
     selected = models.get("markout_500ms") or models.get("markout_250ms") or {}
     selected_outcomes = selected.get("outcomes", [])
+    equity_models = {
+        name: models.get(name, {})
+        for name in ("markout_500ms", "markout_1000ms", "markout_2000ms")
+    }
 
     def save(name, draw):
         fig, axis = plt.subplots(figsize=(8, 4))
@@ -150,14 +159,27 @@ def chart(output, state, economics):
         files.append(path.name)
 
     def cumulative(axis):
-        rows = sorted((r for r in selected_outcomes if r.get("markout") is not None),
-                      key=lambda r: r.get("decision_ns", 0))
-        total = 0.0; x=[]; y=[]
-        for row in rows:
-            total += row["markout"]; x.append(row.get("decision_ns", 0) / 1e9); y.append(total)
-        if x:
-            axis.plot(x, y); axis.axhline(0, linewidth=.8); axis.set_xlabel("decision epoch seconds"); axis.set_ylabel("OOS executable markout")
-        else: axis.text(.5,.5,"No marked fills",ha="center",va="center",transform=axis.transAxes)
+        plotted = False
+        for name, value in equity_models.items():
+            rows = sorted(
+                (r for r in value.get("equity_events", []) if r.get("markout") is not None),
+                key=lambda r: r.get("decision_ns", 0),
+            )
+            total = 0.0; x=[]; y=[]
+            for row in rows:
+                total += row["markout"]
+                x.append(row.get("decision_ns", 0) / 1e9)
+                y.append(total)
+            if x:
+                axis.plot(x, y, marker="o", markersize=3, label=name.replace("markout_",""))
+                plotted = True
+        if plotted:
+            axis.axhline(0, linewidth=.8)
+            axis.set_xlabel("decision epoch seconds")
+            axis.set_ylabel("cumulative OOS net executable markout")
+            axis.legend()
+        else:
+            axis.text(.5,.5,"No marked fills",ha="center",va="center",transform=axis.transAxes)
 
     def pnl_models(axis):
         labels=[]; values=[]
@@ -238,6 +260,33 @@ def chart(output, state, economics):
         if pairs: axis.bar(range(len(pairs)),[v for _,v in pairs]);axis.set_xticks(range(len(pairs)),[k for k,_ in pairs],rotation=20,ha="right");axis.axhline(0,linewidth=.8);axis.set_ylabel("PAPER PnL")
         else: axis.text(.5,.5,"Friction decomposition unavailable",ha="center",va="center",transform=axis.transAxes)
 
+    def drawdown(axis):
+        plotted = False
+        for name, value in equity_models.items():
+            rows = sorted(
+                (r for r in value.get("equity_events", []) if r.get("markout") is not None),
+                key=lambda r: r.get("decision_ns", 0),
+            )
+            cumulative = 0.0
+            peak = 0.0
+            x=[]; dd=[]
+            for row in rows:
+                cumulative += row["markout"]
+                peak = max(peak, cumulative)
+                x.append(row.get("decision_ns", 0) / 1e9)
+                dd.append(cumulative - peak)
+            if x:
+                axis.plot(x, dd, marker="o", markersize=3, label=name.replace("markout_",""))
+                plotted = True
+        if plotted:
+            axis.axhline(0, linewidth=.8)
+            axis.set_xlabel("decision epoch seconds")
+            axis.set_ylabel("drawdown from running markout peak")
+            axis.legend()
+        else:
+            axis.text(.5,.5,"No marked fills",ha="center",va="center",transform=axis.transAxes)
+
+
     def fill_by_edge(axis):
         rows=[r for r in selected_outcomes if r.get("predicted_edge") is not None]
         bounds=[-1e9,0,.0025,.005,.01,.02,1e9];labels=["<0","0-.25%",".25-.5%",".5-1%","1-2%",">2%"];rates=[]
@@ -261,6 +310,7 @@ def chart(output, state, economics):
     save(names[11], lambda axis: grouped_pnl(axis,"horizon"))
     save(names[12], friction)
     save(names[13], fill_by_edge)
+    save(names[14], drawdown)
     return {"state": "READY", "files": files}
 
 
