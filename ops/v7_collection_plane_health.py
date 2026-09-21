@@ -40,25 +40,6 @@ universe=json.loads((root/'universe/status.json').read_text())
 external=json.loads((root/'external_fair/all_assets_status.json').read_text())
 book=json.loads((root/'research/repricing_book/fillability_ws_status.json').read_text())
 sha=str(runtime.get('collector_sha') or '')
-assert re.fullmatch(r'[0-9a-f]{40}',sha)
-assert runtime.get('model_independent') is True
-assert runtime.get('live_model_required') is False
-assert runtime.get('execution_authority')=='ZERO_AUTHORITY_DATA_COLLECTION'
-assert runtime.get('paper_only') is True
-assert runtime.get('authenticated_execution') is False
-assert runtime.get('real_order_submission') is False
-assert runtime.get('real_capital_at_risk') is False
-assert runtime.get('state')=='COLLECTING'
-assert time.time_ns()-int(runtime.get('timestamp_ns') or 0)<10_000_000_000
-assert universe.get('model_sha')==sha and universe.get('state')=='OPERATIONAL'
-assert int(universe.get('book_selection_contexts') or 0)==30
-assert int(universe.get('book_selection_tokens') or 0)==60
-assert external.get('model_sha')==sha and external.get('state')=='OPERATIONAL'
-assert int(external.get('ready_assets') or 0)==6
-assert book.get('model_sha')==sha and book.get('state')=='running'
-assert int(book.get('observed_tokens') or 0)>0
-assert int(book.get('dropped_events') or 0)==0
-assert int(book.get('decoder_failures') or 0)==0
 
 def bytes_now():
     paths=[]
@@ -72,12 +53,62 @@ def bytes_now():
         paths.extend(root.glob(pattern))
     return sum(p.stat().st_size for p in paths if p.is_file() and not p.is_symlink())
 
+checks={}
+checks['sha_valid']=bool(re.fullmatch(r'[0-9a-f]{40}',sha))
+checks['model_independent']=runtime.get('model_independent') is True
+checks['live_model_not_required']=runtime.get('live_model_required') is False
+checks['zero_authority']=runtime.get('execution_authority')=='ZERO_AUTHORITY_DATA_COLLECTION'
+checks['paper_only']=runtime.get('paper_only') is True
+checks['authenticated_execution_disabled']=runtime.get('authenticated_execution') is False
+checks['real_order_submission_disabled']=runtime.get('real_order_submission') is False
+checks['real_capital_at_risk_false']=runtime.get('real_capital_at_risk') is False
+checks['runtime_collecting']=runtime.get('state')=='COLLECTING'
+checks['runtime_fresh']=time.time_ns()-int(runtime.get('timestamp_ns') or 0)<10_000_000_000
+checks['universe_operational']=universe.get('model_sha')==sha and universe.get('state')=='OPERATIONAL'
+checks['context_count_30']=int(universe.get('book_selection_contexts') or 0)==30
+checks['token_count_60']=int(universe.get('book_selection_tokens') or 0)==60
+checks['external_sha_match']=external.get('model_sha')==sha
+checks['external_operational']=external.get('state')=='OPERATIONAL'
+checks['external_all_assets_ready']=int(external.get('ready_assets') or 0)==6
+checks['book_running']=book.get('model_sha')==sha and book.get('state')=='running'
+checks['book_has_tokens']=int(book.get('observed_tokens') or 0)>0
+checks['book_no_drops']=int(book.get('dropped_events') or 0)==0
+checks['book_no_decoder_failures']=int(book.get('decoder_failures') or 0)==0
+
 before=bytes_now()
 time.sleep(10)
 after=bytes_now()
-assert after>before
+growth=after-before
+checks['tape_growth_positive']=growth>0
+
+core_names=(
+    'sha_valid','model_independent','live_model_not_required','zero_authority',
+    'paper_only','authenticated_execution_disabled','real_order_submission_disabled',
+    'real_capital_at_risk_false','runtime_collecting','runtime_fresh',
+    'universe_operational','context_count_30','token_count_60',
+    'book_running','book_has_tokens','book_no_drops','book_no_decoder_failures',
+    'tape_growth_positive',
+)
+full_names=core_names+(
+    'external_sha_match','external_operational','external_all_assets_ready',
+)
+core_ok=all(checks[name] for name in core_names)
+full_ok=all(checks[name] for name in full_names)
+
+assets=[]
+for row in external.get('assets') or []:
+    if isinstance(row,dict):
+        assets.append({
+            'asset':row.get('asset'),
+            'alive':row.get('alive'),
+            'data_ready':row.get('data_ready'),
+            'reason':row.get('reason'),
+            'capture_recovery_pending':row.get('capture_recovery_pending'),
+            'restart_count':row.get('restart_count'),
+        })
+
 result={
-  'schema':'polymarket_v7_collection_plane_health_v1',
+  'schema':'polymarket_v7_collection_plane_health_v2',
   'collector_sha':sha,
   'collection_root':str(root),
   'model_independent':True,
@@ -86,14 +117,24 @@ result={
   'real_order_submission':False,
   'real_capital_at_risk':False,
   'execution_authority':'ZERO_AUTHORITY_DATA_COLLECTION',
+  'core_collection_health_ok':core_ok,
+  'full_data_health_ok':full_ok,
+  'checks':checks,
+  'external_state':external.get('state'),
   'external_ready_assets':int(external.get('ready_assets') or 0),
+  'external_missing_assets':external.get('missing_assets') or [],
+  'external_assets':assets,
+  'book_state':book.get('state'),
   'book_observed_tokens':int(book.get('observed_tokens') or 0),
-  'growth_bytes_10s':after-before,
+  'growth_bytes_10s':growth,
   'timestamp_ns':time.time_ns(),
 }
 print('V7_COLLECTION_HEALTH='+json.dumps(result,sort_keys=True,separators=(',',':')))
-PY
-"""
+if not core_ok:
+    raise SystemExit(42)
+if not full_ok:
+    raise SystemExit(43)
+PY"""
 
 
 def main(argv=None) -> int:
@@ -113,9 +154,11 @@ def main(argv=None) -> int:
             raise SsmDeployError("collection health marker missing")
         value=json.loads(rows[0].split("=",1)[1])
         if (
-            value.get("schema")!="polymarket_v7_collection_plane_health_v1"
+            value.get("schema")!="polymarket_v7_collection_plane_health_v2"
             or value.get("model_independent") is not True
             or value.get("execution_authority")!="ZERO_AUTHORITY_DATA_COLLECTION"
+            or value.get("core_collection_health_ok") is not True
+            or value.get("full_data_health_ok") is not True
             or int(value.get("growth_bytes_10s") or 0)<=0
         ):
             raise SsmDeployError("collection health receipt invalid")
