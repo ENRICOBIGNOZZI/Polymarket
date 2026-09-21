@@ -28,6 +28,7 @@ from research.walk_forward_v3.direct_action import (
     summarize_direct_action,
     merge_direct_action_summaries,
     bilateral_evidence_summary,
+    evaluate_latency_age_surface,
 )
 
 
@@ -1293,3 +1294,91 @@ def test_prequential_selection_scores_are_generated_on_later_market_blocks():
         "FINAL_MODEL_MAY_LATER_REFIT_ON_HISTORICAL_SCORE_BLOCKS;"
         "NOT_A_FINAL_MODEL_CONFORMAL_COVERAGE_CLAIM"
     )
+
+
+
+def test_effective_action_age_is_signal_age_plus_execution_latency():
+    r = row("m9001", signal=2.0, depth=20.0)
+    r["signal_age_ns"] = 37_000_000
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(25, 50, 100, 250),
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+    action = model._action_record(
+        r, size=5.0, horizon_ms=500, latency_ms=50)
+    features = action["features"]
+    assert math.isclose(features["state.signal_age_ms"], 37.0, abs_tol=1e-12)
+    assert math.isclose(
+        features["system.effective_action_age_ms"], 87.0, abs_tol=1e-12)
+    assert features["age::50_100"] == 1.0
+    assert features["age::le50"] == 0.0
+    assert features["age::100_250"] == 0.0
+
+
+def test_effective_action_age_gate_fails_closed_before_scoring():
+    rows = [
+        row(
+            "m" + str(index + 9100),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(40)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(25, 50, 100, 250),
+        maximum_effective_action_age_ms=100.0,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+
+    fresh = row("m9991", signal=2.0, exit_bid=.56, depth=20.0)
+    fresh["signal_age_ns"] = 40_000_000
+    scored, state = model.score_actions(fresh, latency_ms=50)
+    assert state == "READY"
+    assert scored
+
+    stale = row("m9992", signal=2.0, exit_bid=.56, depth=20.0)
+    stale["signal_age_ns"] = 60_000_000
+    scored, state = model.score_actions(stale, latency_ms=50)
+    assert scored == []
+    assert state == "EFFECTIVE_ACTION_AGE_EXCEEDED"
+    selected = model.select_action(stale, latency_ms=50)
+    assert selected["action"] == "NO_TRADE"
+    assert selected["reason"] == "EFFECTIVE_ACTION_AGE_EXCEEDED"
+
+
+def test_latency_age_surface_is_diagnostic_and_preserves_gate():
+    rows = [
+        row(
+            "m" + str(index + 9200),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(40)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(25, 50, 100, 250),
+        maximum_effective_action_age_ms=100.0,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    surface = evaluate_latency_age_surface(
+        model,
+        rows[-10:],
+        latencies_ms=(25, 50, 100, 250),
+        capital_budget=1000.0,
+    )
+    assert surface["selection"] == "NONE_DIAGNOSTIC_ONLY"
+    assert [entry["latency_ms"] for entry in surface["entries"]] == [
+        25, 50, 100, 250
+    ]
+    assert all(entry["state"] == "READY" for entry in surface["entries"])
+    assert model.maximum_effective_action_age_ms == 100.0
