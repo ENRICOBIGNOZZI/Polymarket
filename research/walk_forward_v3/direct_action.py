@@ -16,6 +16,7 @@ Scope is intentionally narrow and fail-closed:
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 import argparse
 import math
 from pathlib import Path
@@ -43,6 +44,34 @@ DEFAULT_MINIMUM_TTE_NS = 30_000_000_000
 DEFAULT_MAXIMUM_TTE_NS = 120_000_000_000
 LIVE_MINIMUM_TTE_NS = 105_000_000_000
 LIVE_MAXIMUM_TTE_NS = 120_000_000_000
+
+
+@dataclass(frozen=True)
+class FrictionPolicy:
+    """Residual policy frictions not already embedded in executable cash PnL.
+
+    Spread, post-signal price drift/slippage, fill/no-fill, taker fees and
+    adverse post-fill repricing are learned from executable observations and
+    therefore must not be subtracted a second time here.
+    """
+    capital_charge_bps_per_second: float = 0.0
+    asset_concentration_lambda: float = 0.0
+    common_factor_concentration_lambda: float = 0.0
+    uncertainty_aversion: float = 1.0
+
+    def validated(self):
+        values = (
+            self.capital_charge_bps_per_second,
+            self.asset_concentration_lambda,
+            self.common_factor_concentration_lambda,
+            self.uncertainty_aversion,
+        )
+        if any(not finite(v) or float(v) < 0 for v in values):
+            raise ValueError("nonnegative finite friction policy required")
+        return self
+
+
+DEFAULT_FRICTION_POLICY = FrictionPolicy()
 
 
 def _quantile(values, level):
@@ -104,20 +133,22 @@ def candidate_sizes(row, *, size_grid=DEFAULT_SIZE_GRID,
     return [ordered[i] for i in sorted(indices)]
 
 
-def realized_action_value(row, *, size, horizon_ms, latency_ms,
-                          entry_cap=DEFAULT_ENTRY_CAP,
-                          hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
-                          require_full_decision_depth=True):
-    """Observed total net executable markout for one counterfactual action.
+def realized_action_economics(row, *, size, horizon_ms, latency_ms,
+                              entry_cap=DEFAULT_ENTRY_CAP,
+                              hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
+                              require_full_decision_depth=True):
+    """Observed execution economics for one counterfactual action.
 
-    A causally observed no-fill is worth exactly zero.  Missing arrival or exit
-    evidence is censored and returns None.
+    The returned cash PnL already includes the observable trading frictions:
+    entry spread, realized post-signal/latency price drift, exit spread,
+    partial fill/no-fill and both taker fees.  Missing evidence is censored.
     """
     if horizon_ms <= latency_ms:
         return None, "HORIZON_NOT_AFTER_EXECUTION"
     if not _valid_state(row):
         return None, "STATE_OUTSIDE_RESEARCH_SUPPORT"
     ask0 = float(row["ask"])
+    bid0 = float(row["bid"])
     size = float(size)
     if ask0 > entry_cap + 1e-12:
         return None, "ENTRY_CAP"
@@ -132,23 +163,149 @@ def realized_action_value(row, *, size, horizon_ms, latency_ms,
     if book is None:
         return None, str(why or "ARRIVAL_UNAVAILABLE")
 
-    # Zero chase: the order is never allowed to pay above the causal decision ask.
+    # Zero chase.  A causally observed non-fill is a real zero payoff for this
+    # action, not censored evidence.
     if float(book["ask"]) > ask0 + 1e-12:
-        return 0.0, "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
+        return {
+            "cash_pnl": 0.0,
+            "gross_executable_markout": 0.0,
+            "filled": 0.0,
+            "requested": size,
+            "entry_price": None,
+            "exit_bid": None,
+            "entry_fee": 0.0,
+            "exit_fee": 0.0,
+            "total_fees": 0.0,
+            "decision_half_spread_cost": 0.0,
+            "latency_price_drift_cost": 0.0,
+            "exit_half_spread_cost": 0.0,
+            "ideal_midpoint_alpha": None,
+            "frictions_embedded_in_cash_pnl": True,
+        }, "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
     fill = min(size, float(book.get("quantity") or 0.0))
     if fill <= 0:
-        return 0.0, "OBSERVED_NO_FILL_ZERO_DEPTH"
+        return {
+            "cash_pnl": 0.0,
+            "gross_executable_markout": 0.0,
+            "filled": 0.0,
+            "requested": size,
+            "entry_price": None,
+            "exit_bid": None,
+            "entry_fee": 0.0,
+            "exit_fee": 0.0,
+            "total_fees": 0.0,
+            "decision_half_spread_cost": 0.0,
+            "latency_price_drift_cost": 0.0,
+            "exit_half_spread_cost": 0.0,
+            "ideal_midpoint_alpha": None,
+            "frictions_embedded_in_cash_pnl": True,
+        }, "OBSERVED_NO_FILL_ZERO_DEPTH"
 
     target = row.get("targets", {}).get(str(int(horizon_ms)), {})
     if target.get("state") != "OBSERVED" or not finite(target.get("arrival_bid")):
         return None, "EXIT_EVIDENCE_UNAVAILABLE"
-    exit_bid = float(target["arrival_bid"])
+
     entry_price = float(book["ask"])
+    exit_bid = float(target["arrival_bid"])
     entry_fee = fee_per_share(row, entry_price) * fill
     exit_fee = fee_per_share(row, exit_bid) * fill
-    pnl = fill * (exit_bid - entry_price) - entry_fee - exit_fee
+    gross_executable = fill * (exit_bid - entry_price)
+    cash_pnl = gross_executable - entry_fee - exit_fee
+
+    decision_mid = (bid0 + ask0) / 2.0
+    future_ask = target.get("arrival_ask")
+    future_mid = (
+        (exit_bid + float(future_ask)) / 2.0
+        if finite(future_ask) and float(future_ask) > exit_bid
+        else None
+    )
+    ideal_midpoint_alpha = (
+        fill * (future_mid - decision_mid) if future_mid is not None else None
+    )
+    decision_half_spread = fill * (ask0 - decision_mid)
+    latency_price_drift = fill * (entry_price - ask0)
+    exit_half_spread = (
+        fill * (future_mid - exit_bid) if future_mid is not None else None
+    )
     state = "OBSERVED_FULL_FILL" if fill + 1e-12 >= size else "OBSERVED_PARTIAL_FILL"
-    return float(pnl), state
+    return {
+        "cash_pnl": float(cash_pnl),
+        "gross_executable_markout": float(gross_executable),
+        "filled": float(fill),
+        "requested": float(size),
+        "entry_price": entry_price,
+        "exit_bid": exit_bid,
+        "entry_fee": float(entry_fee),
+        "exit_fee": float(exit_fee),
+        "total_fees": float(entry_fee + exit_fee),
+        "decision_half_spread_cost": float(decision_half_spread),
+        # Signed: negative means latency gave price improvement.  No-fill due to
+        # adverse drift is represented by the explicit zero-payoff state above.
+        "latency_price_drift_cost": float(latency_price_drift),
+        "exit_half_spread_cost": (
+            float(exit_half_spread) if exit_half_spread is not None else None
+        ),
+        "ideal_midpoint_alpha": (
+            float(ideal_midpoint_alpha) if ideal_midpoint_alpha is not None else None
+        ),
+        "frictions_embedded_in_cash_pnl": True,
+    }, state
+
+
+def realized_action_value(row, *, size, horizon_ms, latency_ms,
+                          entry_cap=DEFAULT_ENTRY_CAP,
+                          hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
+                          require_full_decision_depth=True):
+    economics, state = realized_action_economics(
+        row, size=size, horizon_ms=horizon_ms, latency_ms=latency_ms,
+        entry_cap=entry_cap, hard_order_notional=hard_order_notional,
+        require_full_decision_depth=require_full_decision_depth)
+    return (None if economics is None else float(economics["cash_pnl"])), state
+
+
+def residual_policy_friction(action, row, *, portfolio_state=None,
+                             capital_budget=10_000.0,
+                             friction_policy=DEFAULT_FRICTION_POLICY):
+    """Incremental non-execution friction for policy selection.
+
+    This is deliberately outside the learned executable cash target to avoid
+    double-counting spread/fees/slippage.  Portfolio penalties use only current
+    state and the candidate action; no mean/covariance estimate is introduced.
+    """
+    policy = friction_policy.validated()
+    budget = max(1e-12, float(capital_budget))
+    notional = max(0.0, float(action.get("notional") or 0.0))
+    horizon_seconds = max(0.0, float(action.get("exit_horizon_ms") or 0.0) / 1000.0)
+    capital_lock = (
+        notional * float(policy.capital_charge_bps_per_second) * 1e-4
+        * horizon_seconds
+    )
+
+    state = portfolio_state or {}
+    asset_signed = state.get("asset_signed_notional") or {}
+    asset = str(row.get("asset") or "UNKNOWN")
+    direction = 1.0 if float(row.get("direction") or 0) >= 0 else -1.0
+    signed = direction * notional
+
+    current_asset = float(asset_signed.get(asset, 0.0) or 0.0)
+    current_factor = float(state.get("common_factor_signed_notional") or 0.0)
+    asset_increment = (
+        (current_asset + signed) ** 2 - current_asset ** 2
+    ) / budget
+    factor_increment = (
+        (current_factor + signed) ** 2 - current_factor ** 2
+    ) / budget
+    asset_penalty = max(
+        0.0, float(policy.asset_concentration_lambda) * asset_increment)
+    factor_penalty = max(
+        0.0, float(policy.common_factor_concentration_lambda) * factor_increment)
+    return {
+        "capital_lock_penalty": float(capital_lock),
+        "asset_concentration_penalty": float(asset_penalty),
+        "common_factor_concentration_penalty": float(factor_penalty),
+        "total_residual_friction": float(
+            capital_lock + asset_penalty + factor_penalty),
+    }
 
 
 class DirectActionValueModel:
@@ -165,6 +322,7 @@ class DirectActionValueModel:
         ridge=8.0,
         calibration_level=0.90,
         max_sizes_per_state=5,
+        friction_policy=DEFAULT_FRICTION_POLICY,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -174,6 +332,7 @@ class DirectActionValueModel:
         self.ridge = float(ridge)
         self.calibration_level = float(calibration_level)
         self.max_sizes_per_state = int(max_sizes_per_state)
+        self.friction_policy = friction_policy.validated()
         self.fitted = False
 
     def _base_feature_names(self, rows):
@@ -408,7 +567,24 @@ class DirectActionValueModel:
             "train_latencies_ms": list(self.train_latencies_ms),
             "entry_cap": self.entry_cap,
             "hard_order_notional": self.hard_order_notional,
-            "model": "RIDGE_DIRECT_TOTAL_NET_PNL",
+            "model": "RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
+            "policy_objective": "PREDICTED_EXECUTABLE_CASH_PNL_MINUS_UNCERTAINTY_MINUS_RESIDUAL_PORTFOLIO_FRICTIONS",
+            "execution_frictions_in_training_target": [
+                "decision_spread_via_executable_entry",
+                "post_signal_latency_price_drift_via_arrival_book",
+                "fill_and_no_fill",
+                "partial_fill",
+                "exit_spread_via_executable_bid",
+                "entry_taker_fee",
+                "exit_taker_fee",
+                "post_fill_adverse_repricing",
+            ],
+            "residual_policy_frictions": {
+                "capital_charge_bps_per_second": self.friction_policy.capital_charge_bps_per_second,
+                "asset_concentration_lambda": self.friction_policy.asset_concentration_lambda,
+                "common_factor_concentration_lambda": self.friction_policy.common_factor_concentration_lambda,
+                "uncertainty_aversion": self.friction_policy.uncertainty_aversion,
+            },
             "ridge": self.ridge,
             "uncertainty": "ABSOLUTE_RESIDUAL_SCALE_WITH_TEMPORAL_MARKET_BLOCK_CALIBRATION",
             "calibration_level": self.calibration_level,
@@ -423,7 +599,8 @@ class DirectActionValueModel:
         return self
 
     def score_actions(self, row, *, latency_ms=50, available_capital=None,
-                      live_geometry=True):
+                      live_geometry=True, portfolio_state=None,
+                      capital_budget=10_000.0):
         if not self.fitted:
             raise RuntimeError("direct action model not fitted")
         latency_ms = int(latency_ms)
@@ -463,24 +640,41 @@ class DirectActionValueModel:
             ]
         scored = []
         for action, mean, scale in zip(action_rows, means, scales):
-            lower = float(mean) - self.calibration_multiplier * float(scale)
             notional = float(action["size"]) * float(row["ask"])
-            scored.append({
+            uncertainty_penalty = (
+                float(self.friction_policy.uncertainty_aversion)
+                * self.calibration_multiplier * float(scale)
+            )
+            base = {
                 "action": "TRADE",
                 "size": float(action["size"]),
                 "exit_horizon_ms": int(action["exit_horizon_ms"]),
                 "latency_ms": latency_ms,
                 "notional": notional,
+            }
+            residual = residual_policy_friction(
+                base, row, portfolio_state=portfolio_state,
+                capital_budget=capital_budget,
+                friction_policy=self.friction_policy)
+            lower_cash = float(mean) - uncertainty_penalty
+            policy_utility = lower_cash - residual["total_residual_friction"]
+            scored.append({
+                **base,
+                "predicted_total_net_cash_pnl": float(mean),
                 "predicted_total_net_pnl": float(mean),
                 "predicted_abs_error_scale": float(scale),
-                "calibrated_lower_value": lower,
+                "uncertainty_penalty": float(uncertainty_penalty),
+                "calibrated_lower_cash_value": float(lower_cash),
+                "calibrated_lower_value": float(policy_utility),
+                "policy_utility": float(policy_utility),
+                **residual,
                 "predicted_return_on_notional": (
                     float(mean) / notional if notional > 0 else None),
             })
         scored.sort(
             key=lambda value: (
-                value["calibrated_lower_value"],
-                value["predicted_total_net_pnl"],
+                value["policy_utility"],
+                value["predicted_total_net_cash_pnl"],
                 -value["notional"],
             ),
             reverse=True,
@@ -488,10 +682,12 @@ class DirectActionValueModel:
         return scored, "READY"
 
     def select_action(self, row, *, latency_ms=50, available_capital=None,
-                      live_geometry=True, minimum_lower_value=0.0):
+                      live_geometry=True, minimum_lower_value=0.0,
+                      portfolio_state=None, capital_budget=10_000.0):
         scored, state = self.score_actions(
             row, latency_ms=latency_ms, available_capital=available_capital,
-            live_geometry=live_geometry)
+            live_geometry=live_geometry, portfolio_state=portfolio_state,
+            capital_budget=capital_budget)
         if not scored or scored[0]["calibrated_lower_value"] <= float(minimum_lower_value):
             return {
                 "action": "NO_TRADE",
@@ -514,29 +710,53 @@ def evaluate_direct_action_policy(
     one_entry_per_market=True,
     live_geometry=True,
 ):
-    """Sequential OOS evaluation.  Selected but censored actions stay censored."""
+    """Sequential OOS portfolio replay with horizon-aware capital release."""
     ordered = sorted(rows, key=lambda row: (row["decision_ns"], row["decision_id"]))
     used_markets = set()
-    reserved = 0.0
+    active = []
     outcomes = []
+    max_active_positions = 0
+    max_gross_notional = 0.0
+
     for row in ordered:
+        now_ns = int(row["decision_ns"])
+        active = [position for position in active if position["release_ns"] > now_ns]
+        gross_notional = sum(position["notional"] for position in active)
+        asset_signed = defaultdict(float)
+        common_factor_signed = 0.0
+        for position in active:
+            asset_signed[position["asset"]] += position["signed_notional"]
+            common_factor_signed += position["signed_notional"]
+        portfolio_state = {
+            "active_positions": len(active),
+            "gross_notional": gross_notional,
+            "asset_signed_notional": dict(asset_signed),
+            "common_factor_signed_notional": common_factor_signed,
+        }
+        max_active_positions = max(max_active_positions, len(active))
+        max_gross_notional = max(max_gross_notional, gross_notional)
+
         market = str(row["market_id"])
         if one_entry_per_market and market in used_markets:
             outcomes.append({
-                "market_id": market, "asset": row["asset"], "decision_ns": row["decision_ns"],
+                "market_id": market, "asset": row["asset"], "decision_ns": now_ns,
                 "action": "NO_TRADE", "reason": "MARKET_ALREADY_TRADED",
                 "realized_pnl": 0.0, "observed": True,
+                "portfolio_state_before": portfolio_state,
             })
             continue
-        available = max(0.0, float(capital_budget) - reserved)
+
+        available = max(0.0, float(capital_budget) - gross_notional)
         selected = model.select_action(
             row, latency_ms=latency_ms, available_capital=available,
-            live_geometry=live_geometry)
+            live_geometry=live_geometry, portfolio_state=portfolio_state,
+            capital_budget=capital_budget)
         outcome = {
             "market_id": market,
             "asset": row["asset"],
             "contract_horizon": row["horizon"],
-            "decision_ns": row["decision_ns"],
+            "decision_ns": now_ns,
+            "portfolio_state_before": portfolio_state,
             **selected,
         }
         if selected["action"] == "NO_TRADE":
@@ -546,8 +766,20 @@ def evaluate_direct_action_policy(
 
         if one_entry_per_market:
             used_markets.add(market)
-        reserved += float(selected["notional"])
-        realized, target_state = realized_action_value(
+        direction = 1.0 if float(row.get("direction") or 0) >= 0 else -1.0
+        active.append({
+            "market_id": market,
+            "asset": str(row["asset"]),
+            "notional": float(selected["notional"]),
+            "signed_notional": direction * float(selected["notional"]),
+            "release_ns": now_ns + int(selected["exit_horizon_ms"]) * 1_000_000,
+        })
+        max_active_positions = max(max_active_positions, len(active))
+        max_gross_notional = max(
+            max_gross_notional,
+            sum(position["notional"] for position in active))
+
+        economics, target_state = realized_action_economics(
             row,
             size=selected["size"],
             horizon_ms=selected["exit_horizon_ms"],
@@ -556,9 +788,15 @@ def evaluate_direct_action_policy(
             hard_order_notional=model.hard_order_notional,
         )
         outcome["target_state"] = target_state
-        outcome["observed"] = realized is not None
-        outcome["realized_pnl"] = realized
+        outcome["observed"] = economics is not None
+        outcome["realized_pnl"] = (
+            None if economics is None else float(economics["cash_pnl"]))
+        outcome["realized_economics"] = economics
         outcomes.append(outcome)
+
+    for row in outcomes:
+        row["replay_max_active_positions"] = max_active_positions
+        row["replay_max_gross_notional"] = max_gross_notional
     return outcomes
 
 
@@ -594,6 +832,20 @@ def summarize_direct_action(outcomes):
         "negative_observed_trades": sum(value < 0 for value in pnl),
         "total_observed_net_pnl": sum(pnl) if pnl else None,
         "mean_observed_net_pnl": sum(pnl) / len(pnl) if pnl else None,
+        "mean_predicted_policy_utility": (
+            sum(float(row.get("policy_utility") or 0.0) for row in trades) / len(trades)
+            if trades else None
+        ),
+        "total_predicted_residual_friction": sum(
+            float(row.get("total_residual_friction") or 0.0) for row in trades),
+        "total_predicted_uncertainty_penalty": sum(
+            float(row.get("uncertainty_penalty") or 0.0) for row in trades),
+        "max_active_positions": max(
+            (int(row.get("replay_max_active_positions") or 0) for row in outcomes),
+            default=0),
+        "max_gross_notional": max(
+            (float(row.get("replay_max_gross_notional") or 0.0) for row in outcomes),
+            default=0.0),
         "by_asset": dict(by_asset),
         "by_size": dict(by_size),
         "by_exit_horizon_ms": dict(by_horizon),
