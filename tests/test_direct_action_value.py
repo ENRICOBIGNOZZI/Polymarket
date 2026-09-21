@@ -36,6 +36,7 @@ from research.walk_forward_v3.direct_action import (
     summarize_effective_age_buckets,
     evaluate_direct_action_policy,
     load_trade_frequency_challenger_config,
+    trade_frequency_opportunity_audit,
 )
 
 
@@ -2067,6 +2068,13 @@ def test_serialized_trade_frequency_challenger_is_paper_only_and_explicit():
     assert loaded["entry_policy"] == "ONE_ENTRY_PER_SHOCK"
     assert loaded["model_kwargs"]["conditional_calibration"] is True
     assert loaded["model_kwargs"]["insufficient_selection_calibration_policy"] == "MAX_OBSERVED"
+    assert loaded["model_kwargs"]["entry_cap"] == 0.99
+    assert loaded["model_kwargs"]["live_minimum_tte_ns"] == 30_000_000_000
+    assert loaded["model_kwargs"]["live_maximum_tte_ns"] == 120_000_000_000
+    baseline_geometry = DirectActionValueModel()
+    assert baseline_geometry.entry_cap == 0.80
+    assert baseline_geometry.live_minimum_tte_ns == 105_000_000_000
+    assert baseline_geometry.live_maximum_tte_ns == 120_000_000_000
     policy = loaded["sizing_policy"]
     assert policy.context_count == 30
     assert policy.capital_fraction(0.0) == 0.0
@@ -2114,3 +2122,87 @@ def test_shock_reentry_respects_active_per_market_exposure_cap():
         (float(value.get("replay_max_gross_notional") or 0.0) for value in outcomes),
         default=0.0,
     ) <= 5.0 + 1e-12
+
+
+
+def test_marginal_edge_sizing_does_not_explode_from_fixed_cash_intercept_at_low_price():
+    class FixedInterceptModel(DirectActionValueModel):
+        def __init__(self):
+            super().__init__(
+                action_horizons_ms=(500,),
+                train_latencies_ms=(50,),
+                hard_order_notional=100.0,
+            )
+            self.fitted = True
+            self.regime_action_target_counts = {}
+            self.side_regime_action_target_counts = {}
+            self.selection_optimism_penalty = 0.0
+
+        def _score_quantity(self, row, *, size, horizon_ms, latency_ms, side,
+                            portfolio_state, capital_budget):
+            notional = float(size) * float(row["ask"])
+            # Deliberately large fixed intercept plus a stable 2% marginal edge.
+            value = 1.0 + 0.02 * notional
+            return {
+                "action": "TRADE",
+                "side": side,
+                "size": float(size),
+                "exit_horizon_ms": int(horizon_ms),
+                "latency_ms": int(latency_ms),
+                "notional": notional,
+                "calibrated_lower_value": value,
+                "policy_utility": value,
+                "predicted_total_net_cash_pnl": value,
+                "predicted_total_net_pnl": value,
+                "policy_loss": -value,
+                "evidence_support_probability": 1.0,
+            }
+
+    model = FixedInterceptModel()
+    policy = EdgeSizingPolicy(context_count=30)
+    cheap = row("m12000", signal=2.0, exit_bid=.10, depth=10000.0, ask=.02, minimum=5.0)
+    rich = row("m12001", signal=2.0, exit_bid=.60, depth=10000.0, ask=.50, minimum=5.0)
+    cheap_pick = model.select_action_edge_sized(
+        cheap, latency_ms=50, available_capital=100.0,
+        capital_budget=10_000.0, sizing_policy=policy)
+    rich_pick = model.select_action_edge_sized(
+        rich, latency_ms=50, available_capital=100.0,
+        capital_budget=10_000.0, sizing_policy=policy)
+    assert cheap_pick["action"] == "TRADE"
+    assert rich_pick["action"] == "TRADE"
+    assert math.isclose(
+        cheap_pick["raw_marginal_edge_per_dollar"], 0.02,
+        rel_tol=0.0, abs_tol=1e-10)
+    assert math.isclose(
+        rich_pick["raw_marginal_edge_per_dollar"], 0.02,
+        rel_tol=0.0, abs_tol=1e-10)
+    assert math.isclose(
+        cheap_pick["desired_notional_before_constraints"],
+        rich_pick["desired_notional_before_constraints"],
+        rel_tol=0.0, abs_tol=1e-10)
+    # Average total utility/notional is intentionally very different because
+    # of the fixed intercept; it must not drive sizing anymore.
+    assert cheap_pick["admission_return_on_notional"] > rich_pick["admission_return_on_notional"]
+
+
+
+def test_trade_frequency_opportunity_audit_quantifies_heuristic_attrition_without_selection():
+    live = row("m13000", ask=.50, depth=20.0, minimum=5.0)
+    live["parent_shock_id"] = "s1"
+    earlier = row("m13000", ask=.50, depth=20.0, minimum=5.0)
+    earlier["decision_id"] = "m13000-earlier"
+    earlier["tte_ns"] = 80_000_000_000
+    earlier["parent_shock_id"] = "s2"
+    expensive = row("m13001", ask=.90, depth=20.0, minimum=5.0)
+    expensive["parent_shock_id"] = "s3"
+    audit = trade_frequency_opportunity_audit([live, earlier, expensive])
+    assert audit["diagnostic_only"] is True
+    assert audit["selection"] == "NONE_NO_POLICY_TUNING_FROM_OUTER_OOS"
+    stages = {entry["stage"]: entry for entry in audit["sequential_funnel"]}
+    assert stages["research_tte_30_120s"]["survivors"] == 3
+    assert stages["live_tte_105_120s"]["survivors"] == 2
+    assert stages["entry_price_cap"]["survivors"] == 1
+    assert audit["filter_classification"]["live_tte_105_120s"].startswith("LEGACY")
+    assert audit["filter_classification"]["entry_price_cap"].startswith("LEGACY")
+    assert audit["shock_identity"]["markets_with_multiple_independent_shocks"] == 1
+    assert audit["shock_identity"]["independent_shock_count"] == 3

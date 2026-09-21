@@ -155,6 +155,20 @@ def load_trade_frequency_challenger_config(path):
     calibration = value.get("conditional_calibration") or {}
     if calibration.get("enabled") is not True:
         raise ValueError("challenger conditional calibration must be enabled")
+    geometry = value.get("opportunity_geometry") or {}
+    minimum_tte_seconds = float(geometry.get("minimum_tte_seconds", 105.0))
+    maximum_tte_seconds = float(geometry.get("maximum_tte_seconds", 120.0))
+    entry_cap = float(geometry.get("entry_cap", DEFAULT_ENTRY_CAP))
+    if (
+        not finite(minimum_tte_seconds)
+        or not finite(maximum_tte_seconds)
+        or minimum_tte_seconds < DEFAULT_MINIMUM_TTE_NS / 1e9
+        or maximum_tte_seconds > DEFAULT_MAXIMUM_TTE_NS / 1e9
+        or minimum_tte_seconds > maximum_tte_seconds
+    ):
+        raise ValueError("challenger TTE geometry outside trained support")
+    if not finite(entry_cap) or not 0 < entry_cap < 1:
+        raise ValueError("challenger entry cap must be a price sanity bound")
     sizing = value.get("sizing") or {}
     policy = EdgeSizingPolicy(
         context_count=int(sizing.get("context_count")),
@@ -166,6 +180,9 @@ def load_trade_frequency_challenger_config(path):
             calibration.get("minimum_markets")),
         "conditional_calibration_shrinkage": float(
             calibration.get("shrinkage")),
+        "entry_cap": entry_cap,
+        "live_minimum_tte_ns": int(minimum_tte_seconds * 1e9),
+        "live_maximum_tte_ns": int(maximum_tte_seconds * 1e9),
         "insufficient_selection_calibration_policy": str(
             calibration.get("selection_insufficient_policy") or "ZERO"
         ).upper(),
@@ -200,6 +217,124 @@ def _valid_state(row, *, minimum_tte_ns=DEFAULT_MINIMUM_TTE_NS,
         and isinstance(row.get("tte_ns"), int)
         and minimum_tte_ns <= row["tte_ns"] <= maximum_tte_ns
     )
+
+
+def trade_frequency_opportunity_audit(records, *, entry_cap=DEFAULT_ENTRY_CAP):
+    """Descriptive causal opportunity attrition; never used for policy choice."""
+    rows = list(records)
+    stages = [
+        ("signal_valid", lambda r: r.get("signal_valid") is True),
+        ("confirmed", lambda r: r.get("confirmed") is True),
+        ("book_valid", lambda r: r.get("book_valid") is True),
+        ("pretrigger", lambda r: r.get("pretrigger") is True),
+        ("price_sane", lambda r: (
+            finite(r.get("ask")) and finite(r.get("bid"))
+            and 0 < float(r["bid"]) < float(r["ask"]) < 1
+        )),
+        ("positive_depth_and_minimum", lambda r: (
+            finite(r.get("quantity")) and float(r["quantity"]) > 0
+            and finite(r.get("minimum")) and float(r["minimum"]) > 0
+            and float(r["quantity"]) + 1e-12 >= float(r["minimum"])
+        )),
+        ("research_tte_30_120s", lambda r: (
+            isinstance(r.get("tte_ns"), int)
+            and DEFAULT_MINIMUM_TTE_NS <= r["tte_ns"] <= DEFAULT_MAXIMUM_TTE_NS
+        )),
+        ("live_tte_105_120s", lambda r: (
+            isinstance(r.get("tte_ns"), int)
+            and LIVE_MINIMUM_TTE_NS <= r["tte_ns"] <= LIVE_MAXIMUM_TTE_NS
+        )),
+        ("entry_price_cap", lambda r: (
+            finite(r.get("ask")) and float(r["ask"]) <= float(entry_cap) + 1e-12
+        )),
+    ]
+    survivors = list(rows)
+    funnel = []
+    previous = len(survivors)
+    for name, predicate in stages:
+        survivors = [row for row in survivors if predicate(row)]
+        count = len(survivors)
+        rejected = previous - count
+        funnel.append({
+            "stage": name,
+            "input": previous,
+            "survivors": count,
+            "rejected": rejected,
+            "survival_fraction_of_total": count / len(rows) if rows else None,
+            "marginal_rejection_fraction": rejected / previous if previous else None,
+        })
+        previous = count
+
+    tte_buckets = Counter()
+    for row in rows:
+        value = row.get("tte_ns")
+        if not isinstance(value, int):
+            tte_buckets["missing"] += 1
+            continue
+        seconds = value / 1e9
+        if seconds < 30:
+            key = "lt30"
+        elif seconds < 60:
+            key = "30_60"
+        elif seconds < 90:
+            key = "60_90"
+        elif seconds < 105:
+            key = "90_105"
+        elif seconds <= 120:
+            key = "105_120"
+        elif seconds < 180:
+            key = "120_180"
+        else:
+            key = "ge180"
+        tte_buckets[key] += 1
+
+    market_shocks = defaultdict(set)
+    missing_shock_rows = 0
+    for row in rows:
+        market = str(row.get("market_id") or "")
+        shock = str(
+            row.get("parent_shock_id")
+            or (row.get("features") or {}).get("parent_shock_id")
+            or ""
+        )
+        if not shock:
+            missing_shock_rows += 1
+            continue
+        market_shocks[market].add(shock)
+    shock_counts = [len(values) for values in market_shocks.values()]
+
+    classification = {
+        "signal_valid": "HARD_CAUSAL_DATA_CONSTRAINT",
+        "confirmed": "ECONOMIC_PREDICTOR_NOT_SAFETY",
+        "book_valid": "HARD_EXECUTION_EVIDENCE_CONSTRAINT",
+        "pretrigger": "HARD_CAUSALITY_CONSTRAINT",
+        "price_sane": "HARD_DATA_SANITY_CONSTRAINT",
+        "positive_depth_and_minimum": "HARD_EXECUTION_FEASIBILITY_CONSTRAINT",
+        "research_tte_30_120s": "RESEARCH_SUPPORT_BOUNDARY",
+        "live_tte_105_120s": "LEGACY_ECONOMIC_HEURISTIC_TO_CHALLENGE",
+        "entry_price_cap": "LEGACY_ECONOMIC_HEURISTIC_TO_CHALLENGE",
+        "one_entry_per_market": "LEGACY_ECONOMIC_HEURISTIC_TO_CHALLENGE",
+    }
+    return {
+        "schema": SCHEMA + "_trade_frequency_opportunity_audit_v1",
+        **SAFETY,
+        "diagnostic_only": True,
+        "selection": "NONE_NO_POLICY_TUNING_FROM_OUTER_OOS",
+        "records": len(rows),
+        "entry_cap": float(entry_cap),
+        "sequential_funnel": funnel,
+        "filter_classification": classification,
+        "tte_bucket_counts": dict(sorted(tte_buckets.items())),
+        "shock_identity": {
+            "rows_missing_parent_shock_id": missing_shock_rows,
+            "rows_with_parent_shock_id": len(rows) - missing_shock_rows,
+            "markets_with_shock_identity": len(market_shocks),
+            "markets_with_multiple_independent_shocks": sum(
+                count > 1 for count in shock_counts),
+            "independent_shock_count": sum(shock_counts),
+            "shocks_per_market": numeric_distribution(shock_counts),
+        },
+    }
 
 
 def selected_action_side(row):
@@ -987,6 +1122,8 @@ class DirectActionValueModel:
         conditional_calibration_min_markets=12,
         conditional_calibration_shrinkage=20.0,
         insufficient_selection_calibration_policy="ZERO",
+        live_minimum_tte_ns=LIVE_MINIMUM_TTE_NS,
+        live_maximum_tte_ns=LIVE_MAXIMUM_TTE_NS,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -1017,6 +1154,8 @@ class DirectActionValueModel:
             conditional_calibration_shrinkage)
         self.insufficient_selection_calibration_policy = str(
             insufficient_selection_calibration_policy).upper()
+        self.live_minimum_tte_ns = int(live_minimum_tte_ns)
+        self.live_maximum_tte_ns = int(live_maximum_tte_ns)
         if (
             self.maximum_effective_action_age_ms is not None
             and (
@@ -1048,6 +1187,11 @@ class DirectActionValueModel:
             "ZERO", "MAX_OBSERVED",
         ):
             raise ValueError("unknown insufficient selection calibration policy")
+        if not (
+            DEFAULT_MINIMUM_TTE_NS <= self.live_minimum_tte_ns
+            <= self.live_maximum_tte_ns <= DEFAULT_MAXIMUM_TTE_NS
+        ):
+            raise ValueError("live TTE geometry must remain inside trained support")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -1454,6 +1598,8 @@ class DirectActionValueModel:
                 self.conditional_calibration_shrinkage),
             insufficient_selection_calibration_policy=(
                 self.insufficient_selection_calibration_policy),
+            live_minimum_tte_ns=self.live_minimum_tte_ns,
+            live_maximum_tte_ns=self.live_maximum_tte_ns,
         )
 
     @staticmethod
@@ -2010,6 +2156,10 @@ class DirectActionValueModel:
             "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
             "opposite_side_counterfactual": "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_AND_EXIT_EVIDENCE",
             "entry_cap": self.entry_cap,
+            "live_minimum_tte_ns": self.live_minimum_tte_ns,
+            "live_maximum_tte_ns": self.live_maximum_tte_ns,
+            "live_tte_geometry_semantics": (
+                "WITHIN_CAUSAL_TRAINING_SUPPORT_ONLY"),
             "hard_order_notional": self.hard_order_notional,
             "model": "STREAMING_RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
             "matrix_strategy": "ONE_PASS_SUFFICIENT_STATISTICS_THEN_P_X_P_NORMAL_EQUATIONS",
@@ -2464,7 +2614,7 @@ class DirectActionValueModel:
         ):
             return [], "INSUFFICIENT_REGIME_SUPPORT"
         if live_geometry and not (
-            LIVE_MINIMUM_TTE_NS <= int(row["tte_ns"]) <= LIVE_MAXIMUM_TTE_NS
+            self.live_minimum_tte_ns <= int(row["tte_ns"]) <= self.live_maximum_tte_ns
             and any(
                 (decision_side_state(row, side) is not None
                  and float(decision_side_state(row, side)["ask"]) <= self.entry_cap + 1e-12)
@@ -2556,6 +2706,54 @@ class DirectActionValueModel:
         selected["reason"] = "DIRECT_ACTION_VALUE_MAXIMUM"
         return selected
 
+    def _incremental_conservative_edge_per_dollar(
+        self, row, *, base_score, lower, upper, horizon_ms, latency_ms,
+        side, portfolio_state, capital_budget,
+    ):
+        """Local incremental policy utility per incremental dollar of notional.
+
+        The per-trade intercept and post-selection penalty cancel in the
+        difference. This prevents low-price contracts from receiving extreme
+        sizes merely because a fixed cash-value intercept was divided by a tiny
+        minimum-order notional.
+        """
+        lower = float(lower)
+        upper = float(upper)
+        if upper <= lower + 1e-12:
+            return {
+                "raw_marginal_edge_per_dollar": 0.0,
+                "marginal_probe_size": lower,
+                "marginal_incremental_utility": 0.0,
+                "marginal_incremental_notional": 0.0,
+            }
+        step = min(upper - lower, max(1.0, 0.25 * lower))
+        probe_q = lower + step
+        higher = self._score_quantity(
+            row,
+            size=probe_q,
+            horizon_ms=horizon_ms,
+            latency_ms=latency_ms,
+            side=side,
+            portfolio_state=portfolio_state,
+            capital_budget=capital_budget,
+        )
+        delta_notional = float(higher["notional"]) - float(base_score["notional"])
+        delta_utility = (
+            float(higher["calibrated_lower_value"])
+            - float(base_score["calibrated_lower_value"])
+        )
+        edge = (
+            delta_utility / delta_notional
+            if delta_notional > 1e-12 and finite(delta_utility)
+            else 0.0
+        )
+        return {
+            "raw_marginal_edge_per_dollar": float(edge),
+            "marginal_probe_size": float(probe_q),
+            "marginal_incremental_utility": float(delta_utility),
+            "marginal_incremental_notional": float(delta_notional),
+        }
+
     def select_action_edge_sized(
         self, row, *, latency_ms=50, available_capital=None,
         live_geometry=True, minimum_lower_value=0.0,
@@ -2610,7 +2808,7 @@ class DirectActionValueModel:
             return no_trade("INSUFFICIENT_REGIME_SUPPORT")
         sides = decision_action_sides(row)
         if live_geometry and not (
-            LIVE_MINIMUM_TTE_NS <= int(row["tte_ns"]) <= LIVE_MAXIMUM_TTE_NS
+            self.live_minimum_tte_ns <= int(row["tte_ns"]) <= self.live_maximum_tte_ns
             and any(
                 decision_side_state(row, side) is not None
                 and float(decision_side_state(row, side)["ask"])
@@ -2652,18 +2850,33 @@ class DirectActionValueModel:
                     capital_budget=capital_budget,
                 )
                 probe_notional = max(1e-12, float(probe["notional"]))
-                raw_edge_per_dollar = (
+                if probe["calibrated_lower_value"] <= float(minimum_lower_value):
+                    continue
+                admission_return_on_notional = (
                     float(probe["calibrated_lower_value"]) / probe_notional)
+                marginal = self._incremental_conservative_edge_per_dollar(
+                    row,
+                    base_score=probe,
+                    lower=lower,
+                    upper=upper,
+                    horizon_ms=horizon,
+                    latency_ms=latency_ms,
+                    side=side,
+                    portfolio_state=portfolio_state,
+                    capital_budget=capital_budget,
+                )
+                raw_edge_per_dollar = float(
+                    marginal["raw_marginal_edge_per_dollar"])
                 support_probability = probe.get("evidence_support_probability")
                 support_weight = (
                     min(1.0, max(0.0, float(support_probability)))
                     if finite(support_probability) else 0.0
                 )
-                edge_per_dollar = raw_edge_per_dollar * support_weight
-                if edge_per_dollar <= 0:
-                    continue
-                desired = policy.desired_notional(
-                    edge_per_dollar, capital_budget)
+                edge_per_dollar = max(0.0, raw_edge_per_dollar) * support_weight
+                desired = max(
+                    probe_notional,
+                    policy.desired_notional(edge_per_dollar, capital_budget),
+                )
                 if available_capital is not None:
                     desired = min(desired, max(0.0, float(available_capital)))
                 desired = min(
@@ -2701,11 +2914,22 @@ class DirectActionValueModel:
                 )
                 final = dict(final)
                 final.update({
-                    "reason": "EDGE_ADMISSION_CONTEXT_BUDGET_SIZING",
+                    "reason": "TOTAL_VALUE_ADMISSION_MARGINAL_EDGE_SIZING",
                     "sizing_mode": "EDGE_CONTEXT_BUDGET",
+                    "sizing_edge_semantics": (
+                        "INCREMENTAL_CONSERVATIVE_UTILITY_PER_DOLLAR"),
                     "admission_probe_size": float(lower),
-                    "raw_admission_edge_per_dollar": float(raw_edge_per_dollar),
+                    "admission_lower_value": float(
+                        probe["calibrated_lower_value"]),
+                    "admission_return_on_notional": float(
+                        admission_return_on_notional),
+                    "raw_admission_edge_per_dollar": float(
+                        admission_return_on_notional),
+                    "raw_marginal_edge_per_dollar": float(
+                        raw_edge_per_dollar),
+                    "marginal_edge_per_dollar": float(edge_per_dollar),
                     "admission_edge_per_dollar": float(edge_per_dollar),
+                    **marginal,
                     "sizing_support_probability": (
                         float(support_probability)
                         if finite(support_probability) else None),
@@ -2721,7 +2945,7 @@ class DirectActionValueModel:
         if not candidates:
             if sides and supported_sides == 0:
                 return no_trade("INSUFFICIENT_SIDE_REGIME_SUPPORT")
-            return no_trade("NO_POSITIVE_MARGINAL_EDGE_AFTER_RESIZING")
+            return no_trade("NO_POSITIVE_TOTAL_VALUE_AT_MINIMUM_SIZE")
         candidates.sort(
             key=lambda value: (
                 value["policy_utility"],
@@ -3571,6 +3795,8 @@ def walk_forward_direct_action(
         "latency_ms": int(latency_ms),
         "capital_budget": float(capital_budget),
         "bilateral_evidence": bilateral_evidence_summary(records),
+        "trade_frequency_opportunity_audit": trade_frequency_opportunity_audit(
+            records),
         "folds": [],
         "diagnostic_selected_outcomes": [],
         "output_semantics": (
