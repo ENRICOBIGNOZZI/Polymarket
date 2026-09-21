@@ -255,6 +255,7 @@ def test_native_kind6_repricing_label_populates_oos_target_and_arrival():
         "decision_wall_ns": origin["decision_ns"],
         "observed_monotonic_ns": 1_100_000_001,
         "close_monotonic_ns": 200_000_000_000,
+        "close_wall_ns": origin["decision_ns"] + 199_000_000_000,
         "connection_epoch": 7,
         "repricing_pair_valid": True,
         "book_valid": True,
@@ -290,6 +291,7 @@ def test_native_kind6_wrong_identity_never_joins_origin():
         "decision_wall_ns": origin["decision_ns"],
         "observed_monotonic_ns": 1_250_000_001,
         "close_monotonic_ns": 200_000_000_000,
+        "close_wall_ns": origin["decision_ns"] + 199_000_000_000,
         "connection_epoch": 7, "repricing_pair_valid": True, "book_valid": True,
         "bid_e4": 5100, "ask_e4": 5200, "tick_e4": 100, "ask_quantity": 5_000_000,
     }
@@ -348,6 +350,7 @@ def test_native_kind6_streaming_attaches_without_materializing_label_corpus(tmp_
         "decision_wall_ns": origin["decision_ns"],
         "observed_monotonic_ns": 2_250_000_001,
         "close_monotonic_ns": 200_000_000_000,
+        "close_wall_ns": origin["decision_ns"] + 198_000_000_000,
         "connection_epoch": 7, "repricing_pair_valid": True, "book_valid": True,
         "bid_e4": 5200, "ask_e4": 5300, "tick_e4": 100,
         "ask_quantity": 6_000_000,
@@ -437,3 +440,34 @@ def test_horizon_latency_matrix_never_scores_exit_before_arrival():
     assert economics["horizon_latency"]["25"]["25"]["state"] == "LATENCY_NOT_BEFORE_MARKOUT_HORIZON"
     assert economics["horizon_latency"]["25"]["10"]["state"] == "READY"
     assert economics["horizon_latency"]["500"]["100"]["state"] == "READY"
+
+
+
+def test_native_label_information_time_not_nominal_horizon_controls_training_cut():
+    origin = record("late-label")
+    origin.update({
+        "server_id": "s1", "run_id": "r1", "capture_id": "c1",
+        "signal_version": 9, "repricing_origin_signal_version": 9,
+        "decision_monotonic_ns": 1_000_000_000,
+    })
+    # 100ms economic target, but producer cannot emit it until 3.5s after decision.
+    label = {
+        "schema": "polymarket_v7_native_observation_v1",
+        "paper_only": True, "execution_authority": False, "kind": 6,
+        "server_id": "s1", "run_id": "r1", "capture_id": "c1",
+        "market_id": "late-label", "token_id": "yes-late-label",
+        "repricing_origin_signal_version": 9, "repricing_horizon_ms": 100,
+        "decision_monotonic_ns": 1_000_000_000,
+        "decision_wall_ns": origin["decision_ns"],
+        "observed_monotonic_ns": 4_500_000_000,
+        "close_monotonic_ns": 200_000_000_000,
+        "close_wall_ns": origin["decision_ns"] + 199_000_000_000,
+        "connection_epoch": 7, "repricing_pair_valid": True, "book_valid": True,
+        "bid_e4": 5000, "ask_e4": 5100, "tick_e4": 100,
+        "ask_quantity": 4_000_000,
+    }
+    key, horizon, point = native_repricing_point(label)
+    assert point["target_time_ns"] == origin["decision_ns"] + 100_000_000
+    assert point["information_ns"] == origin["decision_ns"] + 3_500_000_000
+    attach_native_repricing([origin], {(key, horizon): point})
+    assert origin["information_end_ns"] == origin["decision_ns"] + 3_500_000_000
