@@ -1175,6 +1175,82 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
     return result
 
 
+def common_signal_support_diagnostics(
+    evaluations, *, horizons=(500, 1000, 2000),
+    common_shock_floor_bp=1.13, age_caps_ms=(10, 25, 50, 100),
+    required_prediction=.01
+):
+    """Compare assets only on signal support observable for every crypto.
+
+    A lower common trigger cannot be reconstructed because sub-threshold signals
+    were never emitted for assets with stricter policies. 1.13bp is the maximum
+    configured trigger floor in the current six-asset policy, so filtering to
+    it is a valid common-support diagnostic rather than a retuned strategy.
+    """
+    assets = sorted({str(event["row"].get("asset") or "UNKNOWN") for event in evaluations})
+    result = {
+        "common_shock_floor_bp": common_shock_floor_bp,
+        "age_caps_ms": list(age_caps_ms),
+        "required_prediction": required_prediction,
+        "horizons": {},
+    }
+
+    def mean(values):
+        finite_values = [float(v) for v in values if finite(v)]
+        return sum(finite_values) / len(finite_values) if finite_values else None
+
+    for horizon in horizons:
+        key = str(horizon)
+        by_age = {}
+        for cap in age_caps_ms:
+            per_asset = {}
+            for asset in assets:
+                selected = []
+                for event in evaluations:
+                    row = event["row"]
+                    if str(row.get("asset") or "UNKNOWN") != asset:
+                        continue
+                    shock = row.get("features", {}).get("binance_return_100ms_bp")
+                    if not finite(shock) or abs(float(shock)) + 1e-12 < common_shock_floor_bp:
+                        continue
+                    age_ms = float(row.get("signal_age_ns") or 0) / 1_000_000
+                    if age_ms > cap + 1e-12:
+                        continue
+                    selected.append(event)
+
+                actual, pooled, specific = [], [], []
+                for event in selected:
+                    row = event["row"]
+                    target = executable_markout_target(row, key)
+                    if target is not None:
+                        actual.append(float(target))
+                    p = event.get("markout_predictions", {}).get(key)
+                    if p is not None:
+                        pooled.append(float(p))
+                    s = event.get("asset_markout_predictions", {}).get(key)
+                    if s is not None:
+                        specific.append(float(s))
+                per_asset[asset] = {
+                    "rows": len(selected),
+                    "observed_target_rows": len(actual),
+                    "actual_mean_net_markout": mean(actual),
+                    "actual_positive_fraction": (
+                        sum(v > 0 for v in actual) / len(actual) if actual else None
+                    ),
+                    "pooled_forecast_rows": len(pooled),
+                    "pooled_mean_prediction": mean(pooled),
+                    "pooled_passes_required_prediction": sum(
+                        v >= required_prediction for v in pooled),
+                    "asset_forecast_rows": len(specific),
+                    "asset_mean_prediction": mean(specific),
+                    "asset_passes_required_prediction": sum(
+                        v >= required_prediction for v in specific),
+                }
+            by_age[str(cap)] = per_asset
+        result["horizons"][key] = by_age
+    return result
+
+
 def live_parity_policy_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                                    latency_ms=50, shares=5.0):
     """Compare the research replay gate with current native live-policy geometry.
@@ -1871,6 +1947,7 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
         "prediction_metrics": prediction_quality(evaluations),
         "asset_selection_diagnostics": asset_selection_diagnostics(evaluations),
         "live_parity_policy_diagnostics": live_parity_policy_diagnostics(evaluations),
+        "common_signal_support_diagnostics": common_signal_support_diagnostics(evaluations),
         "latency_reference_horizon_ms": 500,
     }
     variants = {
