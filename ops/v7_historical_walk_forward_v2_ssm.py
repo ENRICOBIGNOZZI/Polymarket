@@ -26,6 +26,12 @@ SOURCE_PATHS = (
     "research/walk_forward_v2/core.py",
     "research/walk_forward_v2/report.py",
     "research/walk_forward_v2/run.py",
+    "research/economic/causal_replay.py",
+    "research/learning/__init__.py",
+    "research/learning/common.py",
+    "research/learning/models.py",
+    "research/learning/validation.py",
+    "scripts/v7_evidence_store.py",
     "research/requirements-learning.txt",
 )
 
@@ -33,7 +39,7 @@ SOURCE_PATHS = (
 def load_request(path: Path) -> dict:
     value = json.loads(path.read_text(encoding="utf-8"))
     required = {
-        "schema", "version", "instance_id", "minimum_wall_ns", "folds",
+        "schema", "version", "request_id", "instance_id", "minimum_wall_ns", "folds",
         "output_directory", "paper_only", "authenticated_execution",
         "real_order_submission", "real_capital_at_risk",
     }
@@ -41,6 +47,8 @@ def load_request(path: Path) -> dict:
         raise ValueError("unexpected request fields")
     if value["schema"] != "polymarket_v7_historical_walk_forward_v2_ssm_request_v1" or value["version"] != 1:
         raise ValueError("invalid request schema")
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", value["request_id"]):
+        raise ValueError("invalid request id")
     if not INSTANCE_RE.fullmatch(value["instance_id"]):
         raise ValueError("invalid instance id")
     if not isinstance(value["minimum_wall_ns"], int) or value["minimum_wall_ns"] <= 0:
