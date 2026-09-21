@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 import argparse
+import json
 import math
 from pathlib import Path
 
@@ -70,6 +71,111 @@ class FrictionPolicy:
 
 
 DEFAULT_FRICTION_POLICY = FrictionPolicy()
+
+
+@dataclass(frozen=True)
+class EdgeSizingPolicy:
+    """Research-only monotone mapping from conservative edge to context capital.
+
+    Admission and sizing are separated: nonpositive lower-confidence edge gets
+    zero capital; positive edge maps monotonically to a bounded fraction of the
+    context budget. Hard venue, depth, market, order and portfolio caps remain
+    authoritative after this desired-notional calculation.
+    """
+    context_count: int = 30
+    knots: tuple = (
+        (0.0, 0.0),
+        (0.0025, 0.05),
+        (0.0050, 0.10),
+        (0.0100, 0.25),
+        (0.0200, 0.50),
+        (0.0400, 1.00),
+    )
+
+    def validated(self):
+        if type(self.context_count) is not int or self.context_count <= 0:
+            raise ValueError("positive context count required")
+        points = tuple((float(x), float(y)) for x, y in self.knots)
+        if len(points) < 2:
+            raise ValueError("at least two sizing knots required")
+        previous_x = previous_y = None
+        for x, y in points:
+            if not finite(x) or not finite(y) or x < 0 or not 0 <= y <= 1:
+                raise ValueError("finite nonnegative sizing knots required")
+            if previous_x is not None and (x <= previous_x or y < previous_y):
+                raise ValueError("sizing knots must be strictly ordered and monotone")
+            previous_x, previous_y = x, y
+        if points[0] != (0.0, 0.0):
+            raise ValueError("sizing policy must map zero edge to zero capital")
+        return self
+
+    def capital_fraction(self, edge_per_dollar):
+        self.validated()
+        edge = float(edge_per_dollar)
+        if not finite(edge) or edge <= 0:
+            return 0.0
+        points = tuple((float(x), float(y)) for x, y in self.knots)
+        if edge >= points[-1][0]:
+            return points[-1][1]
+        for (left_x, left_y), (right_x, right_y) in zip(points[:-1], points[1:]):
+            if left_x <= edge <= right_x:
+                width = right_x - left_x
+                weight = 0.0 if width <= 0 else (edge - left_x) / width
+                return left_y + weight * (right_y - left_y)
+        return 0.0
+
+    def desired_notional(self, edge_per_dollar, capital_budget):
+        budget = float(capital_budget)
+        if not finite(budget) or budget <= 0:
+            return 0.0
+        context_budget = budget / self.context_count
+        return context_budget * self.capital_fraction(edge_per_dollar)
+
+
+DEFAULT_EDGE_SIZING_POLICY = EdgeSizingPolicy()
+
+
+def load_trade_frequency_challenger_config(path):
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if value.get("schema") != "polymarket_v7_trade_frequency_sizing_challenger_v1":
+        raise ValueError("invalid trade-frequency challenger schema")
+    if value.get("version") != 1:
+        raise ValueError("invalid trade-frequency challenger version")
+    if not (
+        value.get("paper_only") is True
+        and value.get("authenticated_execution") is False
+        and value.get("real_order_submission") is False
+        and value.get("real_capital_at_risk") is False
+        and value.get("automatic_promotion") is False
+    ):
+        raise ValueError("trade-frequency challenger must remain PAPER-only")
+    entry_policy = str(value.get("entry_policy") or "").upper()
+    if entry_policy != "ONE_ENTRY_PER_SHOCK":
+        raise ValueError("challenger requires independent-shock entry identity")
+    calibration = value.get("conditional_calibration") or {}
+    if calibration.get("enabled") is not True:
+        raise ValueError("challenger conditional calibration must be enabled")
+    sizing = value.get("sizing") or {}
+    policy = EdgeSizingPolicy(
+        context_count=int(sizing.get("context_count")),
+        knots=tuple(tuple(point) for point in sizing.get("knots") or ()),
+    ).validated()
+    model_kwargs = {
+        "conditional_calibration": True,
+        "conditional_calibration_min_markets": int(
+            calibration.get("minimum_markets")),
+        "conditional_calibration_shrinkage": float(
+            calibration.get("shrinkage")),
+        "insufficient_selection_calibration_policy": str(
+            calibration.get("selection_insufficient_policy") or "ZERO"
+        ).upper(),
+    }
+    return {
+        "config": value,
+        "entry_policy": entry_policy,
+        "sizing_policy": policy,
+        "model_kwargs": model_kwargs,
+    }
 
 
 def _quantile(values, level):
@@ -877,6 +983,10 @@ class DirectActionValueModel:
         minimum_side_regime_action_targets=0,
         support_policy_mode="DIAGNOSTIC",
         support_ridge=8.0,
+        conditional_calibration=False,
+        conditional_calibration_min_markets=12,
+        conditional_calibration_shrinkage=20.0,
+        insufficient_selection_calibration_policy="ZERO",
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -900,6 +1010,13 @@ class DirectActionValueModel:
             minimum_side_regime_action_targets)
         self.support_policy_mode = str(support_policy_mode).upper()
         self.support_ridge = float(support_ridge)
+        self.conditional_calibration = bool(conditional_calibration)
+        self.conditional_calibration_min_markets = int(
+            conditional_calibration_min_markets)
+        self.conditional_calibration_shrinkage = float(
+            conditional_calibration_shrinkage)
+        self.insufficient_selection_calibration_policy = str(
+            insufficient_selection_calibration_policy).upper()
         if (
             self.maximum_effective_action_age_ms is not None
             and (
@@ -920,6 +1037,17 @@ class DirectActionValueModel:
                 "support policy mode must be DIAGNOSTIC or ROBUST_WORST_CASE")
         if not finite(self.support_ridge) or self.support_ridge <= 0:
             raise ValueError("positive finite support ridge required")
+        if self.conditional_calibration_min_markets < 2:
+            raise ValueError("conditional calibration requires at least two markets")
+        if (
+            not finite(self.conditional_calibration_shrinkage)
+            or self.conditional_calibration_shrinkage < 0
+        ):
+            raise ValueError("nonnegative finite calibration shrinkage required")
+        if self.insufficient_selection_calibration_policy not in (
+            "ZERO", "MAX_OBSERVED",
+        ):
+            raise ValueError("unknown insufficient selection calibration policy")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -1319,7 +1447,41 @@ class DirectActionValueModel:
                 self.minimum_side_regime_action_targets),
             support_policy_mode=self.support_policy_mode,
             support_ridge=self.support_ridge,
+            conditional_calibration=self.conditional_calibration,
+            conditional_calibration_min_markets=(
+                self.conditional_calibration_min_markets),
+            conditional_calibration_shrinkage=(
+                self.conditional_calibration_shrinkage),
+            insufficient_selection_calibration_policy=(
+                self.insufficient_selection_calibration_policy),
         )
+
+    @staticmethod
+    def _calibration_cell_from_action(action):
+        return "::".join((
+            str(action.get("asset") or "UNKNOWN"),
+            str(action.get("contract_horizon") or "UNKNOWN"),
+            effective_age_bucket(
+                float(action.get("signal_age_ms") or 0.0),
+                int(action.get("latency_ms") or 0),
+            ),
+        ))
+
+    def _conditional_multiplier_for(self, row, latency_ms):
+        if not self.conditional_calibration:
+            return float(self.calibration_multiplier)
+        action = {
+            "asset": str(row.get("asset") or "UNKNOWN"),
+            "contract_horizon": str(row.get("horizon") or "UNKNOWN"),
+            "signal_age_ms": max(
+                0.0, float(row.get("signal_age_ns") or 0) / 1e6),
+            "latency_ms": int(latency_ms),
+        }
+        key = self._calibration_cell_from_action(action)
+        cell = getattr(self, "conditional_calibration_multipliers", {}).get(key)
+        if isinstance(cell, dict) and finite(cell.get("multiplier")):
+            return float(cell["multiplier"])
+        return float(self.calibration_multiplier)
 
     def _prequential_selected_policy_calibration(
         self, rows, chronological_markets,
@@ -1347,6 +1509,7 @@ class DirectActionValueModel:
                 "calibration_level": self.calibration_level,
                 "minimum_observed_markets": 10,
                 "minimum_observed_fraction": 0.50,
+                "fallback_penalty": 0.0,
             }
 
         warmup_end = max(
@@ -1440,6 +1603,8 @@ class DirectActionValueModel:
                 else "INSUFFICIENT_PREQUENTIAL_SELECTION_CALIBRATION"
             ),
             "penalty": float(max(0.0, penalty)) if ready else 0.0,
+            "fallback_penalty": (
+                float(max(0.0, max(all_scores))) if all_scores else 0.0),
             "selected_markets": selected,
             "observed_selected_markets": observed,
             "censored_selected_markets": censored,
@@ -1607,6 +1772,7 @@ class DirectActionValueModel:
         self.uncertainty_floor = 1e-6
         self.calibration_multiplier = 1.5
         self.selection_optimism_penalty = 0.0
+        self.conditional_calibration_multipliers = {}
         self.selection_calibration = {
             "state": (
                 "DISABLED"
@@ -1625,6 +1791,7 @@ class DirectActionValueModel:
             "calibration_level": self.calibration_level,
             "minimum_observed_markets": 10,
             "minimum_observed_fraction": 0.50,
+            "fallback_penalty": 0.0,
         }
         self.scale_model = None
         calibration_state = "INSUFFICIENT_MARKET_BLOCKS"
@@ -1679,6 +1846,7 @@ class DirectActionValueModel:
 
             # Action-level split conformal uses the full untouched final 20%.
             block_scores = {}
+            cell_block_scores = defaultdict(dict)
             for action in factory(calibration_markets)():
                 predicted = deployment_mean.predict(action)
                 scale = max(
@@ -1688,12 +1856,35 @@ class DirectActionValueModel:
                 market = str(action["market_id"])
                 block_scores[market] = max(
                     float(score), block_scores.get(market, 0.0))
+                cell = self._calibration_cell_from_action(action)
+                cell_block_scores[cell][market] = max(
+                    float(score), cell_block_scores[cell].get(market, 0.0))
             calibration_block_scores = len(block_scores)
             calibrated = _quantile(
                 list(block_scores.values()), self.calibration_level)
             if calibrated is not None and finite(calibrated):
                 self.calibration_multiplier = max(1.0, float(calibrated))
                 calibration_state = "TEMPORAL_MARKET_BLOCK_SPLIT_CONFORMAL"
+                if self.conditional_calibration:
+                    shrink = float(self.conditional_calibration_shrinkage)
+                    minimum = int(self.conditional_calibration_min_markets)
+                    for cell, market_scores in sorted(cell_block_scores.items()):
+                        values = list(market_scores.values())
+                        raw = _quantile(values, self.calibration_level)
+                        if raw is None or not finite(raw) or len(values) < minimum:
+                            continue
+                        weight = len(values) / (len(values) + shrink) if shrink else 1.0
+                        multiplier = max(
+                            1.0,
+                            weight * float(raw)
+                            + (1.0 - weight) * self.calibration_multiplier,
+                        )
+                        self.conditional_calibration_multipliers[cell] = {
+                            "multiplier": float(multiplier),
+                            "raw_multiplier": float(max(1.0, raw)),
+                            "markets": len(values),
+                            "shrinkage_weight": float(weight),
+                        }
             else:
                 calibration_state = "INSUFFICIENT_CALIBRATION_ACTION_TARGETS"
 
@@ -1707,6 +1898,14 @@ class DirectActionValueModel:
                 )
                 self.selection_optimism_penalty = float(
                     self.selection_calibration["penalty"])
+                if (
+                    self.selection_calibration["state"]
+                    != "PREQUENTIAL_SELECTED_POLICY_ONE_SIDED"
+                    and self.insufficient_selection_calibration_policy
+                    == "MAX_OBSERVED"
+                ):
+                    self.selection_optimism_penalty = float(
+                        self.selection_calibration.get("fallback_penalty") or 0.0)
         else:
             deployment_mean = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
@@ -1842,6 +2041,13 @@ class DirectActionValueModel:
             "uncertainty": "STREAMING_ABSOLUTE_RESIDUAL_SCALE_WITH_FINAL20_ACTION_CONFORMAL_AND_PREQUENTIAL_POST_ARGMAX_CALIBRATION",
             "calibration_level": self.calibration_level,
             "calibration_multiplier": self.calibration_multiplier,
+            "conditional_calibration_enabled": self.conditional_calibration,
+            "conditional_calibration_min_markets": (
+                self.conditional_calibration_min_markets),
+            "conditional_calibration_shrinkage": (
+                self.conditional_calibration_shrinkage),
+            "conditional_calibration_multipliers": dict(
+                sorted(self.conditional_calibration_multipliers.items())),
             "uncertainty_floor": self.uncertainty_floor,
             "calibration_state": calibration_state,
             "selection_optimism_penalty": self.selection_optimism_penalty,
@@ -1856,6 +2062,10 @@ class DirectActionValueModel:
             "calibration_market_count": len(calibration_markets),
             "action_calibration_market_count": len(calibration_markets),
             "selection_calibration_mode": self.selection_calibration_mode,
+            "insufficient_selection_calibration_policy": (
+                self.insufficient_selection_calibration_policy),
+            "selection_calibration_fallback_penalty": float(
+                self.selection_calibration.get("fallback_penalty") or 0.0),
             "prequential_calibration_blocks": self.prequential_calibration_blocks,
             "selection_prequential_score_markets": int(
                 self.selection_calibration.get("score_markets") or 0),
@@ -1997,9 +2207,11 @@ class DirectActionValueModel:
             )
         side_state = decision_side_state(row, side)
         notional = float(size) * float(side_state["ask"])
+        calibration_multiplier = self._conditional_multiplier_for(
+            row, latency_ms)
         uncertainty_penalty = (
             float(self.friction_policy.uncertainty_aversion)
-            * self.calibration_multiplier * scale
+            * calibration_multiplier * scale
         )
         selection_optimism_penalty = float(
             getattr(self, "selection_optimism_penalty", 0.0))
@@ -2064,6 +2276,7 @@ class DirectActionValueModel:
             "predicted_total_net_pnl": mean,
             "predicted_abs_error_scale": scale,
             "uncertainty_penalty": float(uncertainty_penalty),
+            "calibration_multiplier_used": float(calibration_multiplier),
             "selection_optimism_penalty": float(selection_optimism_penalty),
             "base_lower_cash_before_support": float(base_lower_cash),
             "evidence_support_probability": evidence_support_probability,
@@ -2102,7 +2315,7 @@ class DirectActionValueModel:
         )
         uncertainty_multiplier = (
             float(self.friction_policy.uncertainty_aversion)
-            * float(self.calibration_multiplier)
+            * self._conditional_multiplier_for(row, latency_ms)
         )
 
         boundaries = {lower, upper}
@@ -2343,6 +2556,182 @@ class DirectActionValueModel:
         selected["reason"] = "DIRECT_ACTION_VALUE_MAXIMUM"
         return selected
 
+    def select_action_edge_sized(
+        self, row, *, latency_ms=50, available_capital=None,
+        live_geometry=True, minimum_lower_value=0.0,
+        portfolio_state=None, capital_budget=10_000.0,
+        sizing_policy=DEFAULT_EDGE_SIZING_POLICY,
+    ):
+        """Research challenger: admit on marginal edge, then size monotonically.
+
+        The baseline select_action remains unchanged.  This challenger uses the
+        venue minimum as a small-q marginal probe for each causal side/horizon,
+        converts conservative utility per dollar into a desired context-budget
+        fraction, then reapplies all hard L1/capital/order bounds and requires
+        the final resized action itself to retain positive conservative utility.
+        """
+        policy = sizing_policy.validated()
+
+        def no_trade(reason):
+            return {
+                "action": "NO_TRADE",
+                "reason": reason,
+                "latency_ms": int(latency_ms),
+                "calibrated_lower_value": 0.0,
+                "predicted_total_net_pnl": 0.0,
+                "policy_utility": 0.0,
+                "policy_loss": 0.0,
+                "sizing_mode": "EDGE_CONTEXT_BUDGET",
+            }
+
+        if not self.fitted:
+            raise RuntimeError("direct action model not fitted")
+        latency_ms = int(latency_ms)
+        if latency_ms not in self.train_latencies_ms:
+            return no_trade("LATENCY_OUTSIDE_TRAINING_SUPPORT")
+        if not _valid_state(row):
+            return no_trade("STATE_OUTSIDE_RESEARCH_SUPPORT")
+        signal_age_ms = max(
+            0.0, float(row.get("signal_age_ns") or 0) / 1e6)
+        effective_action_age_ms = signal_age_ms + float(latency_ms)
+        if (
+            self.maximum_effective_action_age_ms is not None
+            and effective_action_age_ms
+            > self.maximum_effective_action_age_ms + 1e-12
+        ):
+            return no_trade("EFFECTIVE_ACTION_AGE_EXCEEDED")
+        regime_support = int(
+            getattr(self, "regime_action_target_counts", {}).get(
+                regime_support_key(row, latency_ms), 0))
+        if (
+            self.minimum_regime_action_targets > 0
+            and regime_support < self.minimum_regime_action_targets
+        ):
+            return no_trade("INSUFFICIENT_REGIME_SUPPORT")
+        sides = decision_action_sides(row)
+        if live_geometry and not (
+            LIVE_MINIMUM_TTE_NS <= int(row["tte_ns"]) <= LIVE_MAXIMUM_TTE_NS
+            and any(
+                decision_side_state(row, side) is not None
+                and float(decision_side_state(row, side)["ask"])
+                <= self.entry_cap + 1e-12
+                for side in sides
+            )
+        ):
+            return no_trade("OUTSIDE_LIVE_GEOMETRY")
+
+        candidates = []
+        supported_sides = 0
+        for side in sides:
+            side_support = int(
+                getattr(self, "side_regime_action_target_counts", {}).get(
+                    side_regime_support_key(row, latency_ms, side), 0))
+            if (
+                self.minimum_side_regime_action_targets > 0
+                and side_support < self.minimum_side_regime_action_targets
+            ):
+                continue
+            supported_sides += 1
+            lower, upper = self._quantity_bounds(row, available_capital, side)
+            if upper + 1e-12 < lower or upper <= 0:
+                continue
+            side_state = decision_side_state(row, side)
+            if side_state is None:
+                continue
+            ask = float(side_state["ask"])
+            for horizon in self.action_horizons_ms:
+                if horizon <= int(latency_ms):
+                    continue
+                probe = self._score_quantity(
+                    row,
+                    size=lower,
+                    horizon_ms=horizon,
+                    latency_ms=latency_ms,
+                    side=side,
+                    portfolio_state=portfolio_state,
+                    capital_budget=capital_budget,
+                )
+                probe_notional = max(1e-12, float(probe["notional"]))
+                raw_edge_per_dollar = (
+                    float(probe["calibrated_lower_value"]) / probe_notional)
+                support_probability = probe.get("evidence_support_probability")
+                support_weight = (
+                    min(1.0, max(0.0, float(support_probability)))
+                    if finite(support_probability) else 0.0
+                )
+                edge_per_dollar = raw_edge_per_dollar * support_weight
+                if edge_per_dollar <= 0:
+                    continue
+                desired = policy.desired_notional(
+                    edge_per_dollar, capital_budget)
+                if available_capital is not None:
+                    desired = min(desired, max(0.0, float(available_capital)))
+                desired = min(
+                    desired,
+                    self.hard_order_notional,
+                    upper * ask,
+                )
+                target_q = min(upper, max(lower, desired / ask))
+                quantity_candidates = {float(lower), float(target_q)}
+                final_scores = [
+                    self._score_quantity(
+                        row,
+                        size=q,
+                        horizon_ms=horizon,
+                        latency_ms=latency_ms,
+                        side=side,
+                        portfolio_state=portfolio_state,
+                        capital_budget=capital_budget,
+                    )
+                    for q in sorted(quantity_candidates)
+                ]
+                positive = [
+                    value for value in final_scores
+                    if value["calibrated_lower_value"] > float(minimum_lower_value)
+                ]
+                if not positive:
+                    continue
+                final = max(
+                    positive,
+                    key=lambda value: (
+                        value["policy_utility"],
+                        value["predicted_total_net_cash_pnl"],
+                        value["notional"],
+                    ),
+                )
+                final = dict(final)
+                final.update({
+                    "reason": "EDGE_ADMISSION_CONTEXT_BUDGET_SIZING",
+                    "sizing_mode": "EDGE_CONTEXT_BUDGET",
+                    "admission_probe_size": float(lower),
+                    "raw_admission_edge_per_dollar": float(raw_edge_per_dollar),
+                    "admission_edge_per_dollar": float(edge_per_dollar),
+                    "sizing_support_probability": (
+                        float(support_probability)
+                        if finite(support_probability) else None),
+                    "desired_notional_before_constraints": float(
+                        policy.desired_notional(edge_per_dollar, capital_budget)),
+                    "desired_notional_after_constraints": float(desired),
+                    "context_budget": float(capital_budget) / policy.context_count,
+                    "context_capital_fraction": float(
+                        policy.capital_fraction(edge_per_dollar)),
+                })
+                candidates.append(final)
+
+        if not candidates:
+            if sides and supported_sides == 0:
+                return no_trade("INSUFFICIENT_SIDE_REGIME_SUPPORT")
+            return no_trade("NO_POSITIVE_MARGINAL_EDGE_AFTER_RESIZING")
+        candidates.sort(
+            key=lambda value: (
+                value["policy_utility"],
+                value["predicted_total_net_cash_pnl"],
+                value["notional"],
+            ),
+            reverse=True,
+        )
+        return candidates[0]
+
 
 def _bounded_quantity_point(value, lower, upper):
     if not finite(value):
@@ -2557,10 +2946,29 @@ def evaluate_direct_action_policy(
     capital_budget=10_000.0,
     one_entry_per_market=True,
     live_geometry=True,
+    entry_policy=None,
+    max_entries_per_market=1,
+    sizing_policy=None,
+    max_market_exposure=None,
 ):
-    """Sequential OOS portfolio replay with horizon-aware capital release."""
+    """Sequential OOS replay with explicit entry identity and optional sizing challenger."""
     ordered = sorted(rows, key=lambda row: (row["decision_ns"], row["decision_id"]))
+    if entry_policy is None:
+        entry_policy = "ONE_ENTRY_PER_MARKET" if one_entry_per_market else "UNBOUNDED"
+    entry_policy = str(entry_policy).upper()
+    if entry_policy not in (
+        "ONE_ENTRY_PER_MARKET", "ONE_ENTRY_PER_SHOCK", "BOUNDED_PER_MARKET", "UNBOUNDED",
+    ):
+        raise ValueError("unknown entry policy")
+    if type(max_entries_per_market) is not int or max_entries_per_market <= 0:
+        raise ValueError("positive max entries per market required")
+    if max_market_exposure is not None and (
+        not finite(max_market_exposure) or float(max_market_exposure) <= 0
+    ):
+        raise ValueError("positive finite max market exposure required")
     used_markets = set()
+    used_shocks = set()
+    market_entry_counts = Counter()
     active = []
     outcomes = []
     max_active_positions = 0
@@ -2585,26 +2993,71 @@ def evaluate_direct_action_policy(
         max_gross_notional = max(max_gross_notional, gross_notional)
 
         market = str(row["market_id"])
-        if one_entry_per_market and market in used_markets:
+        shock_id = str(
+            row.get("parent_shock_id")
+            or (row.get("features") or {}).get("parent_shock_id")
+            or ""
+        )
+        duplicate_reason = None
+        if entry_policy == "ONE_ENTRY_PER_MARKET" and market in used_markets:
+            duplicate_reason = "MARKET_ALREADY_TRADED"
+        elif entry_policy == "BOUNDED_PER_MARKET" and market_entry_counts[market] >= max_entries_per_market:
+            duplicate_reason = "MARKET_ENTRY_LIMIT_REACHED"
+        elif entry_policy == "ONE_ENTRY_PER_SHOCK":
+            # Fail closed when a causal shock identity is unavailable: do not
+            # silently reinterpret every decision row as an independent shock.
+            shock_key = (market, shock_id) if shock_id else (market, "MISSING_SHOCK_FALLBACK")
+            if shock_key in used_shocks:
+                duplicate_reason = "SHOCK_ALREADY_TRADED"
+        if duplicate_reason is not None:
             outcomes.append({
                 "market_id": market, "asset": row["asset"], "decision_ns": now_ns,
-                "action": "NO_TRADE", "reason": "MARKET_ALREADY_TRADED",
+                "action": "NO_TRADE", "reason": duplicate_reason,
                 "realized_pnl": 0.0, "observed": True,
                 "portfolio_state_before": portfolio_state,
+                "entry_policy": entry_policy,
+                "parent_shock_id": shock_id or None,
             })
             continue
 
-        available = max(0.0, float(capital_budget) - gross_notional)
-        selected = model.select_action(
-            row, latency_ms=latency_ms, available_capital=available,
-            live_geometry=live_geometry, portfolio_state=portfolio_state,
-            capital_budget=capital_budget)
+        global_available = max(0.0, float(capital_budget) - gross_notional)
+        market_active_notional = sum(
+            position["notional"] for position in active
+            if position["market_id"] == market)
+        market_available = (
+            global_available
+            if max_market_exposure is None
+            else max(0.0, float(max_market_exposure) - market_active_notional)
+        )
+        available = min(global_available, market_available)
+        if sizing_policy is None:
+            selected = model.select_action(
+                row, latency_ms=latency_ms, available_capital=available,
+                live_geometry=live_geometry, portfolio_state=portfolio_state,
+                capital_budget=capital_budget)
+        else:
+            selected = model.select_action_edge_sized(
+                row, latency_ms=latency_ms, available_capital=available,
+                live_geometry=live_geometry, portfolio_state=portfolio_state,
+                capital_budget=capital_budget, sizing_policy=sizing_policy)
         outcome = {
             "market_id": market,
             "asset": row["asset"],
             "contract_horizon": row["horizon"],
             "decision_ns": now_ns,
             "portfolio_state_before": portfolio_state,
+            "entry_policy": entry_policy,
+            "parent_shock_id": shock_id or None,
+            "available_capital_before": float(available),
+            "global_available_capital_before": float(global_available),
+            "market_available_capital_before": float(market_available),
+            "market_active_notional_before": float(market_active_notional),
+            "max_market_exposure": (
+                None if max_market_exposure is None
+                else float(max_market_exposure)),
+            "capital_utilization_before": (
+                gross_notional / float(capital_budget)
+                if float(capital_budget) > 0 else None),
             **selected,
         }
         if selected["action"] == "NO_TRADE":
@@ -2612,8 +3065,11 @@ def evaluate_direct_action_policy(
             outcomes.append(outcome)
             continue
 
-        if one_entry_per_market:
-            used_markets.add(market)
+        used_markets.add(market)
+        market_entry_counts[market] += 1
+        if entry_policy == "ONE_ENTRY_PER_SHOCK":
+            shock_key = (market, shock_id) if shock_id else (market, "MISSING_SHOCK_FALLBACK")
+            used_shocks.add(shock_key)
 
         selected_side = str(
             selected.get("side") or selected_action_side(row))
@@ -2822,12 +3278,23 @@ def summarize_direct_action(outcomes):
             for cell in (by_asset[asset], by_side[side], by_horizon[horizon]):
                 cell["observed"] += 1
                 cell["pnl"] += value
+    no_trades = [row for row in outcomes if row.get("action") != "TRADE"]
+    no_trade_reasons = Counter(
+        str(row.get("reason") or "UNKNOWN") for row in no_trades)
+    sizing_modes = Counter(
+        str(row.get("sizing_mode") or "BASELINE_DIRECT_Q") for row in trades)
+    entry_policies = Counter(
+        str(row.get("entry_policy") or "UNSPECIFIED") for row in outcomes)
     return {
         "schema": SCHEMA + "_summary_v2",
         **SAFETY,
         "opportunities": len(outcomes),
         "selected_trades": len(trades),
+        "trade_rate": len(trades) / len(outcomes) if outcomes else None,
         "no_trade": len(outcomes) - len(trades),
+        "no_trade_reasons": dict(sorted(no_trade_reasons.items())),
+        "sizing_mode_counts": dict(sorted(sizing_modes.items())),
+        "entry_policy_counts": dict(sorted(entry_policies.items())),
         "observed_selected_trades": len(observed),
         "censored_selected_trades": len(trades) - len(observed),
         "positive_observed_trades": sum(value > 0 for value in pnl),
@@ -2856,6 +3323,24 @@ def summarize_direct_action(outcomes):
             row.get("size") for row in trades),
         "selected_notional_distribution": numeric_distribution(
             row.get("notional") for row in trades),
+        "selected_calibration_multiplier_distribution": numeric_distribution(
+            row.get("calibration_multiplier_used") for row in trades),
+        "selected_admission_edge_per_dollar_distribution": numeric_distribution(
+            row.get("admission_edge_per_dollar") for row in trades),
+        "selected_context_capital_fraction_distribution": numeric_distribution(
+            row.get("context_capital_fraction") for row in trades),
+        "desired_notional_before_constraints_distribution": numeric_distribution(
+            row.get("desired_notional_before_constraints") for row in trades),
+        "desired_notional_after_constraints_distribution": numeric_distribution(
+            row.get("desired_notional_after_constraints") for row in trades),
+        "capital_utilization_before_selected_distribution": numeric_distribution(
+            row.get("capital_utilization_before") for row in trades),
+        "available_capital_before_selected_distribution": numeric_distribution(
+            row.get("available_capital_before") for row in trades),
+        "unused_available_capital_after_selected_distribution": numeric_distribution(
+            (float(row.get("available_capital_before")) - float(row.get("notional")))
+            for row in trades
+            if finite(row.get("available_capital_before")) and finite(row.get("notional"))),
         "observed_pnl_distribution": numeric_distribution(pnl),
         "policy_regret_diagnostic": summarize_policy_regret(outcomes),
         "max_active_positions": max(
@@ -2908,6 +3393,8 @@ def merge_direct_action_summaries(summaries):
     result["mean_observed_net_pnl"] = pnl_total / observed if observed else None
 
     selected = result["selected_trades"]
+    opportunities = result["opportunities"]
+    result["trade_rate"] = selected / opportunities if opportunities else None
     utility_total = sum(
         float(summary.get("mean_predicted_policy_utility") or 0.0)
         * int(summary.get("selected_trades") or 0)
@@ -3070,6 +3557,10 @@ def walk_forward_direct_action(
     latency_ms=50,
     capital_budget=10_000.0,
     model_kwargs=None,
+    trade_frequency_challenger=False,
+    challenger_sizing_policy=DEFAULT_EDGE_SIZING_POLICY,
+    challenger_model_kwargs=None,
+    challenger_entry_policy="ONE_ENTRY_PER_SHOCK",
 ):
     found, receipt = folds(records, desired_folds=desired_folds)
     result = {
@@ -3088,9 +3579,27 @@ def walk_forward_direct_action(
         ),
         "mean_covariance_estimation": False,
     }
+    if trade_frequency_challenger:
+        sizing = challenger_sizing_policy.validated()
+        result["trade_frequency_challenger"] = {
+            "schema": SCHEMA + "_trade_frequency_challenger_v1",
+            **SAFETY,
+            "state": receipt.get("state"),
+            "entry_policy": str(challenger_entry_policy).upper(),
+            "sizing_policy": {
+                "context_count": sizing.context_count,
+                "knots": [list(point) for point in sizing.knots],
+            },
+            "conditional_calibration": True,
+            "folds": [],
+            "diagnostic_selected_outcomes": [],
+            "selection": "NONE_RESEARCH_CHALLENGER_NOT_PROMOTED",
+            "sizing_support_probability_weighted": True,
+        }
     if not found:
         return result
     fold_summaries = []
+    challenger_fold_summaries = []
     for fold in found:
         model = DirectActionValueModel(**(model_kwargs or {})).fit(fold["train_repricing"])
         outcomes = evaluate_direct_action_policy(
@@ -3113,6 +3622,81 @@ def walk_forward_direct_action(
                 capital_budget=capital_budget,
             ),
         })
+        if trade_frequency_challenger:
+            challenger_kwargs = dict(model_kwargs or {})
+            challenger_kwargs["conditional_calibration"] = True
+            challenger_kwargs.setdefault("conditional_calibration_min_markets", 12)
+            challenger_kwargs.setdefault("conditional_calibration_shrinkage", 20.0)
+            challenger_kwargs.update(challenger_model_kwargs or {})
+            challenger_model = DirectActionValueModel(**challenger_kwargs).fit(
+                fold["train_repricing"])
+            challenger_outcomes = evaluate_direct_action_policy(
+                challenger_model,
+                fold["test"],
+                latency_ms=latency_ms,
+                capital_budget=capital_budget,
+                live_geometry=True,
+                entry_policy=challenger_entry_policy,
+                sizing_policy=challenger_sizing_policy,
+                max_market_exposure=(
+                    float(capital_budget)
+                    / challenger_sizing_policy.context_count),
+            )
+            challenger_summary = summarize_direct_action(challenger_outcomes)
+            challenger_fold_summaries.append(challenger_summary)
+            result["trade_frequency_challenger"]["folds"].append({
+                "fold": fold["fold"],
+                "cutoff_ns": fold["cutoff_ns"],
+                "train_markets": len(fold["train_markets"]),
+                "test_markets": len(fold["test_markets"]),
+                "training": challenger_model.training_receipt,
+                "oos": challenger_summary,
+                "baseline_selected_trades": summary["selected_trades"],
+                "selected_trade_delta": (
+                    challenger_summary["selected_trades"]
+                    - summary["selected_trades"]),
+                "baseline_observed_net_pnl": summary["total_observed_net_pnl"],
+                "observed_net_pnl_delta": (
+                    None
+                    if challenger_summary["total_observed_net_pnl"] is None
+                    or summary["total_observed_net_pnl"] is None
+                    else challenger_summary["total_observed_net_pnl"]
+                    - summary["total_observed_net_pnl"]
+                ),
+            })
+            challenger_remaining = max(
+                0,
+                384 - len(
+                    result["trade_frequency_challenger"][
+                        "diagnostic_selected_outcomes"]),
+            )
+            if challenger_remaining:
+                for challenger_row in (
+                    value for value in challenger_outcomes
+                    if value.get("action") == "TRADE"
+                ):
+                    result["trade_frequency_challenger"][
+                        "diagnostic_selected_outcomes"].append({
+                        key: challenger_row.get(key) for key in (
+                            "market_id", "asset", "contract_horizon", "decision_ns",
+                            "parent_shock_id", "entry_policy", "side", "size",
+                            "exit_horizon_ms", "latency_ms", "notional",
+                            "sizing_mode", "raw_admission_edge_per_dollar",
+                            "admission_edge_per_dollar",
+                            "sizing_support_probability",
+                            "context_capital_fraction",
+                            "desired_notional_before_constraints",
+                            "desired_notional_after_constraints",
+                            "global_available_capital_before",
+                            "market_available_capital_before",
+                            "market_active_notional_before", "max_market_exposure",
+                            "calibration_multiplier_used", "uncertainty_penalty",
+                            "policy_utility", "realized_pnl", "target_state",
+                        )
+                    })
+                    challenger_remaining -= 1
+                    if challenger_remaining <= 0:
+                        break
         remaining = max(0, 384 - len(result["diagnostic_selected_outcomes"]))
         if remaining:
             for row in (value for value in outcomes if value.get("action") == "TRADE"):
@@ -3137,6 +3721,31 @@ def walk_forward_direct_action(
                 if remaining <= 0:
                     break
     result["summary"] = merge_direct_action_summaries(fold_summaries)
+    if trade_frequency_challenger:
+        challenger_summary = merge_direct_action_summaries(
+            challenger_fold_summaries)
+        baseline_summary = result["summary"]
+        result["trade_frequency_challenger"]["summary"] = challenger_summary
+        result["trade_frequency_challenger"]["comparison"] = {
+            "selected_trade_delta": (
+                challenger_summary["selected_trades"]
+                - baseline_summary["selected_trades"]),
+            "trade_rate_delta": (
+                (challenger_summary.get("trade_rate") or 0.0)
+                - (baseline_summary.get("trade_rate") or 0.0)),
+            "observed_net_pnl_delta": (
+                None
+                if challenger_summary["total_observed_net_pnl"] is None
+                or baseline_summary["total_observed_net_pnl"] is None
+                else challenger_summary["total_observed_net_pnl"]
+                - baseline_summary["total_observed_net_pnl"]
+            ),
+            "baseline_selected_trades": baseline_summary["selected_trades"],
+            "challenger_selected_trades": challenger_summary["selected_trades"],
+            "baseline_trade_rate": baseline_summary.get("trade_rate"),
+            "challenger_trade_rate": challenger_summary.get("trade_rate"),
+        }
+        result["trade_frequency_challenger"]["state"] = "READY"
     result["state"] = "READY"
     return result
 
@@ -3154,7 +3763,23 @@ def main(argv=None):
         choices=("DIAGNOSTIC", "ROBUST_WORST_CASE"),
         default="DIAGNOSTIC",
     )
+    parser.add_argument(
+        "--trade-frequency-challenger",
+        action="store_true",
+        help=(
+            "Evaluate conditional-calibration + independent-shock reentry + "
+            "edge/context-budget sizing as a PAPER-only OOS challenger."
+        ),
+    )
+    parser.add_argument("--challenger-config", type=Path, default=None)
     args = parser.parse_args(argv)
+
+    challenger = None
+    if args.trade_frequency_challenger:
+        config_path = args.challenger_config
+        if config_path is None:
+            config_path = Path("config/v7_trade_frequency_sizing_challenger.json")
+        challenger = load_trade_frequency_challenger_config(config_path)
 
     data = build_dataset(
         args.root,
@@ -3171,7 +3796,16 @@ def main(argv=None):
         result = walk_forward_direct_action(
             data["decisions"], desired_folds=args.folds,
             latency_ms=args.latency_ms, capital_budget=args.capital_budget,
-            model_kwargs={"support_policy_mode": args.support_policy_mode})
+            model_kwargs={"support_policy_mode": args.support_policy_mode},
+            trade_frequency_challenger=args.trade_frequency_challenger,
+            challenger_sizing_policy=(
+                challenger["sizing_policy"]
+                if challenger is not None else DEFAULT_EDGE_SIZING_POLICY),
+            challenger_model_kwargs=(
+                challenger["model_kwargs"] if challenger is not None else None),
+            challenger_entry_policy=(
+                challenger["entry_policy"]
+                if challenger is not None else "ONE_ENTRY_PER_SHOCK"))
         result["data_sha256"] = data.get("data_sha256")
     atomic_json(args.output, result)
     return 0 if result.get("state") == "READY" else 2

@@ -17,6 +17,7 @@ from research.walk_forward_v3.risk_frontier import (
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
     FrictionPolicy,
+    EdgeSizingPolicy,
     action_execution_kernel,
     economics_from_execution_kernel,
     StreamingRidge,
@@ -33,6 +34,8 @@ from research.walk_forward_v3.direct_action import (
     regime_support_key,
     evaluate_latency_age_surface,
     summarize_effective_age_buckets,
+    evaluate_direct_action_policy,
+    load_trade_frequency_challenger_config,
 )
 
 
@@ -1913,3 +1916,201 @@ def test_policy_regret_summary_keeps_incomplete_horizons_out_of_full_oracle_clai
         result["same_horizon_cash_regret"]["total"], .3, abs_tol=1e-12)
     assert math.isclose(
         result["all_horizon_cash_regret"]["total"], .3, abs_tol=1e-12)
+
+
+
+def test_edge_sizing_policy_is_monotone_and_zero_for_nonpositive_edge():
+    policy = EdgeSizingPolicy(context_count=20).validated()
+    edges = (-0.01, 0.0, 0.001, 0.003, 0.007, 0.015, 0.03, 0.08)
+    fractions = [policy.capital_fraction(edge) for edge in edges]
+    assert fractions[0] == 0.0
+    assert fractions[1] == 0.0
+    assert fractions == sorted(fractions)
+    assert all(0.0 <= value <= 1.0 for value in fractions)
+    assert policy.desired_notional(0.04, 10_000.0) == 500.0
+
+
+def test_conditional_calibration_is_chronological_shrunk_and_recorded():
+    rows = [
+        row(
+            "m" + str(index + 5000),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+        )
+        for index in range(90)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(1.0, 5.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        conditional_calibration=True,
+        conditional_calibration_min_markets=2,
+        conditional_calibration_shrinkage=5.0,
+        insufficient_selection_calibration_policy="MAX_OBSERVED",
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["conditional_calibration_enabled"] is True
+    cells = receipt["conditional_calibration_multipliers"]
+    assert cells
+    assert all(value["markets"] >= 2 for value in cells.values())
+    assert all(value["multiplier"] >= 1.0 for value in cells.values())
+    assert all(0.0 < value["shrinkage_weight"] <= 1.0 for value in cells.values())
+    assert receipt["insufficient_selection_calibration_policy"] == "MAX_OBSERVED"
+    assert receipt["selection_calibration_fallback_penalty"] >= 0.0
+
+
+def test_edge_sized_challenger_respects_depth_capital_and_hard_order_cap():
+    rows = [
+        row(
+            "m" + str(index + 6000),
+            signal=3.0 if index % 2 == 0 else -3.0,
+            exit_bid=.60 if index % 2 == 0 else .40,
+            depth=100.0,
+        )
+        for index in range(90)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(1.0, 5.0, 10.0, 20.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        hard_order_notional=20.0,
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+        conditional_calibration=True,
+        conditional_calibration_min_markets=2,
+    ).fit(rows)
+    good = row("m7000", signal=3.0, exit_bid=.60, depth=12.0, ask=.50)
+    selected = model.select_action_edge_sized(
+        good,
+        latency_ms=50,
+        available_capital=4.0,
+        capital_budget=10_000.0,
+        sizing_policy=EdgeSizingPolicy(context_count=30),
+    )
+    assert selected["action"] == "TRADE"
+    assert selected["sizing_mode"] == "EDGE_CONTEXT_BUDGET"
+    assert selected["admission_edge_per_dollar"] > 0
+    assert selected["notional"] <= 4.0 + 1e-12
+    assert selected["notional"] <= 20.0 + 1e-12
+    assert selected["size"] <= good["quantity"] + 1e-12
+    assert selected["calibrated_lower_value"] > 0
+
+
+def test_independent_shock_reentry_allows_new_shock_but_blocks_duplicate_shock():
+    training = [
+        row(
+            "m" + str(index + 8000),
+            signal=3.0 if index % 2 == 0 else -3.0,
+            exit_bid=.60 if index % 2 == 0 else .40,
+        )
+        for index in range(90)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(1.0, 5.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+    ).fit(training)
+
+    first = row("m9000", signal=3.0, exit_bid=.60)
+    first["decision_id"] = "m9000-a"
+    first["parent_shock_id"] = "shock-a"
+    duplicate = row("m9000", signal=3.0, exit_bid=.60)
+    duplicate["decision_id"] = "m9000-b"
+    duplicate["parent_shock_id"] = "shock-a"
+    second = row("m9000", signal=3.0, exit_bid=.60)
+    second["decision_id"] = "m9000-c"
+    second["parent_shock_id"] = "shock-b"
+
+    outcomes = evaluate_direct_action_policy(
+        model,
+        [first, duplicate, second],
+        latency_ms=50,
+        capital_budget=10_000.0,
+        entry_policy="ONE_ENTRY_PER_SHOCK",
+    )
+    trades = [value for value in outcomes if value["action"] == "TRADE"]
+    blocked = [value for value in outcomes if value.get("reason") == "SHOCK_ALREADY_TRADED"]
+    assert len(trades) == 2
+    assert len(blocked) == 1
+    assert {value["parent_shock_id"] for value in trades} == {"shock-a", "shock-b"}
+
+
+def test_summary_exposes_trade_frequency_sizing_and_attrition_diagnostics():
+    outcomes = [
+        {
+            "action": "TRADE", "realized_pnl": 0.1, "policy_utility": 0.05,
+            "size": 5.0, "notional": 2.5, "asset": "BTC", "side": "YES",
+            "exit_horizon_ms": 500, "sizing_mode": "EDGE_CONTEXT_BUDGET",
+            "entry_policy": "ONE_ENTRY_PER_SHOCK", "calibration_multiplier_used": 2.0,
+            "admission_edge_per_dollar": 0.01, "context_capital_fraction": 0.25,
+            "desired_notional_before_constraints": 80.0,
+            "desired_notional_after_constraints": 20.0,
+            "capital_utilization_before": 0.1, "available_capital_before": 9000.0,
+            "replay_max_active_positions": 1, "replay_max_gross_notional": 2.5,
+        },
+        {
+            "action": "NO_TRADE", "reason": "SHOCK_ALREADY_TRADED",
+            "entry_policy": "ONE_ENTRY_PER_SHOCK", "realized_pnl": 0.0,
+            "replay_max_active_positions": 1, "replay_max_gross_notional": 2.5,
+        },
+    ]
+    summary = summarize_direct_action(outcomes)
+    assert summary["trade_rate"] == 0.5
+    assert summary["no_trade_reasons"] == {"SHOCK_ALREADY_TRADED": 1}
+    assert summary["sizing_mode_counts"] == {"EDGE_CONTEXT_BUDGET": 1}
+    assert summary["selected_admission_edge_per_dollar_distribution"]["count"] == 1
+
+
+
+def test_serialized_trade_frequency_challenger_is_paper_only_and_explicit():
+    loaded = load_trade_frequency_challenger_config(
+        "config/v7_trade_frequency_sizing_challenger.json")
+    assert loaded["entry_policy"] == "ONE_ENTRY_PER_SHOCK"
+    assert loaded["model_kwargs"]["conditional_calibration"] is True
+    assert loaded["model_kwargs"]["insufficient_selection_calibration_policy"] == "MAX_OBSERVED"
+    policy = loaded["sizing_policy"]
+    assert policy.context_count == 30
+    assert policy.capital_fraction(0.0) == 0.0
+    assert policy.capital_fraction(0.04) == 1.0
+
+
+
+def test_shock_reentry_respects_active_per_market_exposure_cap():
+    training = [
+        row(
+            "m" + str(index + 9100),
+            signal=3.0 if index % 2 == 0 else -3.0,
+            exit_bid=.60 if index % 2 == 0 else .40,
+        )
+        for index in range(90)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(1.0, 5.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+    ).fit(training)
+    rows = []
+    for suffix in ("a", "b", "c"):
+        value = row("m9990", signal=3.0, exit_bid=.60)
+        value["decision_id"] = "m9990-" + suffix
+        value["parent_shock_id"] = "shock-" + suffix
+        rows.append(value)
+    outcomes = evaluate_direct_action_policy(
+        model,
+        rows,
+        latency_ms=50,
+        capital_budget=10_000.0,
+        entry_policy="ONE_ENTRY_PER_SHOCK",
+        max_market_exposure=5.0,
+    )
+    for value in outcomes:
+        if value.get("action") != "TRADE":
+            continue
+        assert (
+            float(value["market_active_notional_before"])
+            + float(value["notional"])
+            <= 5.0 + 1e-12
+        )
+    assert max(
+        (float(value.get("replay_max_gross_notional") or 0.0) for value in outcomes),
+        default=0.0,
+    ) <= 5.0 + 1e-12
