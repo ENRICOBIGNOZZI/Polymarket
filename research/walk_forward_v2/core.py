@@ -965,14 +965,13 @@ def build_dataset(
         result["input_state"] = "NO_ADMISSIBLE_NATIVE_DECISIONS"
     elif result["book_evidence"].get("short_horizon_observed_pairs", 0) == 0:
         result["input_state"] = "NO_ADMISSIBLE_NATIVE_REPRICING_LABELS"
+    # Dataset identity is semantic, not an implementation receipt. Index/cache
+    # diagnostics must never change the hash of identical causal evidence.
     result["data_sha256"] = digest({
-        "minimum_wall_ns": minimum_wall_ns, "sources": result["sources"],
+        "minimum_wall_ns": minimum_wall_ns,
+        "sources": result["sources"],
         "decision_ids": [r["decision_id"] for r in result["decisions"]],
         "book_evidence": result["book_evidence"],
-        "compact_window_index": {
-            key: value for key, value in result.get("compact_window_index", {}).items()
-            if key not in {"cache_root", "cache_hits", "cache_misses"}
-        },
         "settlement_labels_included": bool(include_settlement_labels),
     })
     return result
