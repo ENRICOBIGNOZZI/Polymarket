@@ -35,7 +35,7 @@ from research.walk_forward_v2.core import (
 SCHEMA = "polymarket_direct_action_value_v3"
 DEFAULT_SIZE_GRID = (1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 320.0)
 DEFAULT_ACTION_HORIZONS_MS = (50, 100, 250, 500, 1000, 2000)
-DEFAULT_TRAIN_LATENCIES_MS = (50,)
+DEFAULT_TRAIN_LATENCIES_MS = (25, 50, 100, 250)
 DEFAULT_ENTRY_CAP = 0.80
 DEFAULT_HARD_ORDER_NOTIONAL = 100.0
 DEFAULT_MINIMUM_TTE_NS = 30_000_000_000
@@ -846,6 +846,7 @@ class DirectActionValueModel:
         friction_policy=DEFAULT_FRICTION_POLICY,
         selection_calibration_mode="PREQUENTIAL",
         prequential_calibration_blocks=2,
+        maximum_effective_action_age_ms=None,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -858,6 +859,20 @@ class DirectActionValueModel:
         self.streaming_batch_size = int(streaming_batch_size)
         self.selection_calibration_mode = str(selection_calibration_mode).upper()
         self.prequential_calibration_blocks = int(prequential_calibration_blocks)
+        self.maximum_effective_action_age_ms = (
+            None
+            if maximum_effective_action_age_ms is None
+            else float(maximum_effective_action_age_ms)
+        )
+        if (
+            self.maximum_effective_action_age_ms is not None
+            and (
+                not finite(self.maximum_effective_action_age_ms)
+                or self.maximum_effective_action_age_ms <= 0
+            )
+        ):
+            raise ValueError(
+                "positive finite maximum effective action age required")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -899,11 +914,15 @@ class DirectActionValueModel:
             "action.log_size", "action.depth_fraction", "action.notional",
             "action.notional_fraction_of_cap", "action.exit_horizon_ms",
             "action.log_exit_horizon", "system.latency_ms",
-            "system.log_latency", "interaction.size_signal",
-            "interaction.size_abs_signal", "interaction.size_spread",
-            "interaction.size_signal_alignment",
+            "system.log_latency", "system.effective_action_age_ms",
+            "system.log_effective_action_age",
+            "interaction.size_signal", "interaction.size_abs_signal",
+            "interaction.size_spread", "interaction.size_signal_alignment",
             "interaction.size2_over_depth", "interaction.horizon_signal",
-            "interaction.horizon_abs_signal",
+            "interaction.horizon_abs_signal", "interaction.size_effective_age",
+            "interaction.signal_effective_age",
+            "interaction.horizon_effective_age",
+            "age::le50", "age::50_100", "age::100_250", "age::gt250",
         ]
         names.extend("x." + name for name in self.base_names)
         names.extend("asset::" + asset for asset in self.assets)
@@ -922,6 +941,9 @@ class DirectActionValueModel:
         depth = max(1e-12, float(side_state["ask_quantity"]))
         side_sign = action_side_sign(row, side)
         alignment = side_sign * float(row.get("direction") or 0)
+        signal_age_ms = max(
+            0.0, float(row.get("signal_age_ns") or 0) / 1e6)
+        effective_action_age_ms = signal_age_ms + float(latency_ms)
         signal = 0.0
         for key in (
             "external.binance_return_100ms_bp", "binance_return_100ms_bp",
@@ -938,7 +960,7 @@ class DirectActionValueModel:
             "state.depth": depth,
             "state.minimum": float(row["minimum"]),
             "state.tte_s": float(row["tte_ns"]) / 1e9,
-            "state.signal_age_ms": float(row.get("signal_age_ns") or 0) / 1e6,
+            "state.signal_age_ms": signal_age_ms,
             "state.direction": float(row.get("direction") or 0),
             "action.side_sign": side_sign,
             "action.signal_alignment": alignment,
@@ -952,6 +974,9 @@ class DirectActionValueModel:
             "action.log_exit_horizon": math.log1p(float(horizon_ms)),
             "system.latency_ms": float(latency_ms),
             "system.log_latency": math.log1p(float(latency_ms)),
+            "system.effective_action_age_ms": effective_action_age_ms,
+            "system.log_effective_action_age": math.log1p(
+                effective_action_age_ms),
             "interaction.size_signal": float(size) * signal,
             "interaction.size_abs_signal": float(size) * abs(signal),
             "interaction.size_spread": float(size) * (ask - bid),
@@ -959,6 +984,16 @@ class DirectActionValueModel:
             "interaction.size2_over_depth": float(size) ** 2 / depth,
             "interaction.horizon_signal": math.log1p(float(horizon_ms)) * signal,
             "interaction.horizon_abs_signal": math.log1p(float(horizon_ms)) * abs(signal),
+            "interaction.size_effective_age": float(size) * effective_action_age_ms,
+            "interaction.signal_effective_age": signal * effective_action_age_ms,
+            "interaction.horizon_effective_age": (
+                math.log1p(float(horizon_ms)) * effective_action_age_ms),
+            "age::le50": 1.0 if effective_action_age_ms <= 50.0 else 0.0,
+            "age::50_100": (
+                1.0 if 50.0 < effective_action_age_ms <= 100.0 else 0.0),
+            "age::100_250": (
+                1.0 if 100.0 < effective_action_age_ms <= 250.0 else 0.0),
+            "age::gt250": 1.0 if effective_action_age_ms > 250.0 else 0.0,
         }
         source = row.get("features", {})
         for name in self.base_names:
@@ -1070,6 +1105,7 @@ class DirectActionValueModel:
             friction_policy=self.friction_policy,
             selection_calibration_mode="OFF",
             prequential_calibration_blocks=self.prequential_calibration_blocks,
+            maximum_effective_action_age_ms=self.maximum_effective_action_age_ms,
         )
 
     def _prequential_selected_policy_calibration(
@@ -1472,6 +1508,14 @@ class DirectActionValueModel:
             "action_horizons_ms": list(self.action_horizons_ms),
             "train_latencies_ms": list(self.train_latencies_ms),
             "latency_role": "CONDITIONING_STATE_NOT_OPTIMIZED_ACTION",
+            "effective_action_age_semantics": (
+                "DECISION_SIGNAL_AGE_PLUS_MODELED_EXECUTION_LATENCY"),
+            "latency_decay_training_support_ms": list(
+                self.train_latencies_ms),
+            "maximum_effective_action_age_ms": (
+                None if self.maximum_effective_action_age_ms is None
+                else float(self.maximum_effective_action_age_ms)
+            ),
             "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
             "opposite_side_counterfactual": "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_AND_EXIT_EVIDENCE",
             "entry_cap": self.entry_cap,
@@ -1608,6 +1652,15 @@ class DirectActionValueModel:
             self._raw_feature_coefficient(model, "interaction.size_spread")
             * spread
         )
+        effective_action_age_ms = (
+            max(0.0, float(row.get("signal_age_ns") or 0) / 1e6)
+            + float(latency_ms)
+        )
+        linear += (
+            self._raw_feature_coefficient(
+                model, "interaction.size_effective_age")
+            * effective_action_age_ms
+        )
         linear += (
             self._raw_feature_coefficient(
                 model, "interaction.size_signal_alignment")
@@ -1658,6 +1711,12 @@ class DirectActionValueModel:
             "size": float(size),
             "exit_horizon_ms": int(horizon_ms),
             "latency_ms": int(latency_ms),
+            "signal_age_ms": max(
+                0.0, float(row.get("signal_age_ns") or 0) / 1e6),
+            "effective_action_age_ms": (
+                max(0.0, float(row.get("signal_age_ns") or 0) / 1e6)
+                + float(latency_ms)
+            ),
             "notional": float(notional),
         }
         residual = residual_policy_friction(
@@ -1813,6 +1872,15 @@ class DirectActionValueModel:
             return [], "LATENCY_OUTSIDE_TRAINING_SUPPORT"
         if not _valid_state(row):
             return [], "STATE_OUTSIDE_RESEARCH_SUPPORT"
+        signal_age_ms = max(
+            0.0, float(row.get("signal_age_ns") or 0) / 1e6)
+        effective_action_age_ms = signal_age_ms + float(latency_ms)
+        if (
+            self.maximum_effective_action_age_ms is not None
+            and effective_action_age_ms
+            > self.maximum_effective_action_age_ms + 1e-12
+        ):
+            return [], "EFFECTIVE_ACTION_AGE_EXCEEDED"
         if live_geometry and not (
             LIVE_MINIMUM_TTE_NS <= int(row["tte_ns"]) <= LIVE_MAXIMUM_TTE_NS
             and any(
@@ -2203,6 +2271,53 @@ def merge_direct_action_summaries(summaries):
     return result
 
 
+def evaluate_latency_age_surface(
+    model,
+    rows,
+    *,
+    latencies_ms=(25, 50, 100, 250),
+    capital_budget=10_000.0,
+):
+    """Diagnostic OOS latency/age decay surface; never selects a policy."""
+    entries = []
+    original_gate = model.maximum_effective_action_age_ms
+    try:
+        model.maximum_effective_action_age_ms = None
+        for latency_ms in latencies_ms:
+            latency_ms = int(latency_ms)
+            if latency_ms not in model.train_latencies_ms:
+                entries.append({
+                    "latency_ms": latency_ms,
+                    "state": "OUTSIDE_MODEL_LATENCY_SUPPORT",
+                })
+                continue
+            outcomes = evaluate_direct_action_policy(
+                model,
+                rows,
+                latency_ms=latency_ms,
+                capital_budget=capital_budget,
+                one_entry_per_market=True,
+                live_geometry=True,
+            )
+            selected = [
+                row for row in outcomes if row.get("action") == "TRADE"]
+            entries.append({
+                "latency_ms": latency_ms,
+                "state": "READY",
+                "summary": summarize_direct_action(outcomes),
+                "selected_effective_age_ms": numeric_distribution(
+                    row.get("effective_action_age_ms") for row in selected),
+            })
+    finally:
+        model.maximum_effective_action_age_ms = original_gate
+    return {
+        "schema": SCHEMA + "_latency_age_surface_v1",
+        **SAFETY,
+        "selection": "NONE_DIAGNOSTIC_ONLY",
+        "entries": entries,
+    }
+
+
 def walk_forward_direct_action(
     records,
     *,
@@ -2246,6 +2361,12 @@ def walk_forward_direct_action(
             "test_markets": len(fold["test_markets"]),
             "training": model.training_receipt,
             "oos": summary,
+            "latency_age_surface": evaluate_latency_age_surface(
+                model,
+                fold["test"],
+                latencies_ms=DEFAULT_TRAIN_LATENCIES_MS,
+                capital_budget=capital_budget,
+            ),
         })
         remaining = max(0, 384 - len(result["diagnostic_selected_outcomes"]))
         if remaining:
