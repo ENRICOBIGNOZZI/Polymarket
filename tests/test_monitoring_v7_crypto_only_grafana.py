@@ -26,6 +26,7 @@ def test_every_operator_dashboard_is_explicitly_crypto() -> None:
     assert {dashboard["uid"] for dashboard in values} == {
         "polymarket-v7", "polymarket-v7-external-fair",
         "polymarket-v7-latency", "polymarket-v7-multi-crypto",
+        "polymarket-v7-pure-arb",
     }
     for dashboard in values:
         assert "Crypto" in dashboard.get("title", "")

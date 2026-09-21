@@ -22,6 +22,14 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false
+    },
+    {
+      "title": "Pure Arbitrage PAPER",
+      "type": "link",
+      "url": "/d/polymarket-v7-pure-arb",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false
     }
   ],
   "liveNow": false,

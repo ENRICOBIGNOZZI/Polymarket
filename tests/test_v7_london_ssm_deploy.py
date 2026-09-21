@@ -223,7 +223,7 @@ def test_cancel_prior_deploy_transports_cancels_only_proven_older_sha(monkeypatc
                         "Status": "InProgress",
                         "CommandId": "cmd-old",
                         "Parameters": {
-                            "commands": [f"bash -lc 'SHA={old}; echo old'"],
+                            "commands": [f"bash -lc 'POLYMARKET_EXPECTED_SHA={old}; echo /tmp/polymarket-v7-artifact-{old}'"],
                         },
                     },
                     {
@@ -263,7 +263,7 @@ def test_cancel_prior_deploy_transports_refuses_same_sha(monkeypatch):
                 "Status": "InProgress",
                 "CommandId": "cmd-current",
                 "Parameters": {
-                    "commands": [f"bash -lc 'SHA={SHA}; echo current'"],
+                    "commands": [f"bash -lc 'POLYMARKET_EXPECTED_SHA={SHA}; echo /tmp/polymarket-v7-artifact-{SHA}'"],
                 },
             }],
         }
@@ -281,13 +281,66 @@ def test_cancel_prior_deploy_transports_refuses_unknown_transport(monkeypatch):
                 "Comment": m.DEPLOY_COMMENT,
                 "Status": "InProgress",
                 "CommandId": "cmd-unknown",
-                "Parameters": {"commands": ["bash -lc 'echo no-target'"]},
+                "Parameters": {"commands": ["bash -lc 'echo /tmp/polymarket-v7-artifact-no-target'"]},
             }],
         }
 
     monkeypatch.setattr(m, "aws_json", fake_aws)
     with pytest.raises(m.SsmDeployError, match="cannot prove"):
         m.cancel_prior_deploy_transports("eu-west-2", "i-123abc", SHA)
+
+
+
+
+def test_cancel_prior_deploy_transports_ignores_research_job_with_shared_comment(monkeypatch):
+    research_sha = "b" * 40
+    cancelled = []
+
+    def fake_aws(region, args):
+        if args[:2] == ["ssm", "list-commands"]:
+            return {
+                "Commands": [{
+                    "Comment": m.DEPLOY_COMMENT,
+                    "Status": "InProgress",
+                    "CommandId": "cmd-research",
+                    "Parameters": {
+                        "commands": [
+                            "bash -lc 'set -euo pipefail; "
+                            f"PYTHONPATH=/tmp/research:/home/ubuntu/polymarket-runtime/by-sha/{research_sha} "
+                            "python -m research.walk_forward_v3.all_crypto_compact_equity'"
+                        ],
+                    },
+                }],
+            }
+        if args[:2] == ["ssm", "cancel-command"]:
+            cancelled.append(tuple(args))
+            return {}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(m, "aws_json", fake_aws)
+    recovered = m.cancel_prior_deploy_transports("eu-west-2", "i-123abc", SHA)
+    assert recovered == []
+    assert cancelled == []
+
+
+def test_deploy_transport_classifier_requires_deploy_specific_marker():
+    research_sha = "b" * 40
+    research = {
+        "Parameters": {
+            "commands": [
+                f"bash -lc 'PYTHONPATH=/home/ubuntu/polymarket-runtime/by-sha/{research_sha} python research.py'"
+            ],
+        },
+    }
+    deploy = {
+        "Parameters": {
+            "commands": [
+                f"bash -lc 'POLYMARKET_EXPECTED_SHA={SHA}; echo /tmp/polymarket-v7-artifact-{SHA}'"
+            ],
+        },
+    }
+    assert m._looks_like_deploy_transport(research) is False
+    assert m._looks_like_deploy_transport(deploy) is True
 
 
 def test_main_writes_receipt_as_one_valid_json_document(tmp_path, monkeypatch):
