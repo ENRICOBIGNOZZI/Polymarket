@@ -1,0 +1,136 @@
+name: V7 multi-alpha 2H research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-multi-alpha-2h-request.json
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-multi-alpha-2h-research
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate exact 2H research request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-multi-alpha-2h-request.json
+          python3 - "$request" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v['schema']=='polymarket_v7_multi_alpha_2h_request_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',v['instance_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['expected_research_sha'])
+          assert type(v['minimum_wall_ns']) is int and v['minimum_wall_ns']>0
+          assert v['output_directory']=='docs/research/multi-alpha-2h-2026-09-21'
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['real_capital_at_risk'] is False
+          assert v['automatic_promotion'] is False
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          expected="$(python3 -c 'import json; print(json.load(open("'"$request"'"))["expected_research_sha"])')"
+          test "$expected" = "$(git rev-parse HEAD^1)"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-multi-alpha-2h
+          aws-region: eu-west-2
+
+      - name: Run bounded 2H research on London evidence
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          instance="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["instance_id"])')"
+          sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["expected_research_sha"])')"
+          wall="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["minimum_wall_ns"])')"
+          out="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          python3 ops/v7_multi_alpha_2h_ssm.py \
+            --instance-id "$instance" \
+            --expected-sha "$sha" \
+            --minimum-wall-ns "$wall" \
+            --output-dir "$out"
+
+      - name: Validate and summarize research artifacts
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          req=json.load(open(sys.argv[1]))
+          root=Path(req['output_directory'])
+          manifest=json.load(open(root/'01_2h_manifest.json'))
+          baseline=json.load(open(root/'04_baseline_2h.json'))
+          score=json.load(open(root/'16_feature_scorecard.json'))
+          shortlist=json.load(open(root/'17_shortlist.json'))
+          assert manifest['window_end_ns']-manifest['window_start_ns']==7_200_000_000_000
+          assert manifest['selection']['profitability_used_for_selection'] is False
+          assert baseline['latencies_ms']==[5,10,25,50,100,250]
+          assert baseline['exit_horizons_ms']==[500,750,1000,1500,2000,3000,4000,5000,7500,10000]
+          assert shortlist['automatic_promotion'] is False
+          assert len(shortlist['candidates'])<=4
+          print(json.dumps({
+              'window_start_ns':manifest['window_start_ns'],
+              'window_end_ns':manifest['window_end_ns'],
+              'rows':manifest['selection']['rows'],
+              'assets':baseline.get('by_asset_pnl',{}).keys(),
+              'feature_statuses':{
+                  row['feature']:row['status'] for row in score['rows']
+              },
+              'shortlist':shortlist['candidates'],
+          },sort_keys=True,default=list))
+          PY
+
+      - name: Publish 2H research artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish 2H multi-alpha research"
+          if ! git push origin HEAD:main; then
+            git fetch origin main
+            git rebase origin/main
+            git push origin HEAD:main
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-multi-alpha-2h-${{ github.run_id }}
+          path: docs/research/multi-alpha-2h-2026-09-21
+          retention-days: 30

@@ -124,7 +124,7 @@ print(json.dumps({
   'shortlist':summary['candidates'],
 },sort_keys=True))
 PY
-tar -C {remote}/output -czf {remote}/results.tgz multi-alpha-2h
+tar -C {remote}/output/multi-alpha-2h -czf {remote}/results.tgz .
 python3 - {remote}/results.tgz <<'PY'
 from pathlib import Path
 import hashlib,json,sys
@@ -145,7 +145,7 @@ PY"""
     extract(payload, args.output_dir)
     run(REGION, args.instance_id, f"rm -rf {remote}", 60)
 
-    produced = args.output_dir / "multi-alpha-2h"
+    produced = args.output_dir
     print("multi_alpha_2h_output=" + str(produced))
     return 0
 
