@@ -1092,6 +1092,8 @@ class DirectActionValueModel:
             "size": float(size),
             "exit_horizon_ms": int(horizon_ms),
             "latency_ms": int(latency_ms),
+            "signal_age_ms": float(signal_age_ms),
+            "effective_action_age_ms": float(effective_action_age_ms),
         }
 
     def _iter_training_actions(
@@ -2388,6 +2390,70 @@ def merge_direct_action_summaries(summaries):
     return result
 
 
+def surface_effective_age_bucket(value):
+    if not finite(value):
+        return "UNAVAILABLE"
+    value = float(value)
+    if value <= 50.0:
+        return "LE50"
+    if value <= 100.0:
+        return "GT50_LE100"
+    if value <= 250.0:
+        return "GT100_LE250"
+    return "GT250"
+
+
+def summarize_effective_age_buckets(outcomes):
+    cells = defaultdict(lambda: {
+        "selected_trades": 0,
+        "observed_selected_trades": 0,
+        "censored_selected_trades": 0,
+        "positive_observed_trades": 0,
+        "zero_observed_trades": 0,
+        "negative_observed_trades": 0,
+        "total_observed_net_pnl": 0.0,
+        "predicted_policy_utility_sum": 0.0,
+    })
+    for row in outcomes:
+        if row.get("action") != "TRADE":
+            continue
+        bucket = surface_effective_age_bucket(
+            row.get("effective_action_age_ms"))
+        cell = cells[bucket]
+        cell["selected_trades"] += 1
+        cell["predicted_policy_utility_sum"] += float(
+            row.get("policy_utility") or 0.0)
+        realized = row.get("realized_pnl")
+        if realized is None:
+            cell["censored_selected_trades"] += 1
+            continue
+        realized = float(realized)
+        cell["observed_selected_trades"] += 1
+        cell["total_observed_net_pnl"] += realized
+        if realized > 0:
+            cell["positive_observed_trades"] += 1
+        elif realized < 0:
+            cell["negative_observed_trades"] += 1
+        else:
+            cell["zero_observed_trades"] += 1
+    output = {}
+    for bucket, cell in sorted(cells.items()):
+        selected = cell["selected_trades"]
+        observed = cell["observed_selected_trades"]
+        output[bucket] = {
+            **cell,
+            "observed_fraction": observed / selected if selected else None,
+            "mean_observed_net_pnl": (
+                cell["total_observed_net_pnl"] / observed
+                if observed else None),
+            "mean_predicted_policy_utility": (
+                cell["predicted_policy_utility_sum"] / selected
+                if selected else None),
+        }
+        output[bucket].pop("predicted_policy_utility_sum", None)
+    return output
+
+
 def evaluate_latency_age_surface(
     model,
     rows,
@@ -2421,9 +2487,12 @@ def evaluate_latency_age_surface(
             entries.append({
                 "latency_ms": latency_ms,
                 "state": "READY",
+                "selection": "NONE_DIAGNOSTIC_ONLY",
                 "summary": summarize_direct_action(outcomes),
                 "selected_effective_age_ms": numeric_distribution(
                     row.get("effective_action_age_ms") for row in selected),
+                "by_effective_age_bucket": summarize_effective_age_buckets(
+                    outcomes),
             })
     finally:
         model.maximum_effective_action_age_ms = original_gate
@@ -2431,6 +2500,18 @@ def evaluate_latency_age_surface(
         "schema": SCHEMA + "_latency_age_surface_v1",
         **SAFETY,
         "selection": "NONE_DIAGNOSTIC_ONLY",
+        "selection_warning": (
+            "LATENCY_AND_AGE_BUCKETS_ARE_DIAGNOSTIC_OOS_CELLS;"
+            "DO_NOT_PICK_A_GATE_FROM_THE_SAME_OUTER_OOS"
+        ),
+        "effective_age_semantics": (
+            "DECISION_SIGNAL_AGE_MS_PLUS_MODELED_EXECUTION_LATENCY_MS"),
+        "age_buckets_ms": {
+            "LE50": [0, 50],
+            "GT50_LE100": [50, 100],
+            "GT100_LE250": [100, 250],
+            "GT250": [250, None],
+        },
         "entries": entries,
     }
 
@@ -2491,7 +2572,8 @@ def walk_forward_direct_action(
                 result["diagnostic_selected_outcomes"].append({
                     key: row.get(key) for key in (
                         "market_id", "asset", "contract_horizon", "decision_ns",
-                        "side", "size", "exit_horizon_ms", "latency_ms", "notional",
+                        "side", "size", "exit_horizon_ms", "latency_ms",
+                        "signal_age_ms", "effective_action_age_ms", "notional",
                         "policy_utility", "predicted_total_net_cash_pnl",
                         "uncertainty_penalty", "selection_optimism_penalty",
                         "total_residual_friction",
