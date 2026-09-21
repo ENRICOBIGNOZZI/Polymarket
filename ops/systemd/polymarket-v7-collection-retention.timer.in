@@ -1,0 +1,11 @@
+[Unit]
+Description=Five-minute Polymarket V7 independent collection retention
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
