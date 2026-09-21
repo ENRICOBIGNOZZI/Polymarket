@@ -104,7 +104,11 @@ def test_confirmation_evidence_does_not_fabricate_unobserved_provider_returns():
     assert '{"coinbase_return_100ms_bp", event.confirmation_venue != external_fair::VenueId::BybitSpot' in source
     assert '{"confirmation_return_100ms_bp", event.confirmation_venue != external_fair::VenueId::Unknown' in source
 
-def test_strict_candidate_has_no_direction_only_economic_fallback():
+def test_strict_signal_policy_does_not_silently_activate_probability_ev():
     native=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
-    assert '(probability_model.loaded || options.strict_signal_policy) ? 1 : 0' in native
-    assert 'direction_only_fallback_allowed' in native
+    assert 'decision_policy.probability_ev_enabled = probability_model.loaded ? 1 : 0' in native
+    assert '(probability_model.loaded || options.strict_signal_policy) ? 1 : 0' not in native
+    # Context-specific signal gates remain strict even when no private
+    # probability artifact is installed; the zero-artifact PAPER lane may then
+    # emit a direction-based proposal sized by the native capital contract.
+    assert 'decision_policy.require_pm_book_pre_signal = options.strict_signal_policy ? 1 : 0' in native
