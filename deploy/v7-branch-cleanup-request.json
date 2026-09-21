@@ -5,5 +5,8 @@
   "prefixes": [
     "codex/",
     "research/"
+  ],
+  "force_delete": [
+    "codex/v7-trade-frequency-risk-sizing-v1"
   ]
 }
