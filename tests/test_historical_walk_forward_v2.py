@@ -1062,3 +1062,38 @@ def test_existing_champion_is_refit_when_it_remains_best(tmp_path, monkeypatch):
     assert champion["training_window"]["decision_rows"] == 1200
     assert champion["training_window"]["maximum_decision_ns"] == 300
     assert champion["selection_action"] == "REFIT_CHAMPION"
+
+
+
+def test_asset_selection_diagnostics_measure_realized_markout_of_selected_rows():
+    rows = []
+    base = 1_789_921_800_000_000_001
+    for index, target in enumerate((.03, -.02, .04, -.01)):
+        row = record("sel" + str(index), decision_ns=base + index * 1_000_000_000)
+        row["asset"] = "ETH"
+        row["fee_rate"] = 0.0
+        row["fee_exponent"] = 1.0
+        row["targets"] = {
+            "1000": {
+                "state": "OBSERVED",
+                "arrival_bid": row["ask"] + target,
+                "observed_time_ns": row["decision_ns"] + 1_000_000_000,
+            }
+        }
+        rows.append({
+            "decision_ns": row["decision_ns"],
+            "decision_id": row["decision_id"],
+            "row": row,
+            "markout_predictions": {"1000": .02 if index in (0, 1) else 0.0},
+            "asset_markout_predictions": {"1000": .02 if index in (0, 2) else 0.0},
+        })
+    diag = asset_selection_diagnostics(rows, horizons=(1000,))
+    eth = diag["horizons"]["1000"]["ETH"]
+    pooled = eth["pooled"]
+    specific = eth["asset_specific"]
+    assert pooled["selected_observed_targets"] == 2
+    assert math.isclose(pooled["selected_actual_mean_net_markout"], .005, abs_tol=1e-12)
+    assert pooled["selected_actual_positive_fraction"] == .5
+    assert specific["selected_observed_targets"] == 2
+    assert math.isclose(specific["selected_actual_mean_net_markout"], .035, abs_tol=1e-12)
+    assert specific["selected_actual_positive_fraction"] == 1.0
