@@ -93,12 +93,22 @@ jobs:
             sleep 0.1
           done
           test "$ready" = 1
-          python3 ops/v7_tailscale_ci_cleanup_browser.py \
+          set +e
+          PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 python3 -u ops/v7_tailscale_ci_cleanup_browser.py \
             --credentials "$RUNNER_TEMP/tailnet-login.json" \
             --repository "$GITHUB_REPOSITORY" \
             --github-token "$GH_TOKEN" \
             --chrome "$(command -v google-chrome)" \
-            --cdp-url http://127.0.0.1:9222
+            --cdp-url http://127.0.0.1:9222 \
+            >"$RUNNER_TEMP/cleanup.log" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/cleanup.log" || true
+          if [[ "$rc" -ne 0 ]]; then
+            echo "=== CHROME LOG ==="
+            tail -n 200 "$RUNNER_TEMP/chrome.log" || true
+          fi
+          exit "$rc"
 
       - name: Destroy plaintext credentials
         if: always()
