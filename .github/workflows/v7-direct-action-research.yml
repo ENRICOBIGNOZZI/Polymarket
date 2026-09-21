@@ -68,6 +68,21 @@ jobs:
           assert result["mean_covariance_estimation"] is False
           assert result["summary"]["opportunities"]>0
           assert len(result["folds"])>0
+          if request.get("trade_frequency_challenger") is True:
+              challenger=result.get("trade_frequency_challenger") or {}
+              assert challenger.get("state")=="READY", challenger.get("state")
+              assert challenger.get("paper_only") is True
+              assert challenger.get("authenticated_execution") is False
+              assert challenger.get("real_order_submission") is False
+              assert challenger.get("real_capital_at_risk") is False
+              assert challenger.get("entry_policy")=="ONE_ENTRY_PER_SHOCK"
+              assert challenger.get("selection")==(
+                  "NONE_RESEARCH_CHALLENGER_NOT_PROMOTED"
+              )
+              assert len(challenger.get("folds") or [])==len(result["folds"])
+              csummary=challenger.get("summary") or {}
+              assert csummary.get("opportunities")==result["summary"]["opportunities"]
+              assert isinstance(challenger.get("comparison"),dict)
           bilateral=result.get("bilateral_evidence") or {}
           assert bilateral.get("schema")=="polymarket_direct_action_value_v3_bilateral_evidence_v1"
           assert isinstance(bilateral.get("decision_pair_states"),dict)
