@@ -8,6 +8,7 @@ from research.walk_forward_v2.core import (
     book_targets,
     build_dataset,
     folds,
+    fit_full_repricing,
     replay_one,
     replay_policy,
     settlement_predictors,
@@ -293,3 +294,30 @@ def test_native_kind6_wrong_identity_never_joins_origin():
     proof = attach_native_repricing([origin], {(key, horizon): point})
     assert proof["matched_target_rows"] == 0
     assert origin["targets"]["250"]["state"] == "UNAVAILABLE_NO_NATIVE_REPRICING_LABEL"
+
+
+
+def test_full_window_repricing_fit_uses_all_observed_history_without_promotion():
+    rows = []
+    base = 1_789_921_800_000_000_001
+    for index in range(10):
+        row = record("full" + str(index), decision_ns=base + index * 1_000_000_000)
+        row["features"]["x"] = float(index)
+        for horizon in HORIZONS_MS:
+            row.setdefault("targets", {})[str(horizon)] = {
+                "state": "OBSERVED",
+                "source": "NATIVE_REPRICING_KIND6_ASOF_HORIZON",
+                "observed_time_ns": row["decision_ns"] + horizon * 1_000_000,
+                "mid_change": .001 * (index + 1),
+            }
+        rows.append(row)
+    artifact = fit_full_repricing(rows)
+    assert artifact["automatic_promotion"] is False
+    for horizon in HORIZONS_MS:
+        model = artifact["models"][str(horizon)]
+        assert model["state"] == "READY"
+        assert model["rows"] == 10
+        assert model["unique_markets"] == 10
+        assert model["label_sources"] == {"NATIVE_REPRICING_KIND6_ASOF_HORIZON": 10}
+        assert model["training_start_ns"] == rows[0]["decision_ns"]
+        assert model["training_end_ns"] == rows[-1]["decision_ns"]
