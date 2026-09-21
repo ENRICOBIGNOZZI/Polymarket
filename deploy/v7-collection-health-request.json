@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_collection_health_request_v1",
-  "request_id": "collection-health-20260921T1926CEST",
+  "request_id": "collection-health-after-bash-fix-20260921T1933CEST",
   "operation": "READ_ONLY_HEALTH",
   "paper_only": true,
   "authenticated_execution": false,
