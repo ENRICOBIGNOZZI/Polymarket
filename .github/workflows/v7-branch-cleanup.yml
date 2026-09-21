@@ -119,9 +119,29 @@ jobs:
             # head OID equals the current remote branch tip. Any post-merge
             # commits therefore keep the branch protected.
             tip="$(git rev-parse "$ref")"
-            merged_exact="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state closed --limit 100 --json headRefOid,mergedAt | python3 -c 'import json,sys; tip=sys.argv[1]; rows=json.load(sys.stdin); print(sum(1 for row in rows if row.get("mergedAt") and row.get("headRefOid")==tip))' "$tip")"
-            if [[ "$merged_exact" != "0" ]]; then
+            closed_class="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state closed --limit 100 --json headRefOid,mergedAt,title,body | python3 -c '
+import json,sys
+tip=sys.argv[1]
+rows=json.load(sys.stdin)
+result="NONE"
+for row in rows:
+    if row.get("headRefOid") != tip:
+        continue
+    if row.get("mergedAt"):
+        result="MERGED_EXACT"
+        break
+    text=((row.get("title") or "")+"\n"+(row.get("body") or "")).lower()
+    if "superseded" in text:
+        result="SUPERSEDED_EXACT"
+        break
+print(result)
+' "$tip")"
+            if [[ "$closed_class" == "MERGED_EXACT" ]]; then
               echo "delete_exact_squash_merged_branch=$branch"
+              delete_branch "$branch"
+              deleted_contained=$((deleted_contained+1))
+            elif [[ "$closed_class" == "SUPERSEDED_EXACT" ]]; then
+              echo "delete_exact_superseded_branch=$branch"
               delete_branch "$branch"
               deleted_contained=$((deleted_contained+1))
             else
