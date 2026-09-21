@@ -1,0 +1,109 @@
+name: V7 pure arb exact-SHA PAPER deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-pure-arb-exact-deploy-request.json
+
+permissions:
+  contents: read
+  checks: read
+  id-token: write
+
+concurrency:
+  group: polymarket-v7-paper-server
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      LONDON_INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve exact target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - deploy/v7-pure-arb-exact-deploy-request.json "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert set(v)=={'schema','version','request_id','target_sha','paper_only','authenticated_execution','real_order_submission','cutover_approved'}
+          assert v['schema']=='polymarket_v7_pure_arb_exact_deploy_request_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['target_sha'])
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['cutover_approved'] is True
+          with open(sys.argv[2],'a') as h:
+              h.write('sha='+v['target_sha']+'\n')
+          PY
+          target="${{ steps.target.outputs.sha }}"
+          git cat-file -e "$target^{commit}"
+          git checkout --detach "$target"
+          test "$(git rev-parse HEAD)" = "$target"
+          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$target" >/dev/null
+
+      - name: Verify exact-SHA release gates
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/v7_exact_sha_ci_gate.py             --repository "$GITHUB_REPOSITORY" --sha "$TARGET_SHA"             --required-check ci-v7-Release             --required-check ci-v7-Debug             --required-check sanitizer-v7             --required-check security-audit-v7             --required-check london-runtime-boundary-v7             --required-check monitoring-v7             --required-check single-writer-v7             --output "$RUNNER_TEMP/pure-arb-exact-gates.json"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-pure-arb-exact
+          aws-region: eu-west-2
+
+      - name: Deploy exact PAPER SHA
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/runtime-artifacts"
+          source_root="$RUNNER_TEMP/research-source-empty"
+          archive_root="$RUNNER_TEMP/research-archive-empty"
+          durable_root="$RUNNER_TEMP/research-durable"
+          mkdir -p "$source_root" "$archive_root" "$durable_root" "$artifact_root"
+          PM_V7_RESEARCH_SOURCE_ROOT="$source_root"             PM_V7_RESEARCH_ARCHIVE_ROOT="$archive_root"             PM_V7_RESEARCH_DURABLE_ROOT="$durable_root"             PM_V7_RESEARCH_ARTIFACT_ROOT="$artifact_root"             research/build_runtime_artifacts.sh "$TARGET_SHA"
+          bundle="$artifact_root/by-sha/$TARGET_SHA"
+          test -s "$bundle/manifest.json"
+          artifact_tgz="$RUNNER_TEMP/runtime-artifact-$TARGET_SHA.tgz"
+          tar -C "$bundle" -czf "$artifact_tgz" .
+          receipt="$RUNNER_TEMP/pure-arb-deploy-$TARGET_SHA.json"
+          python3 ops/v7_london_ssm_deploy.py             --expected-sha "$TARGET_SHA"             --expected-tailscale-ip "$SERVER_HOST"             --expected-instance-id "$LONDON_INSTANCE_ID"             --artifact "$artifact_tgz"             --region eu-west-2             --output "$receipt"
+          python3 - "$receipt" "$TARGET_SHA" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v.get('expected_sha')==sys.argv[2]
+          assert v.get('paper_only') is True
+          assert v.get('authenticated_execution') is False
+          assert v.get('real_order_submission') is False
+          assert (v.get('cutover') or {}).get('sha')==sys.argv[2]
+          print('PURE_ARB_EXACT_DEPLOY_OK='+sys.argv[2])
+          PY
+          cp "$receipt" pure-arb-deploy-receipt.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v7-pure-arb-exact-deploy-${{ github.run_id }}
+          path: pure-arb-deploy-receipt.json
+          if-no-files-found: warn
+          retention-days: 14
