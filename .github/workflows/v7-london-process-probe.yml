@@ -36,29 +36,32 @@ jobs:
       - name: Inspect London deploy owner
         run: |
           set -euo pipefail
-          payload='set -euo pipefail
-          echo "=== LOCKS ==="
-          lslocks -o COMMAND,PID,TYPE,MODE,PATH 2>/dev/null | grep -E "polymarket-v7-london-deploy|COMMAND" || true
-          echo "=== FUSER ==="
-          fuser -v /home/ubuntu/.cache/polymarket-v7-london-deploy.lock 2>&1 || true
-          echo "=== PROCESSES ==="
-          ps -eo pid,ppid,etime,stat,pcpu,pmem,args --sort=-etime | grep -E "v7_london_stage_release|v7_london_cutover|pmv7-|cmake|ninja|ctest|g\+\+|clang\+\+|verify_v7|polymarket-v7-deploy" | grep -v grep | tail -80 || true
-          echo "=== SERVICE ==="
-          systemctl is-active polymarket-v7-paper.service || true
-          systemctl show polymarket-v7-paper.service -p ActiveEnterTimestamp -p ExecMainStatus -p ExecMainCode -p Result -p MainPID -p Environment --no-pager | head -30 || true
-          echo "=== PAPER STATUS ==="
-          systemctl --no-pager --full status polymarket-v7-paper.service || true
-          echo "=== SUPERVISOR CONTROL ==="
-          ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
-          for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json; do
-            echo "--- $name ---"
-            cat "$ROOT/control/$name" 2>/dev/null || true
-            echo
-          done
-          echo "--- KILL ---"
-          if [[ -e "$ROOT/control/KILL" ]]; then ls -l "$ROOT/control/KILL"; cat "$ROOT/control/KILL" || true; else echo ABSENT; fi
-          echo "=== PAPER JOURNAL ==="
-          journalctl -u polymarket-v7-paper.service -n 160 --no-pager || true'
+          payload="$(cat <<'SH'
+set -euo pipefail
+echo "=== LOCKS ==="
+lslocks -o COMMAND,PID,TYPE,MODE,PATH 2>/dev/null | grep -E "polymarket-v7-london-deploy|COMMAND" || true
+echo "=== FUSER ==="
+fuser -v /home/ubuntu/.cache/polymarket-v7-london-deploy.lock 2>&1 || true
+echo "=== PROCESSES ==="
+ps -eo pid,ppid,etime,stat,pcpu,pmem,args --sort=-etime | grep -E "v7_london_stage_release|v7_london_cutover|pmv7-|cmake|ninja|ctest|g\+\+|clang\+\+|verify_v7|polymarket-v7-deploy|v7_runtime_supervisor|v7_maker_fillability_observer" | grep -v grep | tail -120 || true
+echo "=== SERVICE ==="
+systemctl is-active polymarket-v7-paper.service || true
+systemctl show polymarket-v7-paper.service -p ActiveEnterTimestamp -p ExecMainStatus -p ExecMainCode -p Result -p MainPID -p Environment --no-pager | head -30 || true
+echo "=== PAPER STATUS ==="
+systemctl --no-pager --full status polymarket-v7-paper.service || true
+echo "=== SUPERVISOR CONTROL ==="
+ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
+for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json; do
+  echo "--- $name ---"
+  cat "$ROOT/control/$name" 2>/dev/null || true
+  echo
+done
+echo "--- KILL ---"
+if [[ -e "$ROOT/control/KILL" ]]; then ls -l "$ROOT/control/KILL"; cat "$ROOT/control/KILL" || true; else echo ABSENT; fi
+echo "=== PAPER JOURNAL ==="
+journalctl -u polymarket-v7-paper.service -n 160 --no-pager || true
+SH
+)"
           encoded="$(printf '%s' "$payload" | base64 -w0)"
           wrapped="printf '%s' '$encoded' | base64 -d | bash"
           params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["90"]},separators=(",",":")))' "$wrapped")"
