@@ -5,6 +5,7 @@
   "minimum_wall_ns": 1789921800000000000,
   "folds": 3,
   "output_directory": "docs/research/historical-walk-forward-v2-2026-09-21",
+
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
