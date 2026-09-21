@@ -1,10 +1,12 @@
-name: merged branch cleanup
+name: V7 branch cleanup
 
 on:
   pull_request:
-    types: [closed]
+    types:
+      - closed
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - deploy/v7-branch-cleanup-request.json
   workflow_dispatch:
@@ -14,39 +16,46 @@ permissions:
   pull-requests: read
 
 jobs:
-  delete-merged-pr-branch:
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref != github.event.repository.default_branch
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Delete merged head branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ -n "$HEAD_REF" && "$HEAD_REF" != "main" ]]
-          gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$(python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["HEAD_REF"],safe=""))')"
-
-  prune-contained-branches:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+  cleanup:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
 
-      - name: Validate cleanup request
-        if: github.event_name == 'push'
+      - name: Delete merged or stale V7 branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_MERGED: ${{ github.event.pull_request.merged || false }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import json
+
+          delete_branch() {
+            local branch="$1"
+            [[ -n "$branch" && "$branch" != "main" ]]
+            encoded="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1],safe=""))' "$branch")"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$encoded"
+          }
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ "$PR_MERGED" == "true" && "$PR_HEAD_REPO" == "$GITHUB_REPOSITORY" && "$PR_HEAD_REF" != "main" ]]; then
+              echo "delete_merged_branch=$PR_HEAD_REF"
+              delete_branch "$PR_HEAD_REF"
+            else
+              echo "no_merged_branch_to_delete=true"
+            fi
+            exit 0
+          fi
+
+          force_file="$(mktemp)"
+          : > "$force_file"
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            python3 - "$force_file" <<'PY'
+          import json,sys
           value=json.load(open('deploy/v7-branch-cleanup-request.json',encoding='utf-8'))
           assert value.get('schema')=='polymarket_v7_branch_cleanup_request_v1'
           assert value.get('apply') is True
@@ -54,45 +63,35 @@ jobs:
           assert value.get('prefixes')==['codex/','research/']
           force=value.get('force_delete') or []
           assert isinstance(force,list)
-          assert all(isinstance(branch,str) and branch for branch in force)
+          assert all(isinstance(branch,str) and branch and branch!='main' for branch in force)
+          with open(sys.argv[1],'w',encoding='utf-8') as out:
+              for branch in force:
+                  out.write(branch+'\n')
           PY
-
-      - name: Delete only fully-contained stale branches
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
-          deleted=0
-          force_deleted=0
-          skipped_open=0
-          skipped_divergent=0
-
-          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            while IFS= read -r branch; do
-              [[ -z "$branch" || "$branch" == "main" ]] && continue
-              open_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq 'length')"
-              if [[ "$open_count" != "0" ]]; then
-                echo "preserve_force_candidate_open_pr=$branch"
-                skipped_open=$((skipped_open+1))
-                continue
-              fi
-              if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-                echo "force_delete_abandoned_branch=$branch"
-                gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1],safe=""))' "$branch")"
-                force_deleted=$((force_deleted+1))
-              fi
-            done < <(python3 - <<'PY'
-          import json
-          value=json.load(open('deploy/v7-branch-cleanup-request.json',encoding='utf-8'))
-          for branch in value.get('force_delete') or []:
-              print(branch)
-          PY
-          )
-            git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
           fi
 
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          deleted_contained=0
+          deleted_abandoned=0
+          preserved_open=0
+          preserved_divergent=0
+
+          while IFS= read -r branch; do
+            [[ -z "$branch" || "$branch" == "main" ]] && continue
+            open_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq 'length')"
+            if [[ "$open_count" != "0" ]]; then
+              echo "preserve_force_candidate_open_pr=$branch"
+              preserved_open=$((preserved_open+1))
+              continue
+            fi
+            if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+              echo "force_delete_abandoned_branch=$branch"
+              delete_branch "$branch"
+              deleted_abandoned=$((deleted_abandoned+1))
+            fi
+          done < "$force_file"
+
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
           while IFS= read -r ref; do
             branch="${ref#refs/remotes/origin/}"
             [[ "$branch" == "main" || "$branch" == "HEAD" ]] && continue
@@ -104,22 +103,23 @@ jobs:
             open_count="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state open --json number --jq 'length')"
             if [[ "$open_count" != "0" ]]; then
               echo "preserve_open_pr=$branch"
-              skipped_open=$((skipped_open+1))
+              preserved_open=$((preserved_open+1))
               continue
             fi
 
             if git merge-base --is-ancestor "$ref" origin/main; then
               echo "delete_contained_branch=$branch"
-              gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1],safe=""))' "$branch")"
-              deleted=$((deleted+1))
+              delete_branch "$branch"
+              deleted_contained=$((deleted_contained+1))
             else
               echo "preserve_divergent_branch=$branch"
-              skipped_divergent=$((skipped_divergent+1))
+              preserved_divergent=$((preserved_divergent+1))
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/ | sort)
+
           {
-            echo "deleted_contained=$deleted"
-            echo "deleted_abandoned=$force_deleted"
-            echo "preserved_open_pr=$skipped_open"
-            echo "preserved_divergent=$skipped_divergent"
+            echo "deleted_contained=$deleted_contained"
+            echo "deleted_abandoned=$deleted_abandoned"
+            echo "preserved_open_pr=$preserved_open"
+            echo "preserved_divergent=$preserved_divergent"
           } >> "$GITHUB_STEP_SUMMARY"
