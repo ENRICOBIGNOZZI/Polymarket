@@ -1,0 +1,87 @@
+name: V7 Tailscale API stale-CI cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-tailscale-api-cleanup-request.json
+      - .github/workflows/v7-tailscale-api-cleanup.yml
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate request
+        run: |
+          python3 - deploy/v7-tailscale-api-cleanup-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v.get('schema')=='polymarket_v7_tailscale_api_cleanup_v1'
+          assert v.get('maximum_deletions')==1200
+          assert v.get('preserve_ips')==['100.102.9.16','100.104.183.109','100.65.195.111']
+          PY
+
+      - name: Clean only offline GitHub CI nodes through Device API
+        env:
+          TS_API_CREDENTIAL: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          set -euo pipefail
+          test -n "${TS_API_CREDENTIAL:-}"
+          echo "::add-mask::$TS_API_CREDENTIAL"
+          python3 - "$TS_API_CREDENTIAL" <<'PY'
+          import base64,json,re,sys,time,urllib.request,urllib.parse,urllib.error
+          cred=sys.argv[1]
+          preserve={'100.102.9.16','100.104.183.109','100.65.195.111'}
+          ci=re.compile(r'^(?:github-runner|github-runnervm|gh-(?:deploy|health|freeze|inventory)|github-actions)',re.I)
+
+          def call(url,method='GET'):
+              basic=base64.b64encode((cred+':').encode()).decode()
+              req=urllib.request.Request(url,method=method,headers={
+                  'Authorization':'Basic '+basic,
+                  'Accept':'application/json',
+                  'User-Agent':'polymarket-v7-ci-cleanup',
+              })
+              with urllib.request.urlopen(req,timeout=30) as r:
+                  raw=r.read()
+              return json.loads(raw) if raw else {}
+
+          listing=call('https://api.tailscale.com/api/v2/tailnet/-/devices')
+          devices=listing.get('devices') or []
+          candidates=[]
+          for d in devices:
+              if not isinstance(d,dict): continue
+              host=str(d.get('hostname') or d.get('name') or '')
+              ips=[str(x) for x in (d.get('addresses') or d.get('tailscaleIPs') or [])]
+              online=bool(d.get('online') or d.get('connectedToControl') or d.get('connected'))
+              if not ci.match(host) or online or preserve.intersection(ips):
+                  continue
+              did=d.get('id')
+              if did is not None:
+                  candidates.append((str(did),host,ips))
+          if len(candidates)>1200:
+              raise SystemExit('too_many_candidates')
+          for did,host,ips in candidates:
+              call('https://api.tailscale.com/api/v2/device/'+urllib.parse.quote(did,safe=''),method='DELETE')
+              time.sleep(0.03)
+          after=call('https://api.tailscale.com/api/v2/tailnet/-/devices')
+          remaining=[]
+          for d in after.get('devices') or []:
+              host=str(d.get('hostname') or d.get('name') or '')
+              ips=[str(x) for x in (d.get('addresses') or d.get('tailscaleIPs') or [])]
+              online=bool(d.get('online') or d.get('connectedToControl') or d.get('connected'))
+              if ci.match(host) and not online and not preserve.intersection(ips):
+                  remaining.append(host)
+          print(json.dumps({
+              'before_total':len(devices),
+              'removed_count':len(candidates),
+              'remaining_offline_ci_count':len(remaining),
+          },sort_keys=True))
+          if remaining:
+              raise SystemExit('offline_ci_devices_remain')
+          PY
