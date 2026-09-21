@@ -51,7 +51,7 @@ jobs:
           with open(sys.argv[2],'a') as h:
               h.write('sha='+v['target_sha']+'\n')
           PY
-          target="${{ steps.target.outputs.sha }}"
+          target="$(python3 -c 'import json; print(json.load(open("deploy/v7-pure-arb-exact-deploy-request.json"))["target_sha"])')"
           git cat-file -e "$target^{commit}"
           git checkout --detach "$target"
           test "$(git rev-parse HEAD)" = "$target"
