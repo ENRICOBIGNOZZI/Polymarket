@@ -10,6 +10,7 @@ from research.walk_forward_v2.core import (
     folds,
     replay_one,
     replay_policy,
+    settlement_predictors,
     valid_native,
 )
 
@@ -213,3 +214,15 @@ def test_replay_policy_stops_new_orders_after_capital_ceiling():
         capital_budget=7.5)
     assert sum(row["funnel"]["simulated_order"] for row in outcomes) == 2
     assert outcomes[2]["funnel"]["capital_admitted"] is False
+
+
+def test_pm_baseline_remains_available_before_any_settlement_labels():
+    test = [record("u0"), record("u1")]
+    for row in test:
+        row["label"] = None
+        row["label_information_ns"] = None
+    predictions, meta = settlement_predictors([], test)
+    assert meta["state"] == "PM_BASELINE_ONLY_INSUFFICIENT_SETTLEMENT_TRAINING"
+    assert predictions["pm"] == [(row["bid"] + row["ask"]) / 2 for row in test]
+    assert predictions["logistic_offset"] == [None, None]
+    assert predictions["boosted_offset"] == [None, None]
