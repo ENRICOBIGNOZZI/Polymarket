@@ -80,57 +80,61 @@ cd {remote}
 rm -rf src output results.tgz
 mkdir -p src output
 RUN_ROOT="$(python3 - <<'PY'
-import json,time
 from pathlib import Path
 
-patterns=(
-    "/mnt/polymarket-data/*/control/runtime_status.json",
-    "/home/*/polymarket-runs/*/control/runtime_status.json",
-)
+roots=set()
+# Canonical persistent London data root plus any user-local PAPER roots.
+for root in (
+    Path("/mnt/polymarket-data/paper_v7_london"),
+    *Path("/home").glob("*/polymarket-runs/paper_v7_london"),
+):
+    roots.add(root)
+
+# Also admit any non-symlink root that visibly owns an HFT permanent corpus.
+for hft in Path("/mnt/polymarket-data").glob("*/research/hft_permanent"):
+    roots.add(hft.parent.parent)
+for hft in Path("/home").glob("*/polymarket-runs/*/research/hft_permanent"):
+    roots.add(hft.parent.parent)
+
 candidates=[]
-seen=set()
-for pattern in patterns:
-    for status_path in Path("/").glob(pattern.lstrip("/")):
-        try:
-            root=status_path.parent.parent.resolve()
-            if str(root) in seen:
-                continue
-            seen.add(str(root))
-            state=json.loads(status_path.read_text())
-        except Exception:
-            continue
-        if not (
-            state.get("state")=="running"
-            and state.get("paper_only") is True
-            and state.get("authenticated_execution") is False
-            and state.get("real_order_submission") is False
-        ):
-            continue
-        timestamp=int(state.get("timestamp") or 0)
-        candidates.append((timestamp,status_path.stat().st_mtime_ns,str(root),state.get("model_sha")))
+for root in sorted(roots):
+    hft=root/"research"/"hft_permanent"
+    if not hft.is_dir() or hft.is_symlink():
+        continue
+    files=[
+        p for folder in ("compact","compact_closed")
+        for p in (hft/folder).glob("*.jsonl*")
+        if p.is_file() and not p.is_symlink()
+    ]
+    if not files:
+        continue
+    total_bytes=sum(p.stat().st_size for p in files)
+    newest=max(p.stat().st_mtime_ns for p in files)
+    # Primary criterion is immutable evidence volume, then recency.
+    candidates.append((total_bytes,newest,len(files),str(root.resolve())))
 
 if not candidates:
-    raise SystemExit("NO_RUNNING_PAPER_RUN_ROOT")
+    raise SystemExit("NO_HFT_PERMANENT_DATA_ROOT")
 candidates.sort(reverse=True)
 best=candidates[0]
-# Fail closed if two distinct roots report equally fresh active state.
-if len(candidates)>1 and candidates[1][:2]==best[:2] and candidates[1][2]!=best[2]:
-    raise SystemExit("AMBIGUOUS_RUNNING_PAPER_RUN_ROOT")
-print(best[2])
+print(best[3])
 PY
 )"
 test -n "$RUN_ROOT"
 python3 - "$RUN_ROOT" <<'PY'
-import json,sys
+import sys
 from pathlib import Path
 root=Path(sys.argv[1]).resolve()
-status=root/"control/runtime_status.json"
-state=json.loads(status.read_text())
-assert state.get("state")=="running"
-assert state.get("paper_only") is True
-assert state.get("authenticated_execution") is False
-assert state.get("real_order_submission") is False
-print("NATIVE_ALPHA_CONTEXT_FS="+str(root))
+hft=root/"research"/"hft_permanent"
+files=[
+    p for folder in ("compact","compact_closed")
+    for p in (hft/folder).glob("*.jsonl*")
+    if p.is_file() and not p.is_symlink()
+]
+assert hft.is_dir() and files
+print("NATIVE_ALPHA_DATA_ROOT="+str(root))
+print("NATIVE_ALPHA_COMPACT_FILES="+str(len(files)))
+print("NATIVE_ALPHA_COMPACT_BYTES="+str(sum(p.stat().st_size for p in files)))
 PY
 tar -xzf source.tgz -C src
 python3 -m venv venv
