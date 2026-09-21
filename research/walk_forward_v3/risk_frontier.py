@@ -362,6 +362,22 @@ def evaluate_empirical_risk_frontier(
 
 
 
+_NO_ACTION_SUPPORT_ERRORS = {
+    "direct action training rows required",
+    "no admissible direct-action training markets",
+    "streaming ridge received zero rows",
+}
+
+
+def _fit_direct_action_with_support(rows, model_kwargs):
+    try:
+        return DirectActionValueModel(**(model_kwargs or {})).fit(rows), None
+    except ValueError as exc:
+        if str(exc) not in _NO_ACTION_SUPPORT_ERRORS:
+            raise
+        return None, str(exc)
+
+
 def nested_walk_forward_risk_frontier(
     records,
     *,
@@ -423,11 +439,48 @@ def nested_walk_forward_risk_frontier(
             result["folds"].append(fold_result)
             continue
 
-        # Last chronological inner fold gives the largest causal training set
-        # while keeping a fully future validation block.
-        inner = inner_folds[-1]
-        inner_model = DirectActionValueModel(
-            **(model_kwargs or {})).fit(inner["train_repricing"])
+        # Prefer the latest chronological inner fold, but causal evidence can
+        # be sparse enough that a nonempty state block still yields zero
+        # executable action targets. Walk backward until the latest fit-able
+        # validation split; never convert missing support into zero PnL.
+        inner = None
+        inner_model = None
+        inner_fit_failures = []
+        for candidate in reversed(inner_folds):
+            candidate_model, support_error = _fit_direct_action_with_support(
+                candidate["train_repricing"], model_kwargs)
+            if candidate_model is not None:
+                inner = candidate
+                inner_model = candidate_model
+                break
+            inner_fit_failures.append({
+                "fold": candidate["fold"],
+                "reason": support_error,
+                "train_markets": len(candidate["train_markets"]),
+                "test_markets": len(candidate["test_markets"]),
+            })
+        if inner_model is None:
+            fold_result["selection"] = {
+                "state": "INSUFFICIENT_INNER_ACTION_TARGETS_NO_POLICY_SELECTION",
+                "policy_id": None,
+                "qualification": "NO_EXECUTABLE_ACTION_TARGETS_IN_ANY_INNER_TRAIN_BLOCK",
+                "qualified_policy_ids": [],
+            }
+            fold_result["inner_fit_failures"] = inner_fit_failures
+            fold_result["outer_oos"] = {
+                "schema": SCHEMA + "_frontier",
+                **SAFETY,
+                "state": "NOT_EVALUATED_NO_VALIDATION_MODEL",
+                "selection": "NONE",
+                "policy_count": 0,
+                "pareto_policy_ids": [],
+                "entries": [],
+            }
+            result["folds"].append(fold_result)
+            continue
+
+        fold_result["inner_fit_failures"] = inner_fit_failures
+        fold_result["inner_selected_fold"] = inner["fold"]
         validation_frontier = evaluate_empirical_risk_frontier(
             inner_model,
             inner["test"],
@@ -459,9 +512,9 @@ def nested_walk_forward_risk_frontier(
             if policy_id in policy_by_id
         ]
 
-        outer_model = DirectActionValueModel(
-            **(model_kwargs or {})).fit(outer_train)
-        if qualified_grid:
+        outer_model, outer_support_error = _fit_direct_action_with_support(
+            outer_train, model_kwargs)
+        if qualified_grid and outer_model is not None:
             outer_oos = evaluate_empirical_risk_frontier(
                 outer_model,
                 outer_test,
@@ -471,6 +524,17 @@ def nested_walk_forward_risk_frontier(
                 one_entry_per_market=True,
                 live_geometry=True,
             )
+        elif qualified_grid:
+            outer_oos = {
+                "schema": SCHEMA + "_frontier",
+                **SAFETY,
+                "state": "INSUFFICIENT_OUTER_ACTION_TARGETS",
+                "support_error": outer_support_error,
+                "selection": "NONE",
+                "policy_count": 0,
+                "pareto_policy_ids": [],
+                "entries": [],
+            }
         else:
             outer_oos = {
                 "schema": SCHEMA + "_frontier",

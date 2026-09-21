@@ -77,6 +77,7 @@ jobs:
               assert selection.get("state") in (
                   "NO_RISK_BUDGET_NO_AUTOMATIC_SELECTION",
                   "INSUFFICIENT_INNER_FOLDS_NO_POLICY_SELECTION",
+                  "INSUFFICIENT_INNER_ACTION_TARGETS_NO_POLICY_SELECTION",
               )
               assert selection.get("policy_id") is None
           print(json.dumps({
