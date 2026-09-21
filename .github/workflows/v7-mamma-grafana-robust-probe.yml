@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - deploy/v7-mamma-grafana-robust-probe-request.json
+      - .github/workflows/v7-mamma-grafana-robust-probe.yml
 
 permissions:
   contents: read
