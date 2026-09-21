@@ -78,16 +78,16 @@ def source_archive(repo: Path) -> bytes:
 
 def execute(instance: str, remote: str, context: dict) -> dict:
     run_root = context["run_root"]
-    command = f"""set -euo pipefail
-cd {remote}
+    command = r"""set -euo pipefail
+cd __REMOTE__
 mkdir -p src output
 tar -xzf source.tgz -C src
-export PYTHONPATH={remote}/src:{remote}/src/scripts:{remote}/src/monitoring
-MODEL_SHA="$(cat {run_root}/control/deployed_sha)"
+export PYTHONPATH=__REMOTE__/src:__REMOTE__/src/scripts:__REMOTE__/src/monitoring
+MODEL_SHA="$(cat __RUN_ROOT__/control/deployed_sha)"
 test "$MODEL_SHA" != ""
 
 python3 src/scripts/v7_maker_fillability_report.py \
-  --run-root {run_root} \
+  --run-root __RUN_ROOT__ \
   --policy src/config/v7_professional_market_maker.json \
   --model-sha "$MODEL_SHA" \
   --output-json output/fillability.json \
@@ -95,8 +95,8 @@ python3 src/scripts/v7_maker_fillability_report.py \
 
 for action in JOIN IMPROVE1 FADE1; do
   python3 src/scripts/v7_maker_fill_conditioned_toxicity.py \
-    --maker-evidence {run_root}/ledger \
-    --maker-evidence {run_root}/micro_maker \
+    --maker-evidence __RUN_ROOT__/ledger \
+    --maker-evidence __RUN_ROOT__/micro_maker \
     --output "output/toxicity_$action.json" \
     --markout-horizon 250ms \
     --placement-action "$action" \
@@ -105,7 +105,7 @@ for action in JOIN IMPROVE1 FADE1; do
 done
 
 if ! python3 src/scripts/v7_maker_execution_horse_race.py \
-  --maker-evidence {run_root} \
+  --maker-evidence __RUN_ROOT__ \
   --output output/horse_race.json \
   --markout-horizon 1s \
   --placement-action JOIN \
@@ -126,7 +126,7 @@ Path("output/horse_race.json").write_text(json.dumps({
 PY
 fi
 
-python3 - {run_root!r} <<'PY'
+python3 - __RUN_ROOT_REPR__ <<'PY'
 import json,sys
 from pathlib import Path
 root=Path(sys.argv[1])
@@ -190,7 +190,7 @@ else:
     json.dumps(value,indent=2,sort_keys=True)+"\n",encoding="utf-8")
 PY
 
-MODEL_SHA="$MODEL_SHA" RUN_ROOT={run_root} python3 - <<'PY'
+MODEL_SHA="$MODEL_SHA" RUN_ROOT=__RUN_ROOT__ python3 - <<'PY'
 import os
 from pathlib import Path
 from research.walk_forward_v2.core import atomic_json
@@ -235,6 +235,10 @@ print("MAKER_CHALLENGER_RESULT="+json.dumps({
   "sha256":hashlib.sha256(p.read_bytes()).hexdigest(),
 },sort_keys=True))
 PY"""
+    command = (command
+               .replace("__REMOTE__", remote)
+               .replace("__RUN_ROOT__", run_root)
+               .replace("__RUN_ROOT_REPR__", repr(run_root)))
     stdout, _ = run(REGION, instance, command, 3600)
     line = next(
         value for value in stdout.splitlines()
