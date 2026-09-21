@@ -2556,6 +2556,54 @@ class DirectActionValueModel:
         selected["reason"] = "DIRECT_ACTION_VALUE_MAXIMUM"
         return selected
 
+    def _incremental_conservative_edge_per_dollar(
+        self, row, *, base_score, lower, upper, horizon_ms, latency_ms,
+        side, portfolio_state, capital_budget,
+    ):
+        """Local incremental policy utility per incremental dollar of notional.
+
+        The per-trade intercept and post-selection penalty cancel in the
+        difference. This prevents low-price contracts from receiving extreme
+        sizes merely because a fixed cash-value intercept was divided by a tiny
+        minimum-order notional.
+        """
+        lower = float(lower)
+        upper = float(upper)
+        if upper <= lower + 1e-12:
+            return {
+                "raw_marginal_edge_per_dollar": 0.0,
+                "marginal_probe_size": lower,
+                "marginal_incremental_utility": 0.0,
+                "marginal_incremental_notional": 0.0,
+            }
+        step = min(upper - lower, max(1.0, 0.25 * lower))
+        probe_q = lower + step
+        higher = self._score_quantity(
+            row,
+            size=probe_q,
+            horizon_ms=horizon_ms,
+            latency_ms=latency_ms,
+            side=side,
+            portfolio_state=portfolio_state,
+            capital_budget=capital_budget,
+        )
+        delta_notional = float(higher["notional"]) - float(base_score["notional"])
+        delta_utility = (
+            float(higher["calibrated_lower_value"])
+            - float(base_score["calibrated_lower_value"])
+        )
+        edge = (
+            delta_utility / delta_notional
+            if delta_notional > 1e-12 and finite(delta_utility)
+            else 0.0
+        )
+        return {
+            "raw_marginal_edge_per_dollar": float(edge),
+            "marginal_probe_size": float(probe_q),
+            "marginal_incremental_utility": float(delta_utility),
+            "marginal_incremental_notional": float(delta_notional),
+        }
+
     def select_action_edge_sized(
         self, row, *, latency_ms=50, available_capital=None,
         live_geometry=True, minimum_lower_value=0.0,
@@ -2652,18 +2700,33 @@ class DirectActionValueModel:
                     capital_budget=capital_budget,
                 )
                 probe_notional = max(1e-12, float(probe["notional"]))
-                raw_edge_per_dollar = (
+                if probe["calibrated_lower_value"] <= float(minimum_lower_value):
+                    continue
+                admission_return_on_notional = (
                     float(probe["calibrated_lower_value"]) / probe_notional)
+                marginal = self._incremental_conservative_edge_per_dollar(
+                    row,
+                    base_score=probe,
+                    lower=lower,
+                    upper=upper,
+                    horizon_ms=horizon,
+                    latency_ms=latency_ms,
+                    side=side,
+                    portfolio_state=portfolio_state,
+                    capital_budget=capital_budget,
+                )
+                raw_edge_per_dollar = float(
+                    marginal["raw_marginal_edge_per_dollar"])
                 support_probability = probe.get("evidence_support_probability")
                 support_weight = (
                     min(1.0, max(0.0, float(support_probability)))
                     if finite(support_probability) else 0.0
                 )
-                edge_per_dollar = raw_edge_per_dollar * support_weight
-                if edge_per_dollar <= 0:
-                    continue
-                desired = policy.desired_notional(
-                    edge_per_dollar, capital_budget)
+                edge_per_dollar = max(0.0, raw_edge_per_dollar) * support_weight
+                desired = max(
+                    probe_notional,
+                    policy.desired_notional(edge_per_dollar, capital_budget),
+                )
                 if available_capital is not None:
                     desired = min(desired, max(0.0, float(available_capital)))
                 desired = min(
@@ -2701,11 +2764,22 @@ class DirectActionValueModel:
                 )
                 final = dict(final)
                 final.update({
-                    "reason": "EDGE_ADMISSION_CONTEXT_BUDGET_SIZING",
+                    "reason": "TOTAL_VALUE_ADMISSION_MARGINAL_EDGE_SIZING",
                     "sizing_mode": "EDGE_CONTEXT_BUDGET",
+                    "sizing_edge_semantics": (
+                        "INCREMENTAL_CONSERVATIVE_UTILITY_PER_DOLLAR"),
                     "admission_probe_size": float(lower),
-                    "raw_admission_edge_per_dollar": float(raw_edge_per_dollar),
+                    "admission_lower_value": float(
+                        probe["calibrated_lower_value"]),
+                    "admission_return_on_notional": float(
+                        admission_return_on_notional),
+                    "raw_admission_edge_per_dollar": float(
+                        admission_return_on_notional),
+                    "raw_marginal_edge_per_dollar": float(
+                        raw_edge_per_dollar),
+                    "marginal_edge_per_dollar": float(edge_per_dollar),
                     "admission_edge_per_dollar": float(edge_per_dollar),
+                    **marginal,
                     "sizing_support_probability": (
                         float(support_probability)
                         if finite(support_probability) else None),
@@ -2721,7 +2795,7 @@ class DirectActionValueModel:
         if not candidates:
             if sides and supported_sides == 0:
                 return no_trade("INSUFFICIENT_SIDE_REGIME_SUPPORT")
-            return no_trade("NO_POSITIVE_MARGINAL_EDGE_AFTER_RESIZING")
+            return no_trade("NO_POSITIVE_TOTAL_VALUE_AT_MINIMUM_SIZE")
         candidates.sort(
             key=lambda value: (
                 value["policy_utility"],
