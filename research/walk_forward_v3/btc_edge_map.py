@@ -27,6 +27,11 @@ EXITS=(500,1000,2000)
 TARGET_SIZES=(5.0,10.0,20.0,40.0)
 MODES=("EVERY_DECISION","ONE_PER_SIGNAL_VERSION")
 
+SURFACE_LATENCIES=(0,5,10,15,25,35,50,75,100,150,250,350,500,750,1000)
+SURFACE_EXITS=(50,100,150,250,350,500,750,1000,1500,2000,3000,5000,7500,10000,15000,30000)
+SURFACE_TARGET_SIZE=5.0
+SURFACE_MODE="EVERY_DECISION"
+
 
 def finite(v):
     return isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(float(v))
@@ -129,6 +134,54 @@ def fixed_mode_rows(rows,mode):
     return out
 
 
+def broad_entry_exit_surface(rows, split_hours):
+    mode_rows=fixed_mode_rows(rows,SURFACE_MODE)
+    table=defaultdict(fresh)
+    unavailable=defaultdict(int)
+    size=float(SURFACE_TARGET_SIZE)
+    for row in mode_rows:
+        side=selected_action_side(row)
+        state=decision_side_state(row,side)
+        if state is None:
+            unavailable["SIDE_STATE_UNAVAILABLE"]+=1
+            continue
+        ask=float(state["ask"])
+        depth=float(state["ask_quantity"])
+        minimum=float(row["minimum"])
+        if minimum>size+1e-12:
+            unavailable["VENUE_MINIMUM_ABOVE_TARGET_SIZE"]+=1
+            continue
+        if size>depth+1e-12 or size*ask>DEFAULT_HARD_ORDER_NOTIONAL+1e-9 or ask>.99:
+            unavailable["SIZE_DEPTH_OR_NOTIONAL_CAP"]+=1
+            continue
+        for latency in SURFACE_LATENCIES:
+            for exit_ms in SURFACE_EXITS:
+                if exit_ms<=latency:
+                    continue
+                economics,why=realized_action_economics(
+                    row,size=size,horizon_ms=exit_ms,
+                    latency_ms=latency,side=side,
+                    entry_cap=.99,
+                    hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
+                )
+                if economics is None:
+                    unavailable[str(why or "UNAVAILABLE")]+=1
+                    continue
+                add(table[f"{latency}::{exit_ms}"],economics,why,size,ask)
+    return {
+        "mode":SURFACE_MODE,
+        "target_size_shares":SURFACE_TARGET_SIZE,
+        "latencies_ms":list(SURFACE_LATENCIES),
+        "exit_horizons_ms":list(SURFACE_EXITS),
+        "candidate_rows":len(mode_rows),
+        "unavailable":dict(sorted(unavailable.items())),
+        "cells":{
+            key:finish(value,split_hours)
+            for key,value in sorted(table.items())
+        },
+    }
+
+
 def analyze(records):
     rows=[r for r in records if _valid_state(r) and str(r.get("asset"))=="BTC"]
     discovery,validation=market_halves(rows)
@@ -140,6 +193,9 @@ def analyze(records):
         "exit_horizons_ms":list(EXITS),
         "target_sizes_shares":list(TARGET_SIZES),
         "frequency_modes":list(MODES),
+        "broad_surface_latencies_ms":list(SURFACE_LATENCIES),
+        "broad_surface_exit_horizons_ms":list(SURFACE_EXITS),
+        "broad_surface_target_size_shares":SURFACE_TARGET_SIZE,
         "shock_identity":"MARKET_CAPTURE_SIGNAL_VERSION",
         "discovery_validation_split":"WHOLE_MARKET_CHRONOLOGICAL_HALF",
         "discovery_markets":len(discovery),"validation_markets":len(validation),
@@ -214,6 +270,7 @@ def analyze(records):
                     for key,value in sorted(table.items())
                 },
             }
+        split_out["entry_exit_surface"]=broad_entry_exit_surface(split_rows,split_hours)
         result["splits"][split]=split_out
 
     # Frozen diagnostic shortlist: require same exact cell positive in both
