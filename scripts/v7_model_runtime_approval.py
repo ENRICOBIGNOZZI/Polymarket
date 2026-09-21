@@ -81,6 +81,35 @@ def maker_economic_hash(model: dict[str, Any]) -> str:
     return _sha256_bytes(_canonical(payload))
 
 
+def economic_identity_from_models(
+    maker_path: Path,
+    rich_state: str = "UNAVAILABLE",
+    rich_path: Path | None = None,
+) -> dict[str, Any]:
+    maker = _load_json(maker_path)
+    maker_hash = maker_economic_hash(maker)
+    rich_state = str(rich_state or "UNAVAILABLE")
+    rich_model_hash = None
+    if rich_state == "AVAILABLE":
+        if rich_path is None:
+            raise ValueError("active rich model path required")
+        rich = _load_json(rich_path)
+        rich_model_hash = rich.get("model_hash")
+        if not isinstance(rich_model_hash, str) or not SHA256.fullmatch(rich_model_hash):
+            rich_model_hash = _sha256_file(_safe_regular(rich_path))
+    elif rich_state != "UNAVAILABLE":
+        raise ValueError("unknown active rich model state")
+    payload = {
+        "maker_economic_sha256": maker_hash,
+        "rich_state": rich_state,
+        "rich_model_hash": rich_model_hash,
+    }
+    return {
+        **payload,
+        "economic_model_identity_sha256": _sha256_bytes(_canonical(payload)),
+    }
+
+
 def economic_identity(manifest_path: Path, artifact_root: Path) -> dict[str, Any]:
     root = artifact_root.resolve()
     manifest = _load_json(manifest_path)
