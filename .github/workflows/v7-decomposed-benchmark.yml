@@ -49,10 +49,10 @@ jobs:
           assert v['real_order_submission'] is False
           assert v['real_capital_at_risk'] is False
           assert v['automatic_promotion'] is False
-          assert v['folds']==3
+          assert v['folds'] in (2,3)
           assert v['latency_ms']==50
           assert float(v['capital_budget'])==10000.0
-          assert v['output_directory']=='docs/research/decomposed-horse-race-2026-09-21'
+          assert re.fullmatch(r'docs/research/decomposed-horse-race(?:-fast)?-2026-09-21',v['output_directory'])
           PY
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
@@ -159,5 +159,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: v7-decomposed-horse-race-${{ github.run_id }}
-          path: docs/research/decomposed-horse-race-2026-09-21/horse_race.json
+          path: |
+            docs/research/decomposed-horse-race-2026-09-21/horse_race.json
+            docs/research/decomposed-horse-race-fast-2026-09-21/horse_race.json
           retention-days: 30
