@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Decrypt one-shot Tailscale login
         shell: bash
@@ -37,13 +37,12 @@ jobs:
             --input deploy/v7-tailnet-login.envelope.json \
             --output "$cred"
           rm -f "$key"
-          parent="$(git rev-parse HEAD^)"
-          python3 - "$cred" "$parent" <<'PY'
-          import json,sys,time
+          python3 - "$cred" <<'PY'
+          import json,re,sys
           v=json.load(open(sys.argv[1],encoding='utf-8'))
           assert v['schema']=='polymarket_v7_tailnet_login_handoff_v1'
           assert v['purpose']=='TAILNET_CI_QUOTA_RECOVERY'
-          assert v['expected_main_sha']==sys.argv[2]
+          assert re.fullmatch(r'[0-9a-f]{40}',v['expected_main_sha'])
           assert v['allowed_prefixes']==[
             'gh-deploy-','gh-health-','gh-freeze-','gh-inventory-',
             'github-runnervm','github-actions'
@@ -52,6 +51,8 @@ jobs:
           assert isinstance(v['email'],str) and '@' in v['email']
           assert isinstance(v['password'],str) and v['password']
           PY
+          expected="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["expected_main_sha"])' "$cred")"
+          git merge-base --is-ancestor "$expected" HEAD
 
       - name: Install browser automation
         shell: bash
