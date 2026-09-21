@@ -23,6 +23,7 @@ INSTANCE_RE = re.compile(r"^i-[0-9a-f]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CHUNK = 9000
 SOURCE_PATHS = (
+    "config/v7_trade_frequency_sizing_challenger.json",
     "research/walk_forward_v3/__init__.py",
     "research/walk_forward_v3/direct_action.py",
     "research/walk_forward_v2/__init__.py",
@@ -134,6 +135,8 @@ def execute(instance: str, remote: str, context: dict, request: dict, source_sha
     app_dir = context["app_dir"]
     challenger_flag = (
         " --trade-frequency-challenger"
+        " --challenger-config "
+        + remote + "/src/config/v7_trade_frequency_sizing_challenger.json"
         if request.get("trade_frequency_challenger") is True else ""
     )
     command = f"""set -euo pipefail
