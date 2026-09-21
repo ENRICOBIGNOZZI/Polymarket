@@ -4009,6 +4009,8 @@ def main(argv=None):
 
     data = build_dataset(
         args.root,
+        include_settlement_labels=False,
+        use_compact_window_index=True,
         **({"minimum_wall_ns": args.minimum_wall_ns}
            if args.minimum_wall_ns is not None else {}))
     if data.get("input_state") != "READY":
