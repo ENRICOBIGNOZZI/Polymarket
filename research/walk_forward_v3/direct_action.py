@@ -510,6 +510,84 @@ class StreamingRidge:
 
 
 
+def _polylog_value(coefficients, q):
+    constant, linear, quadratic, log_term = coefficients
+    q = float(q)
+    return (
+        float(constant)
+        + float(linear) * q
+        + float(quadratic) * q * q
+        + float(log_term) * math.log1p(q)
+    )
+
+
+def _polylog_derivative_roots(linear, quadratic, log_term):
+    """Stationary points of A*q + B*q^2 + C*log(1+q), q > -1."""
+    a = 2.0 * float(quadratic)
+    b = float(linear) + 2.0 * float(quadratic)
+    d = float(linear) + float(log_term)
+    tolerance = 1e-14
+    if abs(a) <= tolerance:
+        if abs(b) <= tolerance:
+            return []
+        root = -d / b
+        return [root] if root > -1.0 else []
+    discriminant = b * b - 4.0 * a * d
+    if discriminant < -1e-12:
+        return []
+    discriminant = max(0.0, discriminant)
+    root = math.sqrt(discriminant)
+    values = [(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)]
+    return sorted({float(value) for value in values if value > -1.0 and finite(value)})
+
+
+def _bisect_monotone_crossing(coefficients, level, left, right):
+    """Unique crossing on an interval known to be monotone."""
+    def value(q):
+        return _polylog_value(coefficients, q) - float(level)
+
+    fl, fr = value(left), value(right)
+    if abs(fl) <= 1e-12:
+        return float(left)
+    if abs(fr) <= 1e-12:
+        return float(right)
+    if fl * fr > 0:
+        return None
+    lo, hi = float(left), float(right)
+    for _ in range(64):
+        mid = (lo + hi) / 2.0
+        fm = value(mid)
+        if abs(fm) <= 1e-12:
+            return mid
+        if fl * fm <= 0:
+            hi = mid
+            fr = fm
+        else:
+            lo = mid
+            fl = fm
+    return (lo + hi) / 2.0
+
+
+def _polylog_level_crossings(coefficients, level, lower, upper):
+    """All level crossings by partitioning at derivative roots."""
+    _, linear, quadratic, log_term = coefficients
+    points = [float(lower)]
+    points.extend(
+        root for root in _polylog_derivative_roots(linear, quadratic, log_term)
+        if lower < root < upper
+    )
+    points.append(float(upper))
+    points = sorted(set(points))
+    crossings = []
+    for left, right in zip(points[:-1], points[1:]):
+        crossing = _bisect_monotone_crossing(
+            coefficients, level, left, right)
+        if crossing is not None and lower <= crossing <= upper:
+            crossings.append(float(crossing))
+    return sorted(set(round(value, 12) for value in crossings))
+
+
+
 class DirectActionValueModel:
     """Direct Q(S, q, h | latency) learner with market-block calibration."""
 
@@ -835,6 +913,244 @@ class DirectActionValueModel:
         self.fitted = True
         return self
 
+    def _signal_scalar(self, row):
+        for key in (
+            "external.binance_return_100ms_bp", "binance_return_100ms_bp",
+            "signal_return_bp",
+        ):
+            value = row.get("features", {}).get(key)
+            if finite(value):
+                return float(value)
+        return 0.0
+
+    @staticmethod
+    def _raw_feature_coefficient(model, name):
+        try:
+            index = model.names.index(name)
+        except ValueError:
+            return 0.0
+        return float(model.beta[1 + index]) / float(model.scale[name])
+
+    def _quantity_shape(self, model, row, *, horizon_ms, latency_ms):
+        """Represent model prediction as c + A*q + B*q^2 + C*log(1+q)."""
+        base = self._action_record(
+            row, size=0.0, horizon_ms=horizon_ms, latency_ms=latency_ms)
+        constant = float(model.predict(base))
+        ask = float(row["ask"])
+        bid = float(row["bid"])
+        depth = max(1e-12, float(row["quantity"]))
+        signal = self._signal_scalar(row)
+        spread = ask - bid
+
+        linear = 0.0
+        quadratic = 0.0
+        log_term = 0.0
+        linear += self._raw_feature_coefficient(model, "action.size")
+        quadratic += self._raw_feature_coefficient(model, "action.size2")
+        log_term += self._raw_feature_coefficient(model, "action.log_size")
+        linear += (
+            self._raw_feature_coefficient(model, "action.depth_fraction")
+            / depth
+        )
+        linear += self._raw_feature_coefficient(model, "action.notional") * ask
+        linear += (
+            self._raw_feature_coefficient(
+                model, "action.notional_fraction_of_cap")
+            * ask / self.hard_order_notional
+        )
+        linear += (
+            self._raw_feature_coefficient(model, "interaction.size_signal")
+            * signal
+        )
+        linear += (
+            self._raw_feature_coefficient(
+                model, "interaction.size_abs_signal")
+            * abs(signal)
+        )
+        linear += (
+            self._raw_feature_coefficient(model, "interaction.size_spread")
+            * spread
+        )
+        quadratic += (
+            self._raw_feature_coefficient(
+                model, "interaction.size2_over_depth")
+            / depth
+        )
+        return (constant, linear, quadratic, log_term)
+
+    def _quantity_bounds(self, row, available_capital):
+        ask = float(row["ask"])
+        lower = float(row["minimum"])
+        cap = self.hard_order_notional
+        if available_capital is not None:
+            cap = min(cap, max(0.0, float(available_capital)))
+        upper = min(float(row["quantity"]), cap / ask)
+        return lower, upper
+
+    def _score_quantity(self, row, *, size, horizon_ms, latency_ms,
+                        portfolio_state, capital_budget):
+        action = self._action_record(
+            row, size=size, horizon_ms=horizon_ms, latency_ms=latency_ms)
+        mean = float(self.mean_model.predict(action))
+        if self.scale_model is None:
+            scale = float(self.uncertainty_floor)
+        else:
+            scale = max(
+                float(self.uncertainty_floor),
+                float(self.scale_model.predict(action)),
+            )
+        notional = float(size) * float(row["ask"])
+        uncertainty_penalty = (
+            float(self.friction_policy.uncertainty_aversion)
+            * self.calibration_multiplier * scale
+        )
+        base = {
+            "action": "TRADE",
+            "size": float(size),
+            "exit_horizon_ms": int(horizon_ms),
+            "latency_ms": int(latency_ms),
+            "notional": float(notional),
+        }
+        residual = residual_policy_friction(
+            base, row, portfolio_state=portfolio_state,
+            capital_budget=capital_budget,
+            friction_policy=self.friction_policy)
+        lower_cash = mean - uncertainty_penalty
+        policy_utility = lower_cash - residual["total_residual_friction"]
+        return {
+            **base,
+            "predicted_total_net_cash_pnl": mean,
+            "predicted_total_net_pnl": mean,
+            "predicted_abs_error_scale": scale,
+            "uncertainty_penalty": float(uncertainty_penalty),
+            "calibrated_lower_cash_value": float(lower_cash),
+            "calibrated_lower_value": float(policy_utility),
+            "policy_utility": float(policy_utility),
+            "policy_loss": float(-policy_utility),
+            **residual,
+            "predicted_return_on_notional": (
+                mean / notional if notional > 0 else None),
+            "quantity_optimizer": "GLOBAL_PIECEWISE_POLYLOG_CRITICAL_POINTS",
+        }
+
+    def _continuous_quantity_candidates(
+        self, row, *, horizon_ms, latency_ms, lower, upper,
+        portfolio_state, capital_budget,
+    ):
+        """Global critical-point set for the learned 1-D policy utility."""
+        lower, upper = float(lower), float(upper)
+        if upper + 1e-12 < lower:
+            return []
+        if math.isclose(lower, upper, rel_tol=0.0, abs_tol=1e-12):
+            return [lower]
+
+        mean_shape = self._quantity_shape(
+            self.mean_model, row,
+            horizon_ms=horizon_ms, latency_ms=latency_ms)
+        scale_shape = (
+            self._quantity_shape(
+                self.scale_model, row,
+                horizon_ms=horizon_ms, latency_ms=latency_ms)
+            if self.scale_model is not None else None
+        )
+        uncertainty_multiplier = (
+            float(self.friction_policy.uncertainty_aversion)
+            * float(self.calibration_multiplier)
+        )
+
+        boundaries = {lower, upper}
+        if scale_shape is not None:
+            boundaries.update(
+                _polylog_level_crossings(
+                    scale_shape, self.uncertainty_floor, lower, upper))
+
+        ask = float(row["ask"])
+        direction = 1.0 if float(row.get("direction") or 0) >= 0 else -1.0
+        state = portfolio_state or {}
+        asset_signed = state.get("asset_signed_notional") or {}
+        asset = str(row.get("asset") or "UNKNOWN")
+        current_asset = float(asset_signed.get(asset, 0.0) or 0.0)
+        current_factor = float(state.get("common_factor_signed_notional") or 0.0)
+
+        def add_concentration_kink(current, weight):
+            if float(weight) <= 0 or ask <= 0:
+                return
+            root = -2.0 * float(current) * direction / ask
+            if lower < root < upper:
+                boundaries.add(float(root))
+
+        add_concentration_kink(
+            current_asset, self.friction_policy.asset_concentration_lambda)
+        add_concentration_kink(
+            current_factor,
+            self.friction_policy.common_factor_concentration_lambda)
+
+        points = sorted(boundaries)
+        candidates = set(points)
+        capital_linear = (
+            ask * float(self.friction_policy.capital_charge_bps_per_second)
+            * 1e-4 * (float(horizon_ms) / 1000.0)
+        )
+        budget = max(1e-12, float(capital_budget))
+
+        for left, right in zip(points[:-1], points[1:]):
+            if right - left <= 1e-12:
+                continue
+            midpoint = (left + right) / 2.0
+
+            _, linear, quadratic, log_term = mean_shape
+
+            if scale_shape is not None and (
+                _polylog_value(scale_shape, midpoint)
+                > self.uncertainty_floor
+            ):
+                _, sl, sq, sg = scale_shape
+                linear -= uncertainty_multiplier * sl
+                quadratic -= uncertainty_multiplier * sq
+                log_term -= uncertainty_multiplier * sg
+
+            linear -= capital_linear
+
+            def subtract_concentration(current, weight):
+                nonlocal linear, quadratic
+                weight = float(weight)
+                if weight <= 0:
+                    return
+                increment = (
+                    2.0 * float(current) * direction * ask * midpoint
+                    + ask * ask * midpoint * midpoint
+                ) / budget
+                if increment > 0:
+                    linear -= (
+                        weight * 2.0 * float(current) * direction * ask
+                        / budget
+                    )
+                    quadratic -= weight * ask * ask / budget
+
+            subtract_concentration(
+                current_asset,
+                self.friction_policy.asset_concentration_lambda)
+            subtract_concentration(
+                current_factor,
+                self.friction_policy.common_factor_concentration_lambda)
+
+            for root in _polylog_derivative_roots(
+                linear, quadratic, log_term):
+                if left < root < right:
+                    candidates.add(float(root))
+
+        # Numerical guard points around kinks protect against finite-precision
+        # classification of active max() penalties.
+        width = max(1e-10, upper - lower)
+        for boundary in list(boundaries):
+            for direction_eps in (-1.0, 1.0):
+                value = boundary + direction_eps * width * 1e-10
+                if lower <= value <= upper:
+                    candidates.add(value)
+        return sorted(
+            value for value in candidates
+            if lower - 1e-12 <= value <= upper + 1e-12)
+
     def score_actions(self, row, *, latency_ms=50, available_capital=None,
                       live_geometry=True, portfolio_state=None,
                       capital_budget=10_000.0):
@@ -850,65 +1166,41 @@ class DirectActionValueModel:
             and float(row["ask"]) <= self.entry_cap + 1e-12
         ):
             return [], "OUTSIDE_LIVE_GEOMETRY"
-        sizes = candidate_sizes(
-            row, size_grid=self.size_grid,
-            hard_order_notional=self.hard_order_notional,
-            available_capital=available_capital,
-            max_sizes=self.max_sizes_per_state,
-        )
-        if not sizes:
+
+        lower, upper = self._quantity_bounds(row, available_capital)
+        if upper + 1e-12 < lower or upper <= 0:
             return [], "NO_FEASIBLE_SIZE"
-        action_rows = []
+
+        scored = []
         for horizon in self.action_horizons_ms:
             if horizon <= latency_ms:
                 continue
-            for size in sizes:
-                action_rows.append(self._action_record(
-                    row, size=size, horizon_ms=horizon, latency_ms=latency_ms))
-        if not action_rows:
-            return [], "NO_FEASIBLE_ACTION"
-        means = self.mean_model.predict_many(action_rows)
-        if self.scale_model is None:
-            scales = [self.uncertainty_floor] * len(action_rows)
-        else:
-            scales = [
-                max(self.uncertainty_floor, value)
-                for value in self.scale_model.predict_many(action_rows)
+            quantities = self._continuous_quantity_candidates(
+                row, horizon_ms=horizon, latency_ms=latency_ms,
+                lower=lower, upper=upper,
+                portfolio_state=portfolio_state,
+                capital_budget=capital_budget)
+            if not quantities:
+                continue
+            horizon_scores = [
+                self._score_quantity(
+                    row, size=q, horizon_ms=horizon, latency_ms=latency_ms,
+                    portfolio_state=portfolio_state,
+                    capital_budget=capital_budget)
+                for q in quantities
             ]
-        scored = []
-        for action, mean, scale in zip(action_rows, means, scales):
-            notional = float(action["size"]) * float(row["ask"])
-            uncertainty_penalty = (
-                float(self.friction_policy.uncertainty_aversion)
-                * self.calibration_multiplier * float(scale)
+            horizon_scores.sort(
+                key=lambda value: (
+                    value["policy_utility"],
+                    value["predicted_total_net_cash_pnl"],
+                    -value["notional"],
+                ),
+                reverse=True,
             )
-            base = {
-                "action": "TRADE",
-                "size": float(action["size"]),
-                "exit_horizon_ms": int(action["exit_horizon_ms"]),
-                "latency_ms": latency_ms,
-                "notional": notional,
-            }
-            residual = residual_policy_friction(
-                base, row, portfolio_state=portfolio_state,
-                capital_budget=capital_budget,
-                friction_policy=self.friction_policy)
-            lower_cash = float(mean) - uncertainty_penalty
-            policy_utility = lower_cash - residual["total_residual_friction"]
-            scored.append({
-                **base,
-                "predicted_total_net_cash_pnl": float(mean),
-                "predicted_total_net_pnl": float(mean),
-                "predicted_abs_error_scale": float(scale),
-                "uncertainty_penalty": float(uncertainty_penalty),
-                "calibrated_lower_cash_value": float(lower_cash),
-                "calibrated_lower_value": float(policy_utility),
-                "policy_utility": float(policy_utility),
-                "policy_loss": float(-policy_utility),
-                **residual,
-                "predicted_return_on_notional": (
-                    float(mean) / notional if notional > 0 else None),
-            })
+            best = dict(horizon_scores[0])
+            best["quantity_candidate_count"] = len(horizon_scores)
+            scored.append(best)
+
         scored.sort(
             key=lambda value: (
                 value["policy_utility"],
@@ -917,7 +1209,7 @@ class DirectActionValueModel:
             ),
             reverse=True,
         )
-        return scored, "READY"
+        return scored, "READY" if scored else "NO_FEASIBLE_ACTION"
 
     def select_action(self, row, *, latency_ms=50, available_capital=None,
                       live_geometry=True, minimum_lower_value=0.0,
