@@ -697,3 +697,31 @@ def test_asset_diagnostics_surface_fee_schedule_and_size_capacity():
     assert btc["size_capacity"]["5.0"]["both"] == 1
     assert eth["size_capacity"]["5.0"]["both"] == 0
     assert diag["required_prediction"] == .01
+
+
+
+def test_asset_diagnostics_expose_configured_paper_delay_components():
+    row = record("delay")
+    row["asset"] = "SOL"
+    row["paper_venue_delay_ns"] = 250_000_000
+    row["paper_assumed_transport_delay_ns"] = 250_000_000
+    row["targets"] = {
+        "1000": {
+            "state": "OBSERVED",
+            "arrival_bid": .55,
+            "observed_time_ns": row["decision_ns"] + 1_000_000_000,
+        }
+    }
+    event = {
+        "decision_ns": row["decision_ns"],
+        "decision_id": row["decision_id"],
+        "row": row,
+        "markout_predictions": {"1000": .02},
+        "asset_markout_predictions": {"1000": .02},
+    }
+    diag = asset_selection_diagnostics([event], horizons=(1000,))
+    cell = diag["horizons"]["1000"]["SOL"]
+    assert cell["paper_venue_delay_ms_quantiles"]["0.5"] == 250.0
+    assert cell["paper_assumed_transport_delay_ms_quantiles"]["0.5"] == 250.0
+    assert cell["paper_configured_total_delay_ms_quantiles"]["0.5"] == 500.0
+    assert cell["paper_configured_total_delay_ms_counts"] == {"500": 1}
