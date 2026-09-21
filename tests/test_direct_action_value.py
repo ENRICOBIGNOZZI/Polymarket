@@ -28,6 +28,8 @@ from research.walk_forward_v3.direct_action import (
     summarize_direct_action,
     merge_direct_action_summaries,
     bilateral_evidence_summary,
+    cash_pnl_policy_regret_diagnostic,
+    summarize_policy_regret,
     regime_support_key,
     evaluate_latency_age_surface,
     summarize_effective_age_buckets,
@@ -1791,3 +1793,123 @@ def test_bilateral_side_support_fails_closed_if_both_sides_unsupported():
     selected = model.select_action(r, latency_ms=50)
     assert selected["action"] == "NO_TRADE"
     assert selected["reason"] == "INSUFFICIENT_SIDE_REGIME_SUPPORT"
+
+
+def test_policy_regret_oracle_prefers_no_trade_for_negative_selected_cash_pnl():
+    r = row("m9200", exit_bid=.40, depth=20.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+    )
+    selected = {
+        "action": "TRADE",
+        "side": "SELECTED",
+        "size": 5.0,
+        "exit_horizon_ms": 500,
+        "latency_ms": 50,
+    }
+    result = cash_pnl_policy_regret_diagnostic(
+        model, r, selected,
+        latency_ms=50,
+        available_capital=1000.0,
+        capital_budget=1000.0,
+    )
+    assert result["same_horizon_complete"] is True
+    assert result["all_horizons_complete"] is True
+    assert result["same_horizon_oracle"]["action"] == "NO_TRADE"
+    assert result["same_horizon_oracle_prefers_no_trade"] is True
+    assert result["selected_cash_pnl"] < 0
+    assert math.isclose(
+        result["same_horizon_cash_regret"],
+        -result["selected_cash_pnl"],
+        abs_tol=1e-12,
+    )
+
+
+def test_policy_regret_oracle_finds_larger_continuous_q_when_cash_edge_positive():
+    r = row("m9201", exit_bid=.55, depth=20.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        hard_order_notional=100.0,
+        selection_calibration_mode="OFF",
+    )
+    selected = {
+        "action": "TRADE",
+        "side": "SELECTED",
+        "size": 5.0,
+        "exit_horizon_ms": 500,
+        "latency_ms": 50,
+    }
+    result = cash_pnl_policy_regret_diagnostic(
+        model, r, selected,
+        latency_ms=50,
+        available_capital=1000.0,
+        capital_budget=1000.0,
+    )
+    oracle = result["same_horizon_oracle"]
+    assert oracle["action"] == "TRADE"
+    assert math.isclose(oracle["size"], 20.0, abs_tol=1e-12)
+    assert oracle["pnl"] > result["selected_cash_pnl"]
+    assert result["same_horizon_cash_regret"] > 0
+
+
+def test_policy_regret_oracle_uses_exit_capacity_kink_for_optimal_q():
+    r = row("m9202", exit_bid=.60, depth=20.0)
+    r["targets"]["500"]["arrival_bid_quantity"] = 7.0
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        hard_order_notional=100.0,
+        selection_calibration_mode="OFF",
+    )
+    selected = {
+        "action": "TRADE",
+        "side": "SELECTED",
+        "size": 5.0,
+        "exit_horizon_ms": 500,
+        "latency_ms": 50,
+    }
+    result = cash_pnl_policy_regret_diagnostic(
+        model, r, selected,
+        latency_ms=50,
+        available_capital=1000.0,
+        capital_budget=1000.0,
+    )
+    oracle = result["same_horizon_oracle"]
+    assert oracle["action"] == "TRADE"
+    assert math.isclose(oracle["size"], 7.0, abs_tol=1e-12)
+    assert result["same_horizon_complete"] is True
+
+
+def test_policy_regret_summary_keeps_incomplete_horizons_out_of_full_oracle_claim():
+    complete = {
+        "action": "TRADE",
+        "cash_pnl_policy_regret": {
+            "same_horizon_cash_regret": .2,
+            "all_horizon_cash_regret": .3,
+            "selected_matches_same_horizon_oracle": False,
+            "selected_matches_all_horizon_oracle": False,
+            "same_horizon_oracle_prefers_no_trade": True,
+            "all_horizon_oracle_prefers_no_trade": False,
+        },
+    }
+    partial = {
+        "action": "TRADE",
+        "cash_pnl_policy_regret": {
+            "same_horizon_cash_regret": .1,
+            "all_horizon_cash_regret": None,
+            "selected_matches_same_horizon_oracle": False,
+            "selected_matches_all_horizon_oracle": False,
+            "same_horizon_oracle_prefers_no_trade": False,
+            "all_horizon_oracle_prefers_no_trade": False,
+        },
+    }
+    result = summarize_policy_regret([complete, partial])
+    assert result["same_horizon_complete"] == 2
+    assert result["all_horizons_complete"] == 1
+    assert math.isclose(
+        result["same_horizon_cash_regret"]["total"], .3, abs_tol=1e-12)
+    assert math.isclose(
+        result["all_horizon_cash_regret"]["total"], .3, abs_tol=1e-12)
