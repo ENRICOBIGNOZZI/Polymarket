@@ -316,7 +316,46 @@ void test_strict_lead_lag_requires_pm_book_to_precede_signal() {
     assert(capital.release_order(accepted.intent.intent_id));
 }
 
+
+
+void test_capital_based_notional_sizing_tracks_price_and_depth() {
+    NativeCryptoDecisionPolicy policy;
+    policy.target_notional_microdollars = 83'333'333;
+    policy.target_quantity_microunits = 5'000'000; // fallback must be ignored.
+    policy.maximum_entry_price_e4 = 8'000;
+    NativeCryptoDecisionLane lane(policy);
+    CapitalLimits larger{500'000'000, 500'000'000, 333'333'333, 100'000'000};
+    SleeveCapitalAccount capital(larger);
+
+    auto low = input(1, 120);
+    low.yes_book = book(4'000, 300'000'000);
+    const auto a = lane.evaluate(low, capital);
+    assert(a.accepted == 1);
+    assert(a.intent.quantity_microunits == 208'333'332);
+    assert(a.admission.reserved_microdollars <= 83'333'333);
+    assert(a.admission.reserved_microdollars > 83'333'000);
+    assert(capital.release_order(a.intent.intent_id));
+
+    lane.reset_market(7);
+    auto high = input(1, 121);
+    high.yes_book = book(8'000, 300'000'000);
+    const auto b = lane.evaluate(high, capital);
+    assert(b.accepted == 1);
+    assert(b.intent.quantity_microunits == 104'166'666);
+    assert(b.admission.reserved_microdollars <= 83'333'333);
+    assert(b.admission.reserved_microdollars > 83'333'000);
+    assert(capital.release_order(b.intent.intent_id));
+
+    lane.reset_market(7);
+    auto thin = input(1, 122);
+    thin.yes_book = book(4'000, 100'000'000);
+    const auto rejected = lane.evaluate(thin, capital);
+    assert(rejected.accepted == 0);
+    assert(rejected.reason == NativeCryptoDecisionReason::InsufficientDepth);
+}
+
 int main() {
+    test_capital_based_notional_sizing_tracks_price_and_depth();
     test_required_slow_context_is_action_local_and_never_waits();
     test_strict_lead_lag_requires_pm_book_to_precede_signal();
     test_probability_selects_economic_side_not_signal_side();

@@ -68,6 +68,47 @@ def test_bnb_launch_uses_bybit_without_aliasing_coinbase(tmp_path,monkeypatch):
     assert "--strict-signal-policy" in command
     assert float(arg("--minimum-absolute-binance-return-bp"))==policy["BNB:M5"]["minimum_binance_return_bp"]
 
+
+def test_manager_derives_target_notional_from_context_budget(tmp_path,monkeypatch):
+    policy=manager._signal_policy(ROOT/"config/v7_crypto_signal_policy.json")
+    m=object.__new__(manager.Manager)
+    m.run_root=tmp_path
+    m.signal_policy=policy
+    m.signal_policy_sha256="d"*64
+    m.base_risk_receipt={
+        "risk_policy_sha256":"a"*64,
+        "target_order_fraction_of_context":0.25,
+        "target_order_notional_cap_microdollars":100_000_000,
+        "limits":{
+            "max_market_exposure_microdollars":333_333_333,
+            "max_single_order_microdollars":100_000_000,
+        },
+    }
+    m.args=types.SimpleNamespace(
+        min_order_microunits=5_000_000,target_quantity_microunits=5_000_000,
+        maximum_entry_price_e4=8000,minimum_tte_ns=105_000_000_000,
+        maximum_tte_ns=120_000_000_000,maker_share_cap_microunits=1_000_000,
+        model_sha="b"*40,run_id="run",server_id="server",engine=Path("/tmp/engine"),
+        probability_model=None,capture_native_full_context=[],
+        capture_native_observations=False,capture_native_decisions=True)
+    monkeypatch.setattr(manager,"tick_size_e4",lambda token:100)
+    monkeypatch.setattr(manager,"venue_minimum_microunits",lambda token:5_000_000)
+    monkeypatch.setattr(manager,"fee_parameters",lambda market:(.07,1.0,"TEST"))
+    monkeypatch.setattr(manager,"_close_unix",lambda market:9_999_999_999)
+    terms={"schema":"terms","state":"VERIFIED_SNAPSHOT","reason":"","market_id":"1",
+        "snapshot_sha256":"c"*64,"observed_at_ns":1,"mandatory_taker_delay_ns":250_000_000}
+    monkeypatch.setattr(manager,"execution_terms_snapshot",lambda market,fetch:terms)
+    monkeypatch.setattr(manager,"persist_execution_terms",lambda root,value:tmp_path/"terms.json")
+    market={"asset":"BTC","horizon":"M5","market_id":"1",
+        "clob_token_ids":["yes","no"],"outcomes":["YES","NO"],"event_ids":["e"],
+        "external_symbols":{"binance_spot":"BTCUSDT","coinbase_spot":"BTC-USD","bybit_spot":"BTCUSDT"}}
+    context_budget=333_333_333
+    command=m._launch_command(market,context_budget)
+    i=command.index("--target-notional-microdollars")
+    assert int(command[i+1])==83_333_333
+    j=command.index("--max-single-order-microdollars")
+    assert int(command[j+1])==100_000_000
+
 def test_launcher_wires_policy():
     launcher=(ROOT/"scripts/paper_v7_execution_loop.sh").read_text()
     assert 'CRYPTO_SIGNAL_POLICY="${PM_V7_CRYPTO_SIGNAL_POLICY:-$ROOT/config/v7_crypto_signal_policy.json}"' in launcher
@@ -104,7 +145,11 @@ def test_confirmation_evidence_does_not_fabricate_unobserved_provider_returns():
     assert '{"coinbase_return_100ms_bp", event.confirmation_venue != external_fair::VenueId::BybitSpot' in source
     assert '{"confirmation_return_100ms_bp", event.confirmation_venue != external_fair::VenueId::Unknown' in source
 
-def test_strict_candidate_has_no_direction_only_economic_fallback():
+def test_strict_signal_policy_does_not_silently_activate_probability_ev():
     native=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
-    assert '(probability_model.loaded || options.strict_signal_policy) ? 1 : 0' in native
-    assert 'direction_only_fallback_allowed' in native
+    assert 'decision_policy.probability_ev_enabled = probability_model.loaded ? 1 : 0' in native
+    assert '(probability_model.loaded || options.strict_signal_policy) ? 1 : 0' not in native
+    # Context-specific signal gates remain strict even when no private
+    # probability artifact is installed; the zero-artifact PAPER lane may then
+    # emit a direction-based proposal sized by the native capital contract.
+    assert 'decision_policy.require_pm_book_pre_signal = options.strict_signal_policy ? 1 : 0' in native

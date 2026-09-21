@@ -5,11 +5,14 @@
   "real_order_submission": false,
   "source_baseline_sha": "c27afd1574575a99f9c02262529e830dab3c4820",
   "capital_authority_owner": "V7_CANONICAL_ALLOCATOR",
-  "limit_basis": "NOTIONAL_SUBALLOCATION_WITHIN_CANONICAL_ENGINE_BUDGET",
+  "limit_basis": "CAPITAL_BASED_CONTEXT_FRACTION_WITH_HARD_NOTIONAL_CEILINGS",
   "sleeve_budget_microdollars": 10000000000,
   "max_total_exposure_microdollars": 10000000000,
   "max_market_exposure_microdollars": 333333333,
-  "max_single_order_microdollars": 10000000,
+  "max_single_order_microdollars": 100000000,
   "baseline_maker_share_cap_microunits": 1000000,
-  "maximum_paper_candidate_maker_share_cap_microunits": 5000000
+  "maximum_paper_candidate_maker_share_cap_microunits": 5000000,
+  "target_order_fraction_of_context": 0.25,
+  "target_order_notional_cap_microdollars": 100000000,
+  "paper_sizing_contract": "DYNAMIC_NOTIONAL_FROM_CONTEXT_BUDGET_AND_EXECUTABLE_PRICE"
 }
