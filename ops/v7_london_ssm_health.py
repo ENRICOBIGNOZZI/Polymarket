@@ -60,6 +60,123 @@ pid=int(r.get('pid') or 0); assert pid>0, r; os.kill(pid,0)
 assert now-int(r.get('timestamp') or 0)<=180, r
 PY
 
+echo "health_probe=bilateral_capture"
+python3 - "$ROOT" <<'PY'
+import gzip,json,sys,time
+from collections import Counter
+from pathlib import Path
+
+root=Path(sys.argv[1])
+status=json.loads((root/'control/runtime_status.json').read_text())
+hft=root/'research/hft_permanent'
+now_ns=time.time_ns()
+cutoff_ns=now_ns-900_000_000_000  # recent 15m only
+candidates=[]
+for folder in (hft/'compact', hft/'compact_closed'):
+    if not folder.is_dir() or folder.is_symlink():
+        continue
+    for path in folder.glob('*.jsonl*'):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            stat=path.stat()
+        except OSError:
+            continue
+        if stat.st_mtime_ns < cutoff_ns:
+            continue
+        candidates.append((stat.st_mtime_ns, stat.st_size, path))
+candidates.sort(reverse=True)
+
+max_files=96
+max_bytes=128*1024*1024
+selected=[]
+selected_bytes=0
+truncated=False
+for _,size,path in candidates:
+    if len(selected)>=max_files or selected_bytes+size>max_bytes:
+        truncated=True
+        continue
+    selected.append(path)
+    selected_bytes+=size
+
+def wall_ns(row):
+    if row.get('kind')==2 and isinstance(row.get('decision_wall_ns'),int):
+        return row['decision_wall_ns']
+    observed=row.get('observed_monotonic_ns') or row.get('decision_monotonic_ns')
+    close_wall=row.get('close_wall_ns')
+    close_mono=row.get('close_monotonic_ns')
+    if all(isinstance(v,int) and v>0 for v in (observed,close_wall,close_mono)):
+        return observed+close_wall-close_mono
+    return 0
+
+def pair_state(row):
+    if row.get('repricing_pair_valid') is not True:
+        return 'UNAVAILABLE'
+    try:
+        yb=int(row['yes_bid_e4']); ya=int(row['yes_ask_e4'])
+        nb=int(row['no_bid_e4']); na=int(row['no_ask_e4'])
+    except (KeyError,TypeError,ValueError,OverflowError):
+        return 'UNAVAILABLE'
+    if not (0<yb<ya<10000 and 0<nb<na<10000):
+        return 'UNAVAILABLE'
+    quantities=[]
+    for key in ('yes_bid_quantity','yes_ask_quantity','no_bid_quantity','no_ask_quantity'):
+        value=row.get(key)
+        if not isinstance(value,int) or isinstance(value,bool) or value<0:
+            return 'PRICES_ONLY'
+        quantities.append(value)
+    return 'BILATERAL_EXECUTABLE_READY' if all(value>0 for value in quantities) else 'PRICES_ONLY'
+
+kind_counts=Counter()
+pair_by_kind={'2':Counter(),'6':Counter()}
+token_identity=Counter()
+invalid_json=0
+recent_rows=0
+for path in selected:
+    opener=gzip.open if str(path).endswith('.gz') else open
+    try:
+        with opener(path,'rt',encoding='utf-8') as stream:
+            for line in stream:
+                try:
+                    row=json.loads(line)
+                except ValueError:
+                    invalid_json+=1
+                    continue
+                if row.get('schema')!='polymarket_v7_native_observation_v1':
+                    continue
+                kind=row.get('kind')
+                if kind not in (2,6):
+                    continue
+                if wall_ns(row)<cutoff_ns:
+                    continue
+                recent_rows+=1
+                kind_counts[str(kind)]+=1
+                pair_by_kind[str(kind)][pair_state(row)]+=1
+                if kind==2:
+                    complete=bool(str(row.get('yes_token_id') or '')) and bool(str(row.get('no_token_id') or ''))
+                    token_identity['COMPLETE' if complete else 'MISSING']+=1
+    except (OSError,EOFError):
+        truncated=True
+
+print('V7_SSM_CAPTURE='+json.dumps({
+  'window_seconds':900,
+  'candidate_files':len(candidates),
+  'scanned_files':len(selected),
+  'scanned_bytes':selected_bytes,
+  'scan_truncated':truncated,
+  'invalid_json_rows':invalid_json,
+  'recent_native_rows':recent_rows,
+  'recent_kind_counts':dict(kind_counts),
+  'pair_state_by_kind':{key:dict(value) for key,value in pair_by_kind.items()},
+  'decision_token_identity':dict(token_identity),
+  'runtime_capture_mode':status.get('native_capture_mode'),
+  'native_observations_published':int(status.get('native_observations_published') or 0),
+  'native_observations_written':int(status.get('native_observations_written') or 0),
+  'native_observations_dropped':int(status.get('native_observations_dropped') or 0),
+  'native_observations_queue_depth':int(status.get('native_observations_queue_depth') or 0),
+},sort_keys=True,separators=(',',':')))
+PY
+
 echo "health_probe=metrics"
 metrics="$(curl -fsS http://127.0.0.1:9108/metrics)"
 for expected in   'polymarket_v7_execution_alive 1'   'polymarket_v7_single_writer_ok 1'   'polymarket_v7_exact_sha_ok 1'   'polymarket_v7_paper_only_contract_ok 1'   'polymarket_v7_authenticated_execution_disabled 1'   'polymarket_v7_live_algorithm_count 1'   'polymarket_v7_native_engine_mode 1'   'polymarket_v7_economic_new_risk_ready 0'; do
@@ -124,6 +241,8 @@ def health(region: str, stack_name: str, expected_sha: str,
     selected = select_target(probes, expected_tailscale_ip, expected_instance_id)
     stdout, stderr = run(region, selected["instance_id"], health_command(expected_sha), 180)
     runtime = parse_marker(stdout, "V7_SSM_HEALTH=")
+    capture = parse_marker(stdout, "V7_SSM_CAPTURE=")
+    runtime["bilateral_capture"] = capture
     if runtime.get("sha") != expected_sha or runtime.get("core_runtime_healthy") is not True:
         raise SsmDeployError("London health receipt mismatch")
     return {
