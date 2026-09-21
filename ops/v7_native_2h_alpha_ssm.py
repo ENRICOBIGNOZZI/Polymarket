@@ -73,24 +73,64 @@ def main():
     if a.minimum_wall_ns<=0:p.error("positive minimum wall required")
 
     repo=Path(__file__).resolve().parents[1]
-    run_root="/mnt/polymarket-data/paper_v7_london"
     remote="/tmp/polymarket-native-alpha-2h-"+a.source_sha[:12]
     upload(a.instance_id,remote,archive(repo))
     command=f"""set -euo pipefail
 cd {remote}
 rm -rf src output results.tgz
 mkdir -p src output
-python3 - {run_root} <<'PY'
+RUN_ROOT="$(python3 - <<'PY'
+import json,time
+from pathlib import Path
+
+patterns=(
+    "/mnt/polymarket-data/*/control/runtime_status.json",
+    "/home/*/polymarket-runs/*/control/runtime_status.json",
+)
+candidates=[]
+seen=set()
+for pattern in patterns:
+    for status_path in Path("/").glob(pattern.lstrip("/")):
+        try:
+            root=status_path.parent.parent.resolve()
+            if str(root) in seen:
+                continue
+            seen.add(str(root))
+            state=json.loads(status_path.read_text())
+        except Exception:
+            continue
+        if not (
+            state.get("state")=="running"
+            and state.get("paper_only") is True
+            and state.get("authenticated_execution") is False
+            and state.get("real_order_submission") is False
+        ):
+            continue
+        timestamp=int(state.get("timestamp") or 0)
+        candidates.append((timestamp,status_path.stat().st_mtime_ns,str(root),state.get("model_sha")))
+
+if not candidates:
+    raise SystemExit("NO_RUNNING_PAPER_RUN_ROOT")
+candidates.sort(reverse=True)
+best=candidates[0]
+# Fail closed if two distinct roots report equally fresh active state.
+if len(candidates)>1 and candidates[1][:2]==best[:2] and candidates[1][2]!=best[2]:
+    raise SystemExit("AMBIGUOUS_RUNNING_PAPER_RUN_ROOT")
+print(best[2])
+PY
+)"
+test -n "$RUN_ROOT"
+python3 - "$RUN_ROOT" <<'PY'
 import json,sys
 from pathlib import Path
 root=Path(sys.argv[1]).resolve()
-assert root==Path('/mnt/polymarket-data/paper_v7_london')
-assert root.is_dir()
-state=json.loads((root/'control/runtime_status.json').read_text())
-assert state.get('paper_only') is True
-assert state.get('authenticated_execution') is False
-assert state.get('real_order_submission') is False
-print('NATIVE_ALPHA_CONTEXT_DIRECT='+str(root))
+status=root/"control/runtime_status.json"
+state=json.loads(status.read_text())
+assert state.get("state")=="running"
+assert state.get("paper_only") is True
+assert state.get("authenticated_execution") is False
+assert state.get("real_order_submission") is False
+print("NATIVE_ALPHA_CONTEXT_FS="+str(root))
 PY
 tar -xzf source.tgz -C src
 python3 -m venv venv
@@ -98,7 +138,7 @@ venv/bin/pip install --disable-pip-version-check --quiet -r src/research/require
 POLYMARKET_RESEARCH_HORIZONS_MS=5,10,25,50,100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000 \
 POLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS=5,10,25,50,100,250 \
 PYTHONPATH={remote}/src nice -n 18 venv/bin/python -m research.walk_forward_v3.native_2h_alpha_library \
-  --root {run_root} \
+  --root "$RUN_ROOT" \
   --output-dir {remote}/output \
   --minimum-wall-ns {a.minimum_wall_ns} \
   --skip-figures
