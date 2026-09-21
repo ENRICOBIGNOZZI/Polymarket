@@ -354,7 +354,35 @@ void test_capital_based_notional_sizing_tracks_price_and_depth() {
     assert(rejected.reason == NativeCryptoDecisionReason::InsufficientDepth);
 }
 
+void test_capital_target_can_clip_to_visible_depth_when_explicitly_enabled() {
+    NativeCryptoDecisionPolicy policy;
+    policy.target_notional_microdollars = 83'333'333;
+    policy.target_quantity_microunits = 5'000'000;
+    policy.maximum_entry_price_e4 = 8'000;
+    policy.clip_capital_target_to_visible_depth = 1;
+    NativeCryptoDecisionLane lane(policy);
+    CapitalLimits larger{500'000'000, 500'000'000, 333'333'333, 100'000'000};
+    SleeveCapitalAccount capital(larger);
+
+    auto thin = input(1, 130);
+    thin.yes_book = book(4'000, 100'000'000); // $40 visible vs ~$83 desired.
+    const auto clipped = lane.evaluate(thin, capital);
+    assert(clipped.accepted == 1);
+    assert(clipped.reason == NativeCryptoDecisionReason::Accepted);
+    assert(clipped.intent.quantity_microunits == 100'000'000);
+    assert(clipped.admission.reserved_microdollars == 40'000'000);
+    assert(capital.release_order(clipped.intent.intent_id));
+
+    lane.reset_market(7);
+    auto below_minimum = input(1, 131);
+    below_minimum.yes_book = book(4'000, 4'000'000);
+    const auto rejected = lane.evaluate(below_minimum, capital);
+    assert(rejected.accepted == 0);
+    assert(rejected.reason == NativeCryptoDecisionReason::InsufficientDepth);
+}
+
 int main() {
+    test_capital_target_can_clip_to_visible_depth_when_explicitly_enabled();
     test_capital_based_notional_sizing_tracks_price_and_depth();
     test_required_slow_context_is_action_local_and_never_waits();
     test_strict_lead_lag_requires_pm_book_to_precede_signal();
