@@ -426,13 +426,17 @@ def alpha_library(th):
 
 def evaluate_alpha(rows,rule,economics_cache):
     cells={};events={}
+    selected_side={
+        str(row["decision_id"]):rule(row)
+        for row in rows
+    }
     for latency in LATENCIES:
         for horizon in EXITS:
             key=f"{latency}::{horizon}"
             selected=observed=fills=0
             censored=Counter();seq=[]
             for row in rows:
-                side=rule(row)
+                side=selected_side[str(row["decision_id"])]
                 if side is None:
                     continue
                 selected+=1
