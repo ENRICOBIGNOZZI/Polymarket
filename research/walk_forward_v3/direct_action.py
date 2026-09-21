@@ -3146,12 +3146,23 @@ def summarize_direct_action(outcomes):
             for cell in (by_asset[asset], by_side[side], by_horizon[horizon]):
                 cell["observed"] += 1
                 cell["pnl"] += value
+    no_trades = [row for row in outcomes if row.get("action") != "TRADE"]
+    no_trade_reasons = Counter(
+        str(row.get("reason") or "UNKNOWN") for row in no_trades)
+    sizing_modes = Counter(
+        str(row.get("sizing_mode") or "BASELINE_DIRECT_Q") for row in trades)
+    entry_policies = Counter(
+        str(row.get("entry_policy") or "UNSPECIFIED") for row in outcomes)
     return {
         "schema": SCHEMA + "_summary_v2",
         **SAFETY,
         "opportunities": len(outcomes),
         "selected_trades": len(trades),
+        "trade_rate": len(trades) / len(outcomes) if outcomes else None,
         "no_trade": len(outcomes) - len(trades),
+        "no_trade_reasons": dict(sorted(no_trade_reasons.items())),
+        "sizing_mode_counts": dict(sorted(sizing_modes.items())),
+        "entry_policy_counts": dict(sorted(entry_policies.items())),
         "observed_selected_trades": len(observed),
         "censored_selected_trades": len(trades) - len(observed),
         "positive_observed_trades": sum(value > 0 for value in pnl),
@@ -3180,6 +3191,24 @@ def summarize_direct_action(outcomes):
             row.get("size") for row in trades),
         "selected_notional_distribution": numeric_distribution(
             row.get("notional") for row in trades),
+        "selected_calibration_multiplier_distribution": numeric_distribution(
+            row.get("calibration_multiplier_used") for row in trades),
+        "selected_admission_edge_per_dollar_distribution": numeric_distribution(
+            row.get("admission_edge_per_dollar") for row in trades),
+        "selected_context_capital_fraction_distribution": numeric_distribution(
+            row.get("context_capital_fraction") for row in trades),
+        "desired_notional_before_constraints_distribution": numeric_distribution(
+            row.get("desired_notional_before_constraints") for row in trades),
+        "desired_notional_after_constraints_distribution": numeric_distribution(
+            row.get("desired_notional_after_constraints") for row in trades),
+        "capital_utilization_before_selected_distribution": numeric_distribution(
+            row.get("capital_utilization_before") for row in trades),
+        "available_capital_before_selected_distribution": numeric_distribution(
+            row.get("available_capital_before") for row in trades),
+        "unused_available_capital_after_selected_distribution": numeric_distribution(
+            (float(row.get("available_capital_before")) - float(row.get("notional")))
+            for row in trades
+            if finite(row.get("available_capital_before")) and finite(row.get("notional"))),
         "observed_pnl_distribution": numeric_distribution(pnl),
         "policy_regret_diagnostic": summarize_policy_regret(outcomes),
         "max_active_positions": max(
@@ -3232,6 +3261,8 @@ def merge_direct_action_summaries(summaries):
     result["mean_observed_net_pnl"] = pnl_total / observed if observed else None
 
     selected = result["selected_trades"]
+    opportunities = result["opportunities"]
+    result["trade_rate"] = selected / opportunities if opportunities else None
     utility_total = sum(
         float(summary.get("mean_predicted_policy_utility") or 0.0)
         * int(summary.get("selected_trades") or 0)
