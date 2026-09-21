@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           instance="$(python3 -c 'import json;print(json.load(open("deploy/v7-stop-obsolete-research.json"))["instance_id"])')"
-          aws ssm list-commands --instance-id "$instance" --output json >/tmp/commands.json
+          aws ssm list-commands --instance-id "$instance" --max-results 50 --no-paginate --output json >/tmp/commands.json
           python3 - "$instance" <<'PY'
           import json,subprocess,sys
           instance=sys.argv[1]
@@ -56,6 +56,6 @@ jobs:
           print("CANCELLED_OBSOLETE_SSM="+json.dumps(cancelled))
           PY
           sleep 3
-          aws ssm list-commands --instance-id "$instance" \
+          aws ssm list-commands --instance-id "$instance" --max-results 50 --no-paginate \
             --query 'Commands[?Status==`InProgress` || Status==`Pending`].[CommandId,Status,RequestedDateTime,Parameters]' \
             --output json
