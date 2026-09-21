@@ -141,3 +141,5 @@ def test_combined_policy_uses_settlement_value_but_requires_positive_repricing()
     combined_positive = replay_one(copy.deepcopy(row), .90, .01, latency_ms=100,
                                    valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION")
     assert combined_positive["filled"] > 0
+
+# End HISTORICAL_WALK_FORWARD_V2 regression gate.
