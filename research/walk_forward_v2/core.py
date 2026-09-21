@@ -1158,7 +1158,7 @@ def live_parity_policy_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
         "live_policy_reference": {
             "minimum_tte_ns": 105_000_000_000,
             "maximum_tte_ns": 120_000_000_000,
-            "maximum_entry_price": .80,
+            "maximum_entry_price": .75,
             "target_shares": shares,
             "require_full_visible_depth": True,
         },
@@ -1202,7 +1202,7 @@ def live_parity_policy_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                 research_tte = 30_000_000_000 <= tte <= 120_000_000_000
                 live_tte = 105_000_000_000 <= tte <= 120_000_000_000
                 research_cap = row["ask"] <= .75
-                live_cap = row["ask"] <= .80
+                live_cap = row["ask"] <= .75
                 research_depth = min(shares, row["quantity"]) >= row["minimum"]
                 live_depth = row["quantity"] + 1e-12 >= shares and row["minimum"] <= shares + 1e-12
                 cell["research_tte"] += int(research_tte)
