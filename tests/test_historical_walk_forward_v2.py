@@ -9,6 +9,7 @@ from research.walk_forward_v2.core import (
     build_dataset,
     folds,
     replay_one,
+    replay_policy,
     valid_native,
 )
 
@@ -169,3 +170,46 @@ def test_book_targets_cache_sorted_timeline_times_for_replay():
     book_targets([row], books)
     assert row["timeline_times"] == sorted(row["timeline_times"])
     assert row["timeline_times"] == [entry["time_ns"] for entry in row["timeline"]]
+
+
+def test_replay_policy_enforces_one_entry_per_market_and_reserves_capital():
+    first = record("same", decision_ns=1_789_921_800_000_000_001)
+    second = record("same", decision_ns=first["decision_ns"] + 1_000_000_000)
+    for row in (first, second):
+        row["timeline"] = [book(row, row["decision_ns"] + 100_000_000, ask=.50)]
+        row["timeline_times"] = [row["timeline"][0]["time_ns"]]
+    evaluations = []
+    for index, row in enumerate((first, second)):
+        evaluations.append({
+            "decision_ns": row["decision_ns"], "decision_id": row["decision_id"],
+            "row": row, "settlement_predictions": {"pm": .90},
+            "repricing_predictions": {"250": .01},
+        })
+    outcomes = replay_policy(
+        evaluations, lambda event: (event["settlement_predictions"]["pm"],
+                                    event["repricing_predictions"]["250"]),
+        latency_ms=100, valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION")
+    assert outcomes[0]["funnel"]["simulated_order"] is True
+    assert outcomes[1]["status"] == "FILTERED_MARKET_ALREADY_TRADED"
+    assert outcomes[1]["funnel"]["simulated_order"] is False
+
+
+def test_replay_policy_stops_new_orders_after_capital_ceiling():
+    evaluations = []
+    base = 1_789_921_800_000_000_001
+    for index in range(3):
+        row = record("m" + str(index), decision_ns=base + index * 1_000_000_000)
+        row["timeline"] = [book(row, row["decision_ns"] + 100_000_000, ask=.50)]
+        row["timeline_times"] = [row["timeline"][0]["time_ns"]]
+        evaluations.append({
+            "decision_ns": row["decision_ns"], "decision_id": row["decision_id"],
+            "row": row, "settlement_predictions": {"pm": .90},
+            "repricing_predictions": {"250": .01},
+        })
+    outcomes = replay_policy(
+        evaluations, lambda event: (event["settlement_predictions"]["pm"],
+                                    event["repricing_predictions"]["250"]),
+        latency_ms=100, valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION",
+        capital_budget=7.5)
+    assert sum(row["funnel"]["simulated_order"] for row in outcomes) == 2
+    assert outcomes[2]["funnel"]["capital_admitted"] is False
