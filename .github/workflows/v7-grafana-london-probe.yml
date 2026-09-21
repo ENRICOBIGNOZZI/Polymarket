@@ -78,6 +78,20 @@ jobs:
                   print('DASHBOARD_ROWS='+json.dumps(rows))
               if table=='folder':
                   print('FOLDER_SAMPLE='+json.dumps(con.execute('select * from folder limit 10').fetchall()))
+          echo '=== UNIFIED RESOURCE ==='
+          if 'resource' in tables:
+              cols=[r[1] for r in con.execute('pragma table_info(resource)')]
+              print('RESOURCE_COLS='+json.dumps(cols))
+              rows=con.execute('select * from resource').fetchall()
+              hits=[]
+              for row in rows:
+                  rendered=' | '.join('' if x is None else str(x) for x in row)
+                  if ('polymarket-v7-pure-arb' in rendered
+                          or 'afyms0c1xjabkf' in rendered
+                          or 'Polymarket London' in rendered
+                          or 'Pure Arbitrage' in rendered):
+                      hits.append(row)
+              print('RESOURCE_HITS='+json.dumps(hits,default=str))
           con.close()
           PY
           echo '=== JOURNAL ==='
