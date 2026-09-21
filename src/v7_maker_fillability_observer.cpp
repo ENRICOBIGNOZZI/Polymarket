@@ -563,6 +563,7 @@ public:
         session_id_ = std::to_string(wall_ms()) + "-" + std::to_string(::getpid());
         if (!compact_label_tape_dir_.empty()) initialize_compact_label_tape();
         if (pure_arb_paper_) {
+            restore_pure_arb_status();
             pure_arb_output_.open(pure_arb_trades_path_, std::ios::app);
             if (!pure_arb_output_) throw std::runtime_error("cannot open pure arb PAPER evidence file");
         }
@@ -725,6 +726,74 @@ public:
             return std::numeric_limits<double>::quiet_NaN();
         }
         return rate == 0.0 ? 0.0 : rate * std::pow(price * (1.0 - price), exponent);
+    }
+
+    void restore_pure_arb_status() {
+        if (!pure_arb_paper_ || !fs::exists(pure_arb_status_path_)) return;
+        try {
+            const auto value = read_json(pure_arb_status_path_);
+            if (!value.is_object()) return;
+            const auto& root = value.as_object();
+            if (text(find_value(root, "schema")) != "polymarket_v7_pure_arb_paper_status_v1"
+                || text(find_value(root, "model_sha")) != model_sha_
+                || !boolean(find_value(root, "paper_only"), false)
+                || boolean(find_value(root, "authenticated_execution"), true)
+                || boolean(find_value(root, "real_order_submission"), true)) return;
+
+            pure_arb_total_cycles_ = static_cast<std::uint64_t>(
+                std::max<std::int64_t>(0, integer64(find_value(root, "cycles_total"))));
+            pure_arb_total_pnl_ = number64(find_value(root, "paper_locked_pnl_pre_gas_total"), 0.0);
+            pure_arb_evaluations_ = static_cast<std::uint64_t>(
+                std::max<std::int64_t>(0, integer64(find_value(root, "evaluations"))));
+            pure_arb_fee_blocked_evaluations_ = static_cast<std::uint64_t>(
+                std::max<std::int64_t>(0, integer64(find_value(root, "fee_blocked_evaluations"))));
+            pure_arb_max_decision_compute_ns_ = std::max<std::int64_t>(
+                0, integer64(find_value(root, "max_decision_compute_ns")));
+            pure_arb_max_receive_to_decision_ns_ = std::max<std::int64_t>(
+                0, integer64(find_value(root, "max_receive_to_decision_ns")));
+
+            const auto* contexts = find_value(root, "contexts");
+            if (contexts == nullptr || !contexts->is_array()) return;
+            for (const auto& item : contexts->as_array()) {
+                if (!item.is_object()) continue;
+                const auto& prior = item.as_object();
+                const auto asset = text(find_value(prior, "asset"));
+                const auto horizon = text(find_value(prior, "horizon"));
+                const auto prior_market_id = text(find_value(prior, "market_id"));
+                auto it = std::find_if(pure_arb_markets_.begin(), pure_arb_markets_.end(),
+                    [&](const PureArbMarketState& market) {
+                        return market.asset == asset && market.horizon == horizon;
+                    });
+                if (it == pure_arb_markets_.end()) continue;
+                auto restore_direction = [&](std::string_view key,
+                                             PureArbDirectionState& direction) {
+                    const auto* raw = find_value(prior, key);
+                    if (raw == nullptr || !raw->is_object()) return;
+                    const auto& row = raw->as_object();
+                    direction.cycles = static_cast<std::uint64_t>(
+                        std::max<std::int64_t>(0, integer64(find_value(row, "cycles"))));
+                    direction.paper_locked_pnl = number64(
+                        find_value(row, "paper_locked_pnl_pre_gas"), 0.0);
+                    direction.max_edge_per_share = number64(
+                        find_value(row, "max_edge_per_share"), 0.0);
+                    direction.last_edge_per_share = number64(
+                        find_value(row, "last_edge_per_share"), 0.0);
+                    direction.last_executable_shares = number64(
+                        find_value(row, "last_executable_shares_l1"), 0.0);
+                    direction.last_locked_pnl = number64(
+                        find_value(row, "last_locked_pnl_pre_gas"), 0.0);
+                    direction.last_detect_wall_ms = integer64(
+                        find_value(row, "last_detect_wall_ms"));
+                    direction.active = prior_market_id == it->market_id
+                        && boolean(find_value(row, "active"), false);
+                };
+                restore_direction("buy_complete_set", it->buy);
+                restore_direction("sell_complete_set", it->sell);
+            }
+        } catch (const std::exception&) {
+            // Non-authoritative PAPER telemetry only. Corrupt/stale state
+            // starts a fresh generation and never affects the market stream.
+        }
     }
 
     void refresh_pure_arb_metadata(const fs::path& selection) {
