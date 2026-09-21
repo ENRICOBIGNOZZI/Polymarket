@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_btc_equity_only_request_v1",
   "version": 1,
-  "request_id": "btc-equity-only-retry-20260921",
+  "request_id": "btc-equity-only-retry2-20260921",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "9b71ac4c86daa9dd8bbd214b730c10fe34998a94",
+  "expected_research_sha": "e5935be149c8898e6f6302bb3b630b2b6c0b711d",
   "minimum_wall_ns": 1790007780000000000,
   "output_directory": "docs/research/btc-equity-only-2026-09-21",
   "paper_only": true,
