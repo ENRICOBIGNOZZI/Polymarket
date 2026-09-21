@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 2
 
       - name: Validate zero-authority shadow request
@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
           test "$changed" = "$REQUEST"
-          parent="\${{ github.event.before }}"
+          parent="${{ github.event.before }}"
           python3 - "$REQUEST" "$parent" "$GITHUB_OUTPUT" <<'PY'
           import json,re,sys
           from pathlib import Path
@@ -70,14 +70,14 @@ jobs:
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
-          role-to-assume: \${{ env.ROLE_ARN }}
+          role-to-assume: ${{ env.ROLE_ARN }}
           role-session-name: polymarket-markout-shadow
           aws-region: eu-west-2
 
       - name: Install and start forward shadow via SSM
         shell: bash
         env:
-          SOURCE_SHA: \${{ steps.request.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
         run: |
           set -euo pipefail
           python3 ops/v7_executable_markout_shadow_ssm.py \
@@ -103,7 +103,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: v7-markout-shadow-\${{ github.run_id }}
+          name: v7-markout-shadow-${{ github.run_id }}
           path: shadow-deploy-receipt.json
           if-no-files-found: warn
           retention-days: 14
