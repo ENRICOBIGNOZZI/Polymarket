@@ -98,6 +98,7 @@ def public_economics(economics):
         "promotion_reference_latency_ms": economics.get("promotion_reference_latency_ms"),
         "live_policy_promotion_candidates": economics.get("live_policy_promotion_candidates", {}),
         "latency_reference_horizon_ms": economics.get("latency_reference_horizon_ms"),
+        "capital_based_sizing_sensitivity": economics.get("capital_based_sizing_sensitivity", {}),
         "idealized_upper_bounds": economics.get("idealized_upper_bounds", {}),
     }
 
