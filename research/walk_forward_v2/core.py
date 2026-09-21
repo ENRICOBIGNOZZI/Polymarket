@@ -1552,7 +1552,7 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         return outcome
     funnel["simulated_order"] = True
     outcome["requested"] = requested
-    outcome["reserved_cost"] = min(3.75, requested * entry_cap)
+    outcome["reserved_cost"] = requested * entry_cap
     if ideal == "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND":
         book = {"ask": row["ask"], "bid": row["bid"], "quantity": requested, "time_ns": row["decision_ns"]}
     else:
@@ -1619,7 +1619,7 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
         row = event["row"]
         prediction, repricing = selector(event)
         available = row["market_id"] not in used_markets
-        capital_available = reserved + min(3.75, shares * entry_cap) <= capital_budget + 1e-12
+        capital_available = reserved + shares * entry_cap <= capital_budget + 1e-12
         outcome = replay_one(
             row, prediction, repricing, latency_ms=latency_ms,
             edge_threshold=edge_threshold, entry_cap=entry_cap, shares=shares,
