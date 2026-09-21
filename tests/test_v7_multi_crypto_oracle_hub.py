@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from v7_multi_crypto_oracle_hub import (  # noqa: E402
     ASSETS, apply_observation, bindings_from_registry, empty_state, snapshot,
-    load_contract_selection, update_references,
+    load_contract_selection, update_outcomes, update_references,
 )
 
 
@@ -182,6 +182,70 @@ def test_exact_boundary_reference_requires_causal_receive_provenance() -> None:
         update_references([contract], history, refs, now_ms=10_002, maximum_gap_ms=2000)
         assert refs["market"]["valid"] is False
         assert refs["market"]["status"] == "MISSING_OR_FUTURE_RECEIVE_PROVENANCE"
+
+
+
+def test_exact_end_boundary_determines_settlement_outcome() -> None:
+    contract = {"asset": "BTC", "horizon": "M5", "market_id": "m",
+                "start_timestamp_ms": 10_000, "end_timestamp_ms": 310_000,
+                "normalized_rules_hash": "f" * 64}
+    history = {asset: {} for asset in ASSETS}
+    history["BTC"][10_000] = {
+        "price": 100.0, "price_decimal": "100.000000000000000000",
+        "available_wall_ns": 10_001_000_000,
+    }
+    history["BTC"][310_000] = {
+        "price": 101.0, "price_decimal": "101.000000000000000000",
+        "available_wall_ns": 310_001_000_000,
+    }
+    refs = {}
+    update_references([contract], history, refs, now_ms=310_002, maximum_gap_ms=2000)
+    outcomes = {}
+    update_outcomes([contract], history, refs, outcomes, now_ms=310_002)
+    out = outcomes["m"]
+    assert out["valid"] is True
+    assert out["winning_outcome"] == "YES"
+    assert out["status"] == "OUTCOME_DETERMINED_EXACT_SETTLEMENT_SOURCE"
+    assert out["final_source_timestamp_ms"] == 310_000
+
+
+def test_settlement_outcome_never_uses_nearby_proxy() -> None:
+    contract = {"asset": "BTC", "horizon": "M5", "market_id": "m",
+                "start_timestamp_ms": 10_000, "end_timestamp_ms": 310_000,
+                "normalized_rules_hash": "f" * 64}
+    history = {asset: {} for asset in ASSETS}
+    history["BTC"][10_000] = {
+        "price": 100.0, "price_decimal": "100",
+        "available_wall_ns": 10_001_000_000,
+    }
+    history["BTC"][309_999] = {
+        "price": 200.0, "price_decimal": "200",
+        "available_wall_ns": 310_001_000_000,
+    }
+    refs = {}
+    update_references([contract], history, refs, now_ms=310_002, maximum_gap_ms=2000)
+    outcomes = {}
+    update_outcomes([contract], history, refs, outcomes, now_ms=310_002)
+    assert outcomes["m"]["valid"] is False
+    assert outcomes["m"]["status"] == "MISSING_EXACT_FINAL_OBSERVATION"
+
+
+def test_equal_final_price_is_yes() -> None:
+    contract = {"asset": "ETH", "horizon": "M15", "market_id": "m",
+                "start_timestamp_ms": 10_000, "end_timestamp_ms": 910_000,
+                "normalized_rules_hash": "e" * 64}
+    history = {asset: {} for asset in ASSETS}
+    for ts in (10_000, 910_000):
+        history["ETH"][ts] = {
+            "price": 2500.0, "price_decimal": "2500.000000000000000000",
+            "available_wall_ns": (ts + 1) * 1_000_000,
+        }
+    refs = {}
+    update_references([contract], history, refs, now_ms=910_002, maximum_gap_ms=2000)
+    outcomes = {}
+    update_outcomes([contract], history, refs, outcomes, now_ms=910_002)
+    assert outcomes["m"]["valid"] is True
+    assert outcomes["m"]["winning_outcome"] == "YES"
 
 if __name__ == "__main__":
     tests = sorted((name, fn) for name, fn in globals().items()
