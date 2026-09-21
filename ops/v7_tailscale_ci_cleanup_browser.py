@@ -271,6 +271,7 @@ def remove_one(page, name: str) -> None:
     page.wait_for_timeout(600)
 
 def main() -> int:
+    print("cleanup_stage=main_start", flush=True)
     p = argparse.ArgumentParser()
     p.add_argument("--credentials", type=Path, required=True)
     p.add_argument("--repository", required=True)
@@ -293,20 +294,26 @@ def main() -> int:
     if not 1 <= maximum <= 100:
         p.error("maximum_deletions")
     protected = protected_run_ids(a.repository, a.github_token)
+    print("cleanup_stage=protected_runs_ok", flush=True)
 
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:
         raise SystemExit(f"playwright_import_failed:{type(exc).__name__}")
+    print("cleanup_stage=playwright_import_ok", flush=True)
     chrome = a.chrome or shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
     if not chrome:
         raise SystemExit("chrome_not_found")
 
     removed: list[str] = []
     candidates: list[str] = []
+    print("cleanup_stage=browser_setup", flush=True)
     with sync_playwright() as pw:
+        print("cleanup_stage=playwright_started", flush=True)
         if a.cdp_url:
+            print("cleanup_stage=connect_cdp_begin", flush=True)
             browser = pw.chromium.connect_over_cdp(a.cdp_url)
+            print("cleanup_stage=connect_cdp_ok", flush=True)
             context = browser.contexts[0] if browser.contexts else browser.new_context()
             pages = context.pages
             page = pages[0] if pages else context.new_page()
@@ -317,8 +324,11 @@ def main() -> int:
             )
             context = browser.new_context()
             page = context.new_page()
+        print("cleanup_stage=login_begin", flush=True)
         login(page, value["email"], value["password"])
+        print("cleanup_stage=login_ok", flush=True)
         candidates = candidate_names(page)
+        print(f"cleanup_stage=candidates count={len(candidates)}", flush=True)
         for name in candidates:
             match = GH_NAME_RE.fullmatch(name)
             if match is not None and int(match.group(2)) in protected:
