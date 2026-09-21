@@ -309,6 +309,7 @@ v7_register_child "$!"
 # the hot CPU set and have no execution/capital/ledger authority.
 
 
+# Grafana reads only zero-authority pure-arb status emitted by this observer; it never controls execution.
 # Pure complete-set PAPER arbitrage is evaluated inside this same observer
 # on every drained WS book event: no second feed, no ML, no artificial hold/delay.
 # Continuous receive-time PM book evidence for every currently traded
