@@ -1,0 +1,128 @@
+name: V7 fast two-hour backtest diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-fast-backtest-request.json
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-fast-two-hour-backtest-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate frozen two-hour research request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-fast-backtest-request.json
+          python3 - "$request" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v['schema']=='polymarket_v7_decomposed_benchmark_ssm_request_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',v['instance_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['expected_research_sha'])
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['real_capital_at_risk'] is False
+          assert v['automatic_promotion'] is False
+          assert v['folds']==2
+          assert v['latency_ms']==50
+          assert float(v['capital_budget'])==10000.0
+          assert v['minimum_wall_ns']==1790007780000000000
+          assert v['output_directory']=='docs/research/decomposed-horse-race-fast-2026-09-21'
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          expected="$(python3 -c 'import json; print(json.load(open("'"$request"'"))["expected_research_sha"])')"
+          parent="$(git rev-parse HEAD^1)"
+          test "$expected" = "$parent"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-fast-backtest
+          aws-region: eu-west-2
+
+      - name: Run fast A0 A1 A2 plus frequency frontier
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          python3 ops/v7_decomposed_benchmark_ssm.py "$REQUEST"
+
+      - name: Print key economics
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          req=json.load(open(sys.argv[1]))
+          path=Path(req['output_directory'])/'horse_race.json'
+          v=json.load(open(path))
+          assert v['state']=='READY'
+          assert v['automatic_promotion'] is False
+          out={}
+          for name,p in v['policies'].items():
+              x=p['aggregate_oos']
+              out[name]={k:x.get(k) for k in (
+                  'opportunities','selected_trades','selected_trades_per_day',
+                  'fill_count','total_observed_net_pnl','net_pnl_per_day',
+                  'net_pnl_per_dollar_turnover','prediction_realized_correlation',
+                  'prediction_mean_absolute_error','max_drawdown','cvar95',
+                  'turnover_notional','mean_selected_notional','max_selected_notional'
+              )}
+          out['frequency_frontier']=v.get('frequency_frontier')
+          print(json.dumps(out,sort_keys=True))
+          PY
+
+      - name: Publish fast diagnostic
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish fast two-hour backtest diagnostic"
+          if ! git push origin HEAD:main; then
+            git fetch origin main
+            git rebase origin/main
+            git push origin HEAD:main
+          fi
+
+      - name: Upload diagnostic evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-fast-backtest-${{ github.run_id }}
+          path: docs/research/decomposed-horse-race-fast-2026-09-21/horse_race.json
+          retention-days: 30
