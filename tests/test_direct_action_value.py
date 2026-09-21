@@ -11,6 +11,7 @@ from research.walk_forward_v3.risk_frontier import (
     pareto_frontier,
     scenario_risk_metrics,
     select_policy_under_risk_budget,
+    nested_walk_forward_risk_frontier,
 )
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
@@ -740,3 +741,63 @@ def test_risk_budget_selection_requires_explicit_budget_and_uses_validation_only
         frontier, max_cvar95=1.0, max_drawdown=1.0)
     assert impossible["state"] == "NO_POLICY_MEETS_VALIDATION_RISK_BUDGET"
     assert impossible["policy_id"] is None
+
+
+
+def test_nested_risk_frontier_never_uses_outer_oos_to_choose_policy():
+    rows = []
+    for index in range(120):
+        positive = index % 3 != 0
+        item = row(
+            "m" + str(index + 2000),
+            signal=2.0 if positive else -2.0,
+            exit_bid=.56 if positive else .44,
+            depth=20.0,
+        )
+        item["information_end_ns"] = item["decision_ns"]
+        item["label"] = None
+        item["label_information_ns"] = None
+        rows.append(item)
+
+    grid = [
+        {
+            "policy_id": "baseline",
+            "friction_policy": FrictionPolicy(
+                uncertainty_aversion=1.0,
+                asset_concentration_lambda=0.0,
+                common_factor_concentration_lambda=0.0,
+            ),
+        },
+        {
+            "policy_id": "conservative",
+            "friction_policy": FrictionPolicy(
+                uncertainty_aversion=2.0,
+                asset_concentration_lambda=.01,
+                common_factor_concentration_lambda=.01,
+            ),
+        },
+    ]
+    result = nested_walk_forward_risk_frontier(
+        rows,
+        desired_folds=2,
+        inner_desired_folds=2,
+        policy_grid=grid,
+        latency_ms=50,
+        capital_budget=1000.0,
+        model_kwargs={
+            "size_grid": (1.0, 5.0),
+            "action_horizons_ms": (500,),
+            "train_latencies_ms": (50,),
+            "streaming_batch_size": 32,
+        },
+    )
+    assert result["state"] == "READY"
+    assert result["selection_semantics"] == (
+        "INNER_VALIDATION_ONLY_OUTER_OOS_NEVER_USED_TO_CHOOSE_RISK_POLICY")
+    assert result["folds"]
+    for fold in result["folds"]:
+        selection = fold["selection"]
+        if selection["state"] == "NO_RISK_BUDGET_NO_AUTOMATIC_SELECTION":
+            assert selection["policy_id"] is None
+            assert selection["qualification"] == (
+                "VALIDATION_PARETO_SET_NO_SINGLE_SELECTION")
