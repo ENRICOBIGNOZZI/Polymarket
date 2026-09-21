@@ -45,7 +45,11 @@ jobs:
           ps -eo pid,ppid,etime,stat,pcpu,pmem,args --sort=-etime | grep -E "v7_london_stage_release|v7_london_cutover|pmv7-|cmake|ninja|ctest|g\+\+|clang\+\+|verify_v7|polymarket-v7-deploy" | grep -v grep | tail -80 || true
           echo "=== SERVICE ==="
           systemctl is-active polymarket-v7-paper.service || true
-          systemctl show polymarket-v7-paper.service -p ActiveEnterTimestamp -p MainPID -p Environment --no-pager | head -20 || true'
+          systemctl show polymarket-v7-paper.service -p ActiveEnterTimestamp -p ExecMainStatus -p ExecMainCode -p Result -p MainPID -p Environment --no-pager | head -30 || true
+          echo "=== PAPER STATUS ==="
+          systemctl --no-pager --full status polymarket-v7-paper.service || true
+          echo "=== PAPER JOURNAL ==="
+          journalctl -u polymarket-v7-paper.service -n 160 --no-pager || true'
           encoded="$(printf '%s' "$payload" | base64 -w0)"
           wrapped="printf '%s' '$encoded' | base64 -d | bash"
           params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["90"]},separators=(",",":")))' "$wrapped")"
