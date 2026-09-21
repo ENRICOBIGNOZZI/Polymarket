@@ -193,6 +193,16 @@ def test_model_receipt_explicitly_disclaims_mean_covariance_and_l2_impact():
     assert receipt["calibration_state"] == "TEMPORAL_MARKET_BLOCK_SPLIT_CONFORMAL"
     assert receipt["calibration_holdout_excluded_from_mean_fit"] is True
     assert receipt["mean_fit_scope"] == "PRE_CALIBRATION_MARKETS_ONLY"
+    assert receipt["calibration_holdouts_disjoint"] is True
+    assert (
+        receipt["action_calibration_market_count"]
+        + receipt["selection_calibration_market_count"]
+        == receipt["calibration_market_count"]
+    )
+    assert receipt["selection_calibration_state"] in (
+        "TEMPORAL_MARKET_BLOCK_POST_ARGMAX_ONE_SIDED",
+        "INSUFFICIENT_POST_ARGMAX_CALIBRATION",
+    )
 
 
 
@@ -327,6 +337,9 @@ def test_direct_action_uses_all_precalibration_states_with_p_squared_memory():
     assert receipt["training_states_used"] == 96
     assert receipt["training_markets_used"] == 96
     assert receipt["calibration_market_count"] == 24
+    assert receipt["action_calibration_market_count"] == 12
+    assert receipt["selection_calibration_market_count"] == 12
+    assert receipt["calibration_holdouts_disjoint"] is True
     assert receipt["calibration_holdout_excluded_from_mean_fit"] is True
     assert receipt["training_state_cap"] is None
     assert receipt["action_targets"] >= 120
@@ -1073,3 +1086,98 @@ def test_calibration_tail_cannot_change_frozen_mean_model_coefficients():
     for left, right in zip(baseline.mean_model.beta, shocked.mean_model.beta):
         assert math.isclose(
             float(left), float(right), rel_tol=0.0, abs_tol=1e-12)
+
+
+
+def test_post_argmax_calibration_is_one_sided_and_can_flip_trade_to_no_trade():
+    import numpy as np
+
+    rows = [
+        row(
+            "m" + str(index + 6000),
+            signal=2.0,
+            exit_bid=.40,
+            depth=20.0,
+        )
+        for index in range(24)
+    ]
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+    )
+    model._configure_levels(rows)
+
+    class OptimisticModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in self.names}
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = 1.0
+            self.beta[1 + self.names.index("action.size")] = .01
+
+        def predict(self, record):
+            value = float(self.beta[0])
+            for index, name in enumerate(self.names):
+                raw = record["features"].get(name)
+                if isinstance(raw, (int, float)) and math.isfinite(raw):
+                    value += float(self.beta[1 + index]) * float(raw)
+                else:
+                    value += float(
+                        self.beta[1 + len(self.names) + index])
+            return value
+
+    model.mean_model = OptimisticModel(model.model_feature_names)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.fitted = True
+
+    result = model._calibrate_selected_policy(
+        rows, {str(item["market_id"]) for item in rows})
+    assert result["state"] == "TEMPORAL_MARKET_BLOCK_POST_ARGMAX_ONE_SIDED"
+    assert result["observed_selected_markets"] >= 10
+    assert result["observed_fraction"] == 1.0
+    assert result["penalty"] > 0
+    assert result["mean_optimism_after_action_conformal"] > 0
+
+    probe = row("m6999", signal=2.0, exit_bid=.40, depth=20.0)
+    before = model.select_action(probe, latency_ms=50)
+    assert before["action"] == "TRADE"
+    model.selection_optimism_penalty = result["penalty"]
+    after = model.select_action(probe, latency_ms=50)
+    assert after["action"] == "NO_TRADE"
+
+
+def test_post_argmax_calibration_holdout_is_disjoint_from_action_conformal():
+    rows = [
+        row(
+            "m" + str(index + 7000),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(100)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        streaming_batch_size=32,
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["training_states_total"] == 100
+    assert receipt["training_states_used"] == 80
+    assert receipt["fit_market_count"] == 60
+    assert receipt["scale_market_count"] == 20
+    assert receipt["calibration_market_count"] == 20
+    assert receipt["action_calibration_market_count"] == 10
+    assert receipt["selection_calibration_market_count"] == 10
+    assert receipt["calibration_holdouts_disjoint"] is True
+    assert receipt["calibration_semantics"] == (
+        "MEAN_FIT_60_20_PRETAIL;"
+        "ACTION_CONFORMAL_FIRST_HALF_OF_FINAL_20;"
+        "POST_ARGMAX_CALIBRATION_SECOND_HALF_OF_FINAL_20"
+    )
