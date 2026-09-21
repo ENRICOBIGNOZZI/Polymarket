@@ -190,9 +190,15 @@ def test_model_receipt_explicitly_disclaims_mean_covariance_and_l2_impact():
     receipt = model.training_receipt
     assert receipt["mean_covariance_estimation"] is False
     assert receipt["capacity_scope"] == "L1_ONLY_NO_COUNTERFACTUAL_IMPACT_BEYOND_VISIBLE_DEPTH"
-    assert receipt["calibration_state"] == "TEMPORAL_MARKET_BLOCK_SPLIT_CONFORMAL"
-    assert receipt["calibration_holdout_excluded_from_mean_fit"] is True
-    assert receipt["mean_fit_scope"] == "PRE_CALIBRATION_MARKETS_ONLY"
+    assert receipt["mean_calibration_market_overlap"] == 0
+    assert receipt["calibration_semantics"] == (
+        "FINAL_MEAN_NEVER_FITS_SELECTION_CALIBRATION_MARKETS;"
+        "CALIBRATION_RUNS_AFTER_CONTINUOUS_SIDE_Q_H_ARGMAX"
+    )
+    assert receipt["calibration_state"] in (
+        "TEMPORAL_MARKET_BLOCK_SELECTED_POLICY_ONE_SIDED",
+        "INSUFFICIENT_SELECTED_POLICY_CALIBRATION",
+    )
 
 
 
@@ -310,7 +316,7 @@ def test_streaming_ridge_matches_materialized_ridge_exactly_on_small_problem():
             rel_tol=1e-9, abs_tol=1e-9)
 
 
-def test_direct_action_uses_all_precalibration_states_with_p_squared_memory():
+def test_direct_action_uses_all_training_states_with_p_squared_memory():
     rows = [
         row("m" + str(index + 700), signal=2.0 if index % 2 == 0 else -2.0,
             exit_bid=.56 if index % 2 == 0 else .44)
@@ -324,10 +330,7 @@ def test_direct_action_uses_all_precalibration_states_with_p_squared_memory():
     ).fit(rows)
     receipt = model.training_receipt
     assert receipt["training_states_total"] == 120
-    assert receipt["training_states_used"] == 96
-    assert receipt["training_markets_used"] == 96
-    assert receipt["calibration_market_count"] == 24
-    assert receipt["calibration_holdout_excluded_from_mean_fit"] is True
+    assert receipt["training_states_used"] == 120
     assert receipt["training_state_cap"] is None
     assert receipt["action_targets"] >= 120
     assert receipt["matrix_strategy"] == (
@@ -1037,39 +1040,90 @@ def test_nested_risk_frontier_skips_inner_blocks_with_zero_executable_actions():
 
 
 
-def test_calibration_tail_cannot_change_frozen_mean_model_coefficients():
+def test_selected_policy_calibration_penalty_is_post_argmax_and_one_sided():
+    import numpy as np
+
     rows = [
         row(
             "m" + str(index + 4000),
+            signal=2.0,
+            exit_bid=.40,
+            depth=20.0,
+        )
+        for index in range(24)
+    ]
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+    )
+    model._configure_levels(rows)
+
+    class OptimisticModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in self.names}
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = 1.0
+            self.beta[1 + self.names.index("action.size")] = .01
+
+        def predict(self, record):
+            value = float(self.beta[0])
+            for index, name in enumerate(self.names):
+                raw = record["features"].get(name)
+                if isinstance(raw, (int, float)) and math.isfinite(raw):
+                    value += float(self.beta[1 + index]) * float(raw)
+                else:
+                    value += float(
+                        self.beta[1 + len(self.names) + index])
+            return value
+
+    model.mean_model = OptimisticModel(model.model_feature_names)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.fitted = True
+
+    calibration = model._calibrate_selected_policy(
+        rows, {str(item["market_id"]) for item in rows})
+    assert calibration["state"] == (
+        "TEMPORAL_MARKET_BLOCK_SELECTED_POLICY_ONE_SIDED")
+    assert calibration["observed_selected_markets"] >= 10
+    assert calibration["penalty"] > 0
+    assert calibration["mean_optimism_after_base_scale"] > 0
+
+    probe = row("m4999", signal=2.0, exit_bid=.40, depth=20.0)
+    uncalibrated = model.select_action(probe, latency_ms=50)
+    assert uncalibrated["action"] == "TRADE"
+
+    model.selection_optimism_penalty = calibration["penalty"]
+    calibrated = model.select_action(probe, latency_ms=50)
+    assert calibrated["action"] == "NO_TRADE"
+
+
+def test_fit_never_uses_selection_calibration_markets_for_final_mean():
+    rows = [
+        row(
+            "m" + str(index + 5000),
             signal=2.0 if index % 2 == 0 else -2.0,
             exit_bid=.56 if index % 2 == 0 else .44,
             depth=20.0,
         )
-        for index in range(30)
+        for index in range(100)
     ]
-    altered = json.loads(json.dumps(rows))
-    # With 30 chronological markets, the final six are the 20% calibration
-    # tail. Change only their realized outcomes; a valid split-conformal
-    # implementation must not let those labels refit the deployment mean.
-    for item in altered[-6:]:
-        item["targets"]["500"]["arrival_bid"] = .98
-        item["targets"]["500"]["arrival_ask"] = .99
-
-    kwargs = dict(
-        size_grid=(5.0,),
+    model = DirectActionValueModel(
+        size_grid=(1.0, 5.0),
         action_horizons_ms=(500,),
         train_latencies_ms=(50,),
-        streaming_batch_size=16,
-    )
-    baseline = DirectActionValueModel(**kwargs).fit(rows)
-    shocked = DirectActionValueModel(**kwargs).fit(altered)
-
-    assert baseline.training_receipt[
-        "calibration_holdout_excluded_from_mean_fit"] is True
-    assert shocked.training_receipt[
-        "calibration_holdout_excluded_from_mean_fit"] is True
-    assert baseline.training_receipt["calibration_market_count"] == 6
-    assert shocked.training_receipt["calibration_market_count"] == 6
-    for left, right in zip(baseline.mean_model.beta, shocked.mean_model.beta):
-        assert math.isclose(
-            float(left), float(right), rel_tol=0.0, abs_tol=1e-12)
+        streaming_batch_size=32,
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["training_states_used"] == 100
+    assert receipt["mean_fit_states"] + receipt["selection_calibration_states"] == 100
+    assert receipt["selection_calibration_states"] > 0
+    assert receipt["mean_calibration_market_overlap"] == 0
+    assert receipt["mean_fit_markets"] + receipt["selection_calibration_markets"] == 100
+    assert receipt["calibration_multiplier"] == 1.0
+    assert "selection_optimism_penalty" in receipt
