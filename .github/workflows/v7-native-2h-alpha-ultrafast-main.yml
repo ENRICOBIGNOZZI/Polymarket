@@ -1,0 +1,151 @@
+name: V7 native 2H alpha ultrafast research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-native-2h-alpha-ultrafast-request.json
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-native-2h-alpha-ultrafast
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      RESEARCH_BRANCH: multi-alpha-2h-20260921
+      OUTPUT_DIR: docs/research/native-alpha-2h-2026-09-21
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate trusted-main request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-native-2h-alpha-ultrafast-request.json
+          python3 - "$request" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v['schema']=='polymarket_v7_native_2h_alpha_ultrafast_request_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',v['instance_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['expected_research_sha'])
+          assert isinstance(v['minimum_wall_ns'],int) and v['minimum_wall_ns']>0
+          assert v['research_branch']=='multi-alpha-2h-20260921'
+          assert v['output_directory']=='docs/research/native-alpha-2h-2026-09-21'
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['real_capital_at_risk'] is False
+          assert v['automatic_promotion'] is False
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          source_sha="$(python3 -c 'import json;print(json.load(open("'"$request"'"))["expected_research_sha"])')"
+          instance_id="$(python3 -c 'import json;print(json.load(open("'"$request"'"))["instance_id"])')"
+          minimum_wall_ns="$(python3 -c 'import json;print(json.load(open("'"$request"'"))["minimum_wall_ns"])')"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "instance_id=$instance_id" >> "$GITHUB_OUTPUT"
+          echo "minimum_wall_ns=$minimum_wall_ns" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch exact frozen research source
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$RESEARCH_BRANCH" --depth=250
+          branch_sha="$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$branch_sha"
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Install and compile frozen source
+        run: |
+          python3 -m pip install --disable-pip-version-check -q -r research/requirements-learning.txt
+          python3 -m py_compile \
+            research/walk_forward_v3/native_2h_alpha_library.py \
+            research/walk_forward_v3/native_2h_alpha_figures.py \
+            ops/v7_native_2h_alpha_ssm.py
+
+      - name: Configure AWS credentials through trusted main OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-native-alpha-2h
+          aws-region: eu-west-2
+
+      - name: Run equity-only London PAPER research
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+          INSTANCE_ID: ${{ steps.request.outputs.instance_id }}
+          MINIMUM_WALL_NS: ${{ steps.request.outputs.minimum_wall_ns }}
+        run: |
+          set -euo pipefail
+          python3 ops/v7_native_2h_alpha_ssm.py \
+            --instance-id "$INSTANCE_ID" \
+            --source-sha "$SOURCE_SHA" \
+            --minimum-wall-ns "$MINIMUM_WALL_NS" \
+            --output-dir "$OUTPUT_DIR"
+          PYTHONPATH=. python3 -m research.walk_forward_v3.native_2h_alpha_figures \
+            --root "$OUTPUT_DIR"
+
+      - name: Validate equity package
+        run: |
+          python3 - <<'PY'
+          import csv,gzip,json
+          from pathlib import Path
+          root=Path('docs/research/native-alpha-2h-2026-09-21')
+          data=json.load(open(root/'20_native_alpha_library.json'))
+          manifest=json.load(open(root/'native_alpha_equity_gallery/gallery_manifest.json'))
+          assert data['paper_only'] is True
+          assert data['authenticated_execution'] is False
+          assert data['real_order_submission'] is False
+          assert data['automatic_promotion'] is False
+          assert data['window']['profitability_used_for_selection'] is False
+          assert data['window']['end_ns']-data['window']['start_ns']==7200*10**9
+          assert data['latencies_ms']==[5,10,25,50,100,250]
+          assert data['exit_horizons_ms']==[500,750,1000,1500,2000,3000,4000,5000,7500,10000]
+          assert len(data['alphas'])>=20
+          assert manifest['alpha_count']==len(data['alphas'])
+          assert manifest['cells_per_alpha']==60
+          assert (root/'21_native_alpha_grid.csv').is_file()
+          assert (root/'22_native_alpha_equity_paths.csv.gz').is_file()
+          rows=list(csv.DictReader(open(root/'21_native_alpha_grid.csv',newline='')))
+          assert len(rows)==len(data['alphas'])*60
+          with gzip.open(root/'22_native_alpha_equity_paths.csv.gz','rt',encoding='utf-8') as f:
+              header=f.readline().strip()
+              assert 'cumulative_pnl' in header
+          PY
+
+      - name: Publish only to isolated research branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$OUTPUT_DIR"
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish native 2H alpha equity research"
+          git push origin HEAD:"$RESEARCH_BRANCH"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-native-alpha-2h-${{ github.run_id }}
+          path: docs/research/native-alpha-2h-2026-09-21
+          retention-days: 30
