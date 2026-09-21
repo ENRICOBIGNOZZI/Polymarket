@@ -1065,9 +1065,14 @@ class DirectActionValueModel:
         self.calibration_multiplier = 1.5
         self.scale_model = None
         calibration_state = "INSUFFICIENT_MARKET_BLOCKS"
+        calibration_block_scores = 0
 
-        # Temporal market blocks are defined before any outcome-dependent fit.
+        # Temporal market blocks are fixed before any outcome-dependent fit.
+        # The final deployment mean is frozen BEFORE the calibration block;
+        # otherwise the conformal multiplier would be evaluated on a different
+        # predictor from the one used at decision time.
         fit_markets = scale_markets = calibration_markets = set()
+        mean_fit_markets = set(markets)
         if len(markets) >= 15:
             fit_end = max(1, int(len(markets) * 0.60))
             scale_end = max(fit_end + 1, int(len(markets) * 0.80))
@@ -1076,6 +1081,7 @@ class DirectActionValueModel:
             scale_markets = set(markets[fit_end:scale_end])
             calibration_markets = set(markets[scale_end:])
 
+        target_states = Counter()
         if fit_markets and scale_markets and calibration_markets:
             provisional = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
@@ -1093,12 +1099,20 @@ class DirectActionValueModel:
             self.uncertainty_floor = max(
                 1e-6, 0.10 * self.scale_model.target_mean)
 
-            # Conformal calibration is market-blocked: one worst normalized
-            # residual per market, so millions of within-market action variants
-            # do not masquerade as independent calibration observations.
+            mean_fit_markets = fit_markets | scale_markets
+            deployment_mean = StreamingRidge(
+                self.model_feature_names, ridge=self.ridge,
+                batch_size=self.streaming_batch_size).fit_factory(
+                    factory(mean_fit_markets, target_states),
+                    lambda action: action["target"])
+
+            # Split conformal calibration is market-blocked and uses ONLY the
+            # untouched chronological tail. One worst normalized residual per
+            # market prevents within-market action variants from masquerading
+            # as independent calibration observations.
             block_scores = {}
             for action in factory(calibration_markets)():
-                predicted = provisional.predict(action)
+                predicted = deployment_mean.predict(action)
                 scale = max(
                     self.uncertainty_floor,
                     self.scale_model.predict(action))
@@ -1106,35 +1120,40 @@ class DirectActionValueModel:
                 market = str(action["market_id"])
                 block_scores[market] = max(
                     float(score), block_scores.get(market, 0.0))
+            calibration_block_scores = len(block_scores)
             calibrated = _quantile(
                 list(block_scores.values()), self.calibration_level)
             if calibrated is not None and finite(calibrated):
                 self.calibration_multiplier = max(1.0, float(calibrated))
-                calibration_state = "TEMPORAL_MARKET_BLOCK_CONFORMAL"
-
-        target_states = Counter()
-        final_mean = StreamingRidge(
-            self.model_feature_names, ridge=self.ridge,
-            batch_size=self.streaming_batch_size).fit_factory(
-                factory(None, target_states),
-                lambda action: action["target"])
+                calibration_state = "TEMPORAL_MARKET_BLOCK_SPLIT_CONFORMAL"
+            else:
+                calibration_state = "INSUFFICIENT_CALIBRATION_ACTION_TARGETS"
+        else:
+            deployment_mean = StreamingRidge(
+                self.model_feature_names, ridge=self.ridge,
+                batch_size=self.streaming_batch_size).fit_factory(
+                    factory(None, target_states),
+                    lambda action: action["target"])
 
         if self.scale_model is None:
             # Small-sample fallback is intentionally conservative and not a
-            # coverage claim.  Real London runs have many market blocks.
-            self.uncertainty_floor = max(1e-6, final_mean.target_std)
+            # coverage claim.
+            self.uncertainty_floor = max(
+                1e-6, deployment_mean.target_std)
 
-        self.mean_model = final_mean
+        self.mean_model = deployment_mean
+        training_states_used = sum(
+            1 for row in rows if str(row["market_id"]) in mean_fit_markets)
         self.training_receipt = {
             "schema": SCHEMA + "_training_v1",
             **SAFETY,
             "state": "READY",
             "training_states_total": len(rows),
-            "training_states_used": len(rows),
+            "training_states_used": training_states_used,
             "training_markets_total": len({str(row["market_id"]) for row in rows}),
-            "training_markets_used": len(markets),
+            "training_markets_used": len(mean_fit_markets),
             "training_state_cap": None,
-            "action_targets": final_mean.rows,
+            "action_targets": deployment_mean.rows,
             "target_state_counts": dict(target_states),
             "size_grid": list(self.size_grid),
             "action_horizons_ms": list(self.action_horizons_ms),
@@ -1146,10 +1165,10 @@ class DirectActionValueModel:
             "hard_order_notional": self.hard_order_notional,
             "model": "STREAMING_RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
             "matrix_strategy": "ONE_PASS_SUFFICIENT_STATISTICS_THEN_P_X_P_NORMAL_EQUATIONS",
-            "design_dimension": final_mean.design_dimension,
-            "gram_matrix_bytes": final_mean.gram_bytes,
-            "maximum_streaming_batch_bytes": final_mean.maximum_batch_bytes,
-            "regularized_gram_condition_number": final_mean.condition_number,
+            "design_dimension": deployment_mean.design_dimension,
+            "gram_matrix_bytes": deployment_mean.gram_bytes,
+            "maximum_streaming_batch_bytes": deployment_mean.maximum_batch_bytes,
+            "regularized_gram_condition_number": deployment_mean.condition_number,
             "streaming_batch_size": self.streaming_batch_size,
             "policy_objective": "PREDICTED_EXECUTABLE_CASH_PNL_MINUS_UNCERTAINTY_MINUS_RESIDUAL_PORTFOLIO_FRICTIONS",
             "policy_loss": "NEGATIVE_POLICY_UTILITY_WITH_NO_TRADE_BASELINE_ZERO",
@@ -1176,6 +1195,15 @@ class DirectActionValueModel:
             "calibration_multiplier": self.calibration_multiplier,
             "uncertainty_floor": self.uncertainty_floor,
             "calibration_state": calibration_state,
+            "mean_fit_scope": (
+                "PRE_CALIBRATION_MARKETS_ONLY"
+                if calibration_markets else "ALL_MARKETS_SMALL_SAMPLE_FALLBACK"
+            ),
+            "fit_market_count": len(fit_markets),
+            "scale_market_count": len(scale_markets),
+            "calibration_market_count": len(calibration_markets),
+            "calibration_block_scores": calibration_block_scores,
+            "calibration_holdout_excluded_from_mean_fit": bool(calibration_markets),
             "feature_names": list(self.model_feature_names),
             "capacity_scope": "L1_ONLY_NO_COUNTERFACTUAL_IMPACT_BEYOND_VISIBLE_DEPTH",
             "mean_covariance_estimation": False,

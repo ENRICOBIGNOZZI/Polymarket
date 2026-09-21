@@ -190,7 +190,9 @@ def test_model_receipt_explicitly_disclaims_mean_covariance_and_l2_impact():
     receipt = model.training_receipt
     assert receipt["mean_covariance_estimation"] is False
     assert receipt["capacity_scope"] == "L1_ONLY_NO_COUNTERFACTUAL_IMPACT_BEYOND_VISIBLE_DEPTH"
-    assert receipt["calibration_state"] == "TEMPORAL_MARKET_BLOCK_CONFORMAL"
+    assert receipt["calibration_state"] == "TEMPORAL_MARKET_BLOCK_SPLIT_CONFORMAL"
+    assert receipt["calibration_holdout_excluded_from_mean_fit"] is True
+    assert receipt["mean_fit_scope"] == "PRE_CALIBRATION_MARKETS_ONLY"
 
 
 
@@ -308,7 +310,7 @@ def test_streaming_ridge_matches_materialized_ridge_exactly_on_small_problem():
             rel_tol=1e-9, abs_tol=1e-9)
 
 
-def test_direct_action_uses_all_training_states_with_p_squared_memory():
+def test_direct_action_uses_all_precalibration_states_with_p_squared_memory():
     rows = [
         row("m" + str(index + 700), signal=2.0 if index % 2 == 0 else -2.0,
             exit_bid=.56 if index % 2 == 0 else .44)
@@ -322,7 +324,10 @@ def test_direct_action_uses_all_training_states_with_p_squared_memory():
     ).fit(rows)
     receipt = model.training_receipt
     assert receipt["training_states_total"] == 120
-    assert receipt["training_states_used"] == 120
+    assert receipt["training_states_used"] == 96
+    assert receipt["training_markets_used"] == 96
+    assert receipt["calibration_market_count"] == 24
+    assert receipt["calibration_holdout_excluded_from_mean_fit"] is True
     assert receipt["training_state_cap"] is None
     assert receipt["action_targets"] >= 120
     assert receipt["matrix_strategy"] == (
@@ -1029,3 +1034,42 @@ def test_nested_risk_frontier_skips_inner_blocks_with_zero_executable_actions():
             assert selection["qualified_policy_ids"] == []
             assert fold["inner_fit_failures"]
             assert fold["outer_oos"]["state"] == "NOT_EVALUATED_NO_VALIDATION_MODEL"
+
+
+
+def test_calibration_tail_cannot_change_frozen_mean_model_coefficients():
+    rows = [
+        row(
+            "m" + str(index + 4000),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(30)
+    ]
+    altered = json.loads(json.dumps(rows))
+    # With 30 chronological markets, the final six are the 20% calibration
+    # tail. Change only their realized outcomes; a valid split-conformal
+    # implementation must not let those labels refit the deployment mean.
+    for item in altered[-6:]:
+        item["targets"]["500"]["arrival_bid"] = .98
+        item["targets"]["500"]["arrival_ask"] = .99
+
+    kwargs = dict(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        streaming_batch_size=16,
+    )
+    baseline = DirectActionValueModel(**kwargs).fit(rows)
+    shocked = DirectActionValueModel(**kwargs).fit(altered)
+
+    assert baseline.training_receipt[
+        "calibration_holdout_excluded_from_mean_fit"] is True
+    assert shocked.training_receipt[
+        "calibration_holdout_excluded_from_mean_fit"] is True
+    assert baseline.training_receipt["calibration_market_count"] == 6
+    assert shocked.training_receipt["calibration_market_count"] == 6
+    for left, right in zip(baseline.mean_model.beta, shocked.mean_model.beta):
+        assert math.isclose(
+            float(left), float(right), rel_tol=0.0, abs_tol=1e-12)
