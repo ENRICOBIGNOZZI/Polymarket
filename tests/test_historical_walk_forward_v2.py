@@ -66,7 +66,8 @@ def test_expanding_folds_keep_whole_markets_and_training_labels_before_cutoff():
     assert receipt["state"] == "READY"
     for fold in found:
         assert not set(fold["train_markets"]) & set(fold["test_markets"])
-        assert all(row["label_information_ns"] < fold["cutoff_ns"] for row in fold["train"])
+        assert all(row["label_information_ns"] < fold["cutoff_ns"] for row in fold["train_settlement"])
+        assert all(row["information_end_ns"] < fold["cutoff_ns"] for row in fold["train_repricing"])
 
 
 def test_preprocessor_is_fit_only_on_training_rows():
@@ -122,7 +123,7 @@ def test_build_dataset_discovers_real_run_root_layout(tmp_path):
     (tmp_path / "research" / "public_settlements").mkdir()
     data = build_dataset(tmp_path)
     assert data["hft_root"] == str(tmp_path / "research" / "hft_permanent")
-    assert data["settlement_root"] == str(tmp_path / "research" / "public_settlements")
+    assert str(tmp_path / "research" / "public_settlements") in data["settlement_roots"]
     assert data["input_state"] == "NO_ADMISSIBLE_NATIVE_DECISIONS"
 
 
