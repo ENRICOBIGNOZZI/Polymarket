@@ -1,4 +1,5 @@
-# HISTORICAL_WALK_FORWARD_V2 is an explicit causal-research CI gate.\nimport copy
+# HISTORICAL_WALK_FORWARD_V2 is an explicit causal-research CI gate.
+import copy
 import math
 
 from research.walk_forward_v2.core import (
