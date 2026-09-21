@@ -282,6 +282,71 @@ def _operations(run_root: Path, runtime: dict[str, Any], now: int | float | None
     }
 
 
+
+def _prom_label(value: Any) -> str:
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_pure_arb_paper_status_v1"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+    )
+    lines = [
+        _metric("polymarket_pure_arb_up", safe and status.get("state") == "running"),
+        _metric("polymarket_pure_arb_cycles_total", status.get("cycles_total")),
+        _metric("polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total",
+                status.get("paper_locked_pnl_pre_gas_total")),
+        _metric("polymarket_pure_arb_evaluations_total", status.get("evaluations")),
+        _metric("polymarket_pure_arb_fee_blocked_evaluations_total",
+                status.get("fee_blocked_evaluations")),
+        _metric("polymarket_pure_arb_fee_ready_contexts", status.get("fee_ready_contexts")),
+        _metric("polymarket_pure_arb_last_decision_compute_ns",
+                status.get("last_decision_compute_ns")),
+        _metric("polymarket_pure_arb_max_decision_compute_ns",
+                status.get("max_decision_compute_ns")),
+        _metric("polymarket_pure_arb_last_receive_to_decision_ns",
+                status.get("last_receive_to_decision_ns")),
+        _metric("polymarket_pure_arb_max_receive_to_decision_ns",
+                status.get("max_receive_to_decision_ns")),
+    ]
+    if not safe:
+        return lines
+    for row in status.get("contexts") or []:
+        if not isinstance(row, dict):
+            continue
+        asset = _prom_label(row.get("asset"))
+        horizon = _prom_label(row.get("horizon"))
+        for field, kind in (
+            ("buy_complete_set", "BUY_COMPLETE_SET"),
+            ("sell_complete_set", "SELL_COMPLETE_SET"),
+        ):
+            value = row.get(field)
+            if not isinstance(value, dict):
+                continue
+            labels = {"asset": asset, "horizon": horizon, "kind": kind}
+            lines.extend([
+                _metric("polymarket_pure_arb_context_active",
+                        value.get("active") is True, labels),
+                _metric("polymarket_pure_arb_context_cycles_total",
+                        value.get("cycles"), labels),
+                _metric("polymarket_pure_arb_context_paper_locked_pnl_pre_gas_usd_total",
+                        value.get("paper_locked_pnl_pre_gas"), labels),
+                _metric("polymarket_pure_arb_context_last_edge_per_share",
+                        value.get("last_edge_per_share"), labels),
+                _metric("polymarket_pure_arb_context_max_edge_per_share",
+                        value.get("max_edge_per_share"), labels),
+                _metric("polymarket_pure_arb_context_last_executable_shares_l1",
+                        value.get("last_executable_shares_l1"), labels),
+                _metric("polymarket_pure_arb_context_last_locked_pnl_pre_gas_usd",
+                        value.get("last_locked_pnl_pre_gas"), labels),
+            ])
+    return lines
+
+
 def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, multi_crypto_shadow_run_root: Path | None = None, include_profit_experiment_report: bool = True) -> dict[str, Any]:
     live_observation_clock = now is None
     now = int(time.time()) if now is None else int(now)
@@ -426,6 +491,7 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
     snapshot["multi_crypto_shadow"] = summarize_shadow_runtime(
         multi_crypto_shadow_run_root, now_ns=now * 1_000_000_000,
     )
+    snapshot["pure_arb"] = _json(run_root / "research/repricing_book/pure_arb_status.json")
     return snapshot
 
 
@@ -794,6 +860,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     _append_external_fair_metrics(lines, snapshot.get("external_fair") or {})
     lines.extend(render_multi_crypto_prometheus(snapshot.get("multi_crypto_performance") or {}))
     lines.extend(render_shadow_prometheus(snapshot.get("multi_crypto_shadow") or {}))
+    lines.extend(_render_pure_arb_metrics(snapshot.get("pure_arb") or {}))
     retention=operations.get('retention') or {}
     storage=retention.get('hft_storage') or {}
     population=retention.get('hft_opportunity_preservation') or {}
@@ -835,7 +902,7 @@ def render_cached_prometheus(cached: dict[str, Any], *, max_snapshot_age: float 
 
 class SnapshotCache:
     def __init__(self, run_root: Path, repository_root: Path, *, refresh_seconds: float = 10.0, multi_crypto_shadow_run_root: Path | None = None, include_profit_experiment_report: bool = True) -> None:
-        self.run_root, self.repository_root, self.multi_crypto_shadow_run_root, self.refresh_seconds, self.include_profit_experiment_report = Path(run_root), Path(repository_root), (Path(multi_crypto_shadow_run_root) if multi_crypto_shadow_run_root else None), max(1.0, float(refresh_seconds)), bool(include_profit_experiment_report); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._multi_crypto_performance = b"{}\n"; self._multi_crypto_shadow = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
+        self.run_root, self.repository_root, self.multi_crypto_shadow_run_root, self.refresh_seconds, self.include_profit_experiment_report = Path(run_root), Path(repository_root), (Path(multi_crypto_shadow_run_root) if multi_crypto_shadow_run_root else None), max(1.0, float(refresh_seconds)), bool(include_profit_experiment_report); self._lock = threading.Lock(); self._ready = threading.Event(); self._stop = threading.Event(); self._thread = None; self._snapshot = None; self._metrics = b""; self._maker_fillability = b"{}\n"; self._external_fair = b"{}\n"; self._multi_crypto_performance = b"{}\n"; self._multi_crypto_shadow = b"{}\n"; self._pure_arb = b"{}\n"; self._completed_monotonic = 0.0; self._completed_wall = 0.0; self._refresh_duration = 0.0; self._refresh_errors = 0; self._last_error = ""
     def start(self) -> None:
         if self._thread is None: self._thread = threading.Thread(target=self._refresh_loop, daemon=True); self._thread.start()
     def stop(self) -> None:
@@ -853,13 +920,13 @@ class SnapshotCache:
                     kwargs["include_profit_experiment_report"] = False
                 snapshot = collect_snapshot(self.run_root, self.repository_root, **kwargs)
                 duration = time.monotonic()-started; wall = time.time(); metrics = render_prometheus(snapshot).rstrip()+f"\npolymarket_v7_exporter_snapshot_generated_unixtime {wall}\npolymarket_v7_exporter_snapshot_refresh_duration_seconds {duration}\npolymarket_v7_exporter_snapshot_refresh_errors_total {self._refresh_errors}\n"
-                with self._lock: self._snapshot=snapshot; self._metrics=metrics.encode(); self._maker_fillability=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self._external_fair=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self._multi_crypto_performance=(json.dumps(snapshot.get("multi_crypto_performance") or {},sort_keys=True)+"\n").encode(); self._multi_crypto_shadow=(json.dumps(snapshot.get("multi_crypto_shadow") or {},sort_keys=True)+"\n").encode(); self._completed_monotonic=time.monotonic(); self._completed_wall=wall; self._refresh_duration=duration; self._last_error=""
+                with self._lock: self._snapshot=snapshot; self._metrics=metrics.encode(); self._maker_fillability=(json.dumps(snapshot.get("maker_fillability") or {},sort_keys=True)+"\n").encode(); self._external_fair=(json.dumps(snapshot.get("external_fair") or {},sort_keys=True)+"\n").encode(); self._multi_crypto_performance=(json.dumps(snapshot.get("multi_crypto_performance") or {},sort_keys=True)+"\n").encode(); self._multi_crypto_shadow=(json.dumps(snapshot.get("multi_crypto_shadow") or {},sort_keys=True)+"\n").encode(); self._pure_arb=(json.dumps(snapshot.get("pure_arb") or {},sort_keys=True)+"\n").encode(); self._completed_monotonic=time.monotonic(); self._completed_wall=wall; self._refresh_duration=duration; self._last_error=""
                 self._ready.set()
             except Exception as exc:
                 with self._lock: self._refresh_errors += 1; self._last_error=f"{type(exc).__name__}:{exc}"
             self._stop.wait(max(.1, self.refresh_seconds-(time.monotonic()-started)))
     def read(self) -> dict[str, Any]:
-        with self._lock: return {"ready":self._snapshot is not None,"snapshot":self._snapshot,"metrics":self._metrics,"maker_fillability":self._maker_fillability,"external_fair":self._external_fair,"multi_crypto_performance":self._multi_crypto_performance,"multi_crypto_shadow":self._multi_crypto_shadow,"age_seconds":max(0,time.monotonic()-self._completed_monotonic) if self._completed_monotonic else math.inf,"completed_wall":self._completed_wall,"refresh_duration_seconds":self._refresh_duration,"refresh_errors":self._refresh_errors,"last_error":self._last_error}
+        with self._lock: return {"ready":self._snapshot is not None,"snapshot":self._snapshot,"metrics":self._metrics,"maker_fillability":self._maker_fillability,"external_fair":self._external_fair,"multi_crypto_performance":self._multi_crypto_performance,"multi_crypto_shadow":self._multi_crypto_shadow,"pure_arb":self._pure_arb,"age_seconds":max(0,time.monotonic()-self._completed_monotonic) if self._completed_monotonic else math.inf,"completed_wall":self._completed_wall,"refresh_duration_seconds":self._refresh_duration,"refresh_errors":self._refresh_errors,"last_error":self._last_error}
 
 
 class ExporterHandler(BaseHTTPRequestHandler):
@@ -871,7 +938,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
             kwargs: dict[str, Any] = {}
             if self.multi_crypto_shadow_run_root is not None: kwargs["multi_crypto_shadow_run_root"] = self.multi_crypto_shadow_run_root
             if not self.include_profit_experiment_report: kwargs["include_profit_experiment_report"] = False
-            snapshot=collect_snapshot(self.run_root,self.repository_root,**kwargs); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"multi_crypto_performance":(json.dumps(snapshot.get("multi_crypto_performance") or {})+"\n").encode(),"multi_crypto_shadow":(json.dumps(snapshot.get("multi_crypto_shadow") or {})+"\n").encode(),"age_seconds":0}
+            snapshot=collect_snapshot(self.run_root,self.repository_root,**kwargs); cached={"ready":True,"snapshot":snapshot,"metrics":render_prometheus(snapshot).encode(),"maker_fillability":(json.dumps(snapshot.get("maker_fillability") or {})+"\n").encode(),"external_fair":(json.dumps(snapshot.get("external_fair") or {})+"\n").encode(),"multi_crypto_performance":(json.dumps(snapshot.get("multi_crypto_performance") or {})+"\n").encode(),"multi_crypto_shadow":(json.dumps(snapshot.get("multi_crypto_shadow") or {})+"\n").encode(),"pure_arb":(json.dumps(snapshot.get("pure_arb") or {})+"\n").encode(),"age_seconds":0}
         if not cached.get("ready"): payload=b'{"ok":false,"reasons":["exporter_snapshot_not_ready"]}\n'; self.send_response(503); content="application/json"
         elif self.path=="/metrics": payload=render_cached_prometheus(cached,max_snapshot_age=self.max_snapshot_age); self.send_response(200); content="text/plain; version=0.0.4"
         elif self.path=="/healthz":
@@ -882,6 +949,7 @@ class ExporterHandler(BaseHTTPRequestHandler):
         elif self.path=="/external-fair.json": payload=cached["external_fair"]; self.send_response(200); content="application/json"
         elif self.path=="/multi-crypto-performance.json": payload=cached["multi_crypto_performance"]; self.send_response(200); content="application/json"
         elif self.path=="/multi-crypto-shadow.json": payload=cached["multi_crypto_shadow"]; self.send_response(200); content="application/json"
+        elif self.path=="/pure-arb.json": payload=cached["pure_arb"]; self.send_response(200); content="application/json"
         elif self.path=="/runtime-artifacts.json":
             value=_json(self.run_root / "control/runtime_artifact_receipt.json")
             payload=(json.dumps(value,sort_keys=True)+"\n").encode(); self.send_response(200); content="application/json"
