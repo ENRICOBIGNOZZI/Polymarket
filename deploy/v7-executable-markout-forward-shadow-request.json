@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_executable_markout_shadow_ssm_request_v1",
   "version": 1,
-  "request_id": "markout-shadow-forward-20260921T1121CEST",
+  "request_id": "markout-shadow-forward-20260921T1124CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_parent_sha": "7e67c17e66556b32334d030b18339947c7aba6b9",
+  "expected_parent_sha": "b066e2cf59a1d4905d9dab4a99ab5b9f41d079d3",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
