@@ -2068,6 +2068,13 @@ def test_serialized_trade_frequency_challenger_is_paper_only_and_explicit():
     assert loaded["entry_policy"] == "ONE_ENTRY_PER_SHOCK"
     assert loaded["model_kwargs"]["conditional_calibration"] is True
     assert loaded["model_kwargs"]["insufficient_selection_calibration_policy"] == "MAX_OBSERVED"
+    assert loaded["model_kwargs"]["entry_cap"] == 0.99
+    assert loaded["model_kwargs"]["live_minimum_tte_ns"] == 30_000_000_000
+    assert loaded["model_kwargs"]["live_maximum_tte_ns"] == 120_000_000_000
+    baseline_geometry = DirectActionValueModel()
+    assert baseline_geometry.entry_cap == 0.80
+    assert baseline_geometry.live_minimum_tte_ns == 105_000_000_000
+    assert baseline_geometry.live_maximum_tte_ns == 120_000_000_000
     policy = loaded["sizing_policy"]
     assert policy.context_count == 30
     assert policy.capital_fraction(0.0) == 0.0
