@@ -1,6 +1,6 @@
 {
-  "schema": "polymarket_v7_ssm_deploy_transport_audit_request_v1",
-  "paper_only": true,
-  "authenticated_execution": false,
-  "real_order_submission": false
+    "schema": "polymarket_v7_ssm_deploy_transport_audit_request_v1",
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false
 }
