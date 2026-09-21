@@ -349,4 +349,8 @@ def main() -> int:
     return 0
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except BaseException as exc:
+        print(f"cleanup_exception={type(exc).__name__}:{str(exc)[:500]}", file=sys.stderr, flush=True)
+        raise
