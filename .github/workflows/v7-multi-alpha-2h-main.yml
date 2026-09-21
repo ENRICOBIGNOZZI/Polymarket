@@ -1,0 +1,149 @@
+name: V7 trusted multi-alpha 2H research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-multi-alpha-2h-main-request.json
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-trusted-multi-alpha-2h
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      RESEARCH_BRANCH: multi-alpha-2h-20260921
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate trusted-main request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-multi-alpha-2h-main-request.json
+          python3 - "$request" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v['schema']=='polymarket_v7_multi_alpha_2h_main_request_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',v['instance_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['expected_research_sha'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['baseline_code_sha'])
+          assert isinstance(v['minimum_wall_ns'],int) and v['minimum_wall_ns']>0
+          assert v['research_branch']=='multi-alpha-2h-20260921'
+          assert v['output_directory']=='docs/research/multi-alpha-2h-2026-09-21'
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['real_capital_at_risk'] is False
+          assert v['automatic_promotion'] is False
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          cp "$request" /tmp/v7-multi-alpha-2h-request.json
+          source_sha="$(python3 -c 'import json;print(json.load(open("'"$request"'"))["expected_research_sha"])')"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch exact frozen research source
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$RESEARCH_BRANCH" --depth=200
+          branch_sha="$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$branch_sha"
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Install research dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check -q -r research/requirements-learning.txt
+
+      - name: Test and compile exact frozen source
+        run: |
+          PYTHONPATH=. pytest -q tests/test_v7_multi_alpha_2h.py
+          python3 -m py_compile \
+            research/walk_forward_v3/multi_alpha_2h.py \
+            research/walk_forward_v3/multi_alpha_2h_figures.py \
+            ops/v7_multi_alpha_2h_ssm.py
+
+      - name: Configure AWS credentials through trusted main OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-multi-alpha-2h-main
+          aws-region: eu-west-2
+
+      - name: Run read-only London PAPER research
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python3 ops/v7_multi_alpha_2h_ssm.py /tmp/v7-multi-alpha-2h-request.json "$SOURCE_SHA"
+
+      - name: Validate result package
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('docs/research/multi-alpha-2h-2026-09-21')
+          required=[
+            '00_executive_summary.md','01_2h_manifest.json','02_data_coverage.json',
+            '03_baseline_manifest.json','04_baseline_2h.json','05_external_backfill.json',
+            '06_causal_join.json','07_univariate_alpha.json','08_nested_models.json',
+            '09_information_latency.json','10_entry_exit_information_cube.json',
+            '11_signal_decay.json','12_momentum_reversal.json','13_dynamic_exit.json',
+            '14_feature_costs.json','15_equities.json','16_feature_scorecard.json',
+            '17_shortlist.json','18_rejected_features.json','19_next_stage_plan.md',
+            '01_baseline_equity.png','02_best_enriched_equity.png',
+            '03_baseline_vs_enriched_equity.png','04_baseline_entry_exit_heatmap.png',
+            '05_rich_entry_exit_heatmap.png','06_incremental_heatmap.png',
+            '07_information_latency_frontier.png','08_signal_decay.png',
+            '09_momentum_reversal_map.png','10_alpha_family_contribution.png',
+            '11_dynamic_exit.png','12_pnl_by_asset.png','13_pnl_by_contract_horizon.png',
+            'figures_manifest.json',
+          ]
+          for name in required:
+              assert (root/name).is_file(), name
+          m=json.load(open(root/'01_2h_manifest.json'))
+          assert m['window_end_ns']-m['window_start_ns']==7200*10**9
+          assert m['selection_policy']=='DATA_QUALITY_ONLY_NO_PNL'
+          assert m['paper_only'] is True
+          assert m['authenticated_execution'] is False
+          assert m['real_order_submission'] is False
+          s=json.load(open(root/'17_shortlist.json'))
+          assert s['automatic_promotion'] is False
+          PY
+
+      - name: Publish only to isolated research branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f docs/research/multi-alpha-2h-2026-09-21
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish frozen multi-alpha 2H research"
+          git push origin HEAD:"$RESEARCH_BRANCH"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-multi-alpha-2h-${{ github.run_id }}
+          path: docs/research/multi-alpha-2h-2026-09-21
+          retention-days: 30
