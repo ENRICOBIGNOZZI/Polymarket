@@ -1,0 +1,82 @@
+name: V7 browser Tailscale CI cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-tailnet-login.envelope.json
+      - .github/workflows/v7-browser-tailnet-cleanup.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+
+      - name: Decrypt one-shot Tailscale login
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          umask 077
+          key="$RUNNER_TEMP/deploy-key"
+          cred="$RUNNER_TEMP/tailnet-login.json"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          chmod 600 "$key"
+          python3 scripts/v7_ssh_envelope.py \
+            --private-key "$key" \
+            --input deploy/v7-tailnet-login.envelope.json \
+            --output "$cred"
+          rm -f "$key"
+          parent="$(git rev-parse HEAD^)"
+          python3 - "$cred" "$parent" <<'PY'
+          import json,sys,time
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v['schema']=='polymarket_v7_tailnet_login_handoff_v2'
+          assert v['purpose']=='TAILNET_CI_QUOTA_RECOVERY'
+          assert v['expected_parent_sha']==sys.argv[2]
+          assert v['allowed_prefixes']==[
+            'gh-deploy-','gh-health-','gh-freeze-','gh-inventory-',
+            'github-runnervm','github-actions'
+          ]
+          assert 1 <= int(v['maximum_deletions']) <= 100
+          assert int(v['not_after_unix']) > int(time.time())
+          assert isinstance(v['email'],str) and '@' in v['email']
+          assert isinstance(v['password'],str) and v['password']
+          PY
+
+      - name: Install browser automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check playwright
+          command -v google-chrome >/dev/null 2>&1
+
+      - name: Remove only stale offline CI nodes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ops/v7_tailscale_ci_cleanup_browser.py \
+            --credentials "$RUNNER_TEMP/tailnet-login.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --github-token "$GH_TOKEN" \
+            --chrome "$(command -v google-chrome)"
+
+      - name: Destroy plaintext credentials
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          shred -u "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key" 2>/dev/null || \
+            rm -f "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key"
