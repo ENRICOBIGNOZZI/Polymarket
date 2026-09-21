@@ -10,5 +10,8 @@
   "bundle_id": null,
   "backtest_report_sha256": null,
   "approval_id": null,
-  "note": "Fail closed. Populate only after explicit user approval following review of backtest performance."
+  "note": "Fail closed. Populate only after explicit user approval following review of backtest performance.",
+  "backtest_report_path": null,
+  "target_maker_execution_model_sha256": null,
+  "target_rich_model_sha256": null
 }
