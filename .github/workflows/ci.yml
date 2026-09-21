@@ -237,6 +237,8 @@ jobs:
           bash -n scripts/paper_v7_execution_loop.sh
           bash -n ops/update_server_v7.sh
           python3 scripts/v7_authority_contract.py
+          python3 -m py_compile ops/v7_collection_plane_ssm_deploy.py
+          python3 tests/test_v7_collection_plane_contract.py
           python3 tests/test_v7_repository_shape.py
       - name: Fast-path no C++ build
         if: needs.classify.outputs.cpp_required != 'true'
