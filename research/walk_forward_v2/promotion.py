@@ -261,6 +261,7 @@ def main() -> int:
     action = "HOLD"
     reason = "NO_QUALIFIED_CANDIDATE"
     promoted = None
+    selected_assessment = None
 
     if not history_ok:
         reason = "EXPANDING_HISTORY_GATE_FAILED"
@@ -268,24 +269,31 @@ def main() -> int:
         if previous is None:
             action = "PROMOTE"
             reason = "INITIAL_CHAMPION_PASSED_ALL_GATES"
+            selected_assessment = best
         elif previous_assessment is None:
             reason = "PREVIOUS_CHAMPION_NOT_IN_PREREGISTERED_SET"
         elif not previous_assessment.get("qualified"):
             action = "PROMOTE"
             reason = "CURRENT_CHAMPION_FAILED_CURRENT_GATES"
+            selected_assessment = best
         else:
             improvement = float(best["score"]) - float(previous_assessment["score"])
             if best["candidate_id"] == previous_id:
-                reason = "CURRENT_CHAMPION_REMAINS_BEST"
+                action = "REFIT_CHAMPION"
+                reason = "CURRENT_CHAMPION_REMAINS_BEST_REFIT_ON_EXPANDING_HISTORY"
+                selected_assessment = previous_assessment
             elif improvement >= MIN_CHALLENGER_IMPROVEMENT:
                 action = "PROMOTE"
                 reason = "CHALLENGER_IMPROVES_MARKET_BLOCK_LOWER_BOUND"
+                selected_assessment = best
             else:
-                reason = "CHALLENGER_IMPROVEMENT_BELOW_MARGIN"
+                action = "REFIT_CHAMPION"
+                reason = "CHALLENGER_BELOW_MARGIN_REFIT_CURRENT_CHAMPION"
+                selected_assessment = previous_assessment
 
     artifact_hash = sha256(artifact_path)
-    if action == "PROMOTE" and best is not None:
-        model = selected_model(artifact, best)
+    if action in {"PROMOTE", "REFIT_CHAMPION"} and selected_assessment is not None:
+        model = selected_model(artifact, selected_assessment)
         promoted = {
             "schema": SCHEMA,
             "version": 1,
@@ -298,16 +306,17 @@ def main() -> int:
             "promotion_scope": "PAPER_RESEARCH_CHAMPION_ONLY",
             "hot_path_mutation": False,
             "trader_restart_required": False,
-            "candidate_id": best["candidate_id"],
-            "family": best["family"],
-            "horizon_ms": best["horizon_ms"],
+            "candidate_id": selected_assessment["candidate_id"],
+            "family": selected_assessment["family"],
+            "horizon_ms": selected_assessment["horizon_ms"],
             "reference_latency_ms": REFERENCE_LATENCY_MS,
             "source_code_sha": results.get("start_sha"),
             "source_data_sha256": manifest.get("data_sha256"),
             "source_full_window_artifact_sha256": artifact_hash,
             "configured_minimum_wall_ns": manifest.get("minimum_wall_ns"),
             "training_window": training_window,
-            "oos_gate_snapshot": best,
+            "oos_gate_snapshot": selected_assessment,
+            "selection_action": action,
             "selected_model": model,
         }
         atomic_json(args.registry, promoted)
@@ -340,9 +349,12 @@ def main() -> int:
             "require_market_block_lower_bound_nonnegative": True,
         },
         "previous_candidate_id": previous_id,
-        "selected_candidate_id": best["candidate_id"] if best else None,
+        "selected_candidate_id": (
+            selected_assessment["candidate_id"] if selected_assessment is not None
+            else best["candidate_id"] if best else None
+        ),
         "candidates": assessments,
-        "registry_updated": action == "PROMOTE",
+        "registry_updated": action in {"PROMOTE", "REFIT_CHAMPION"},
         "registry_path": str(args.registry),
         "artifact_sha256": artifact_hash,
     }
