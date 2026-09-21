@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_native_equity_grid_2h_request_v1",
   "version": 1,
-  "request_id": "native-equity-grid-2h-20260921",
+  "request_id": "native-equity-grid-2h-fstring-fix-20260921",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "edf038b96cc21f05e66900f95863bfadd0d6f0bd",
+  "expected_research_sha": "d5dc459637be6874d935287fe38a80c5d0929a94",
   "minimum_wall_ns": 1790007780000000000,
   "output_directory": "docs/research/native-equity-grid-2h-2026-09-21",
   "paper_only": true,
