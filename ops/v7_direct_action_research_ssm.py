@@ -40,7 +40,8 @@ def load_request(path: Path) -> dict:
         "output_directory", "paper_only", "authenticated_execution",
         "real_order_submission", "real_capital_at_risk",
     }
-    if set(value) != required:
+    optional = {"trade_frequency_challenger"}
+    if not required.issubset(value) or set(value) - required - optional:
         raise ValueError("unexpected request fields")
     if value["schema"] != "polymarket_v7_direct_action_research_ssm_request_v1":
         raise ValueError("invalid request schema")
@@ -72,6 +73,8 @@ def load_request(path: Path) -> dict:
         and value["real_capital_at_risk"] is False
     ):
         raise ValueError("PAPER-only authority contract violated")
+    if not isinstance(value.get("trade_frequency_challenger", False), bool):
+        raise ValueError("trade frequency challenger flag must be boolean")
     return value
 
 
@@ -129,6 +132,10 @@ def upload(instance: str, remote: str, payload: bytes) -> None:
 def execute(instance: str, remote: str, context: dict, request: dict, source_sha: str) -> dict:
     run_root = context["run_root"]
     app_dir = context["app_dir"]
+    challenger_flag = (
+        " --trade-frequency-challenger"
+        if request.get("trade_frequency_challenger") is True else ""
+    )
     command = f"""set -euo pipefail
 cd {remote}
 mkdir -p src output
@@ -141,7 +148,7 @@ PYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.di
   --minimum-wall-ns {request['minimum_wall_ns']} \
   --folds {request['folds']} \
   --latency-ms {request['latency_ms']} \
-  --capital-budget {request['capital_budget']}
+  --capital-budget {request['capital_budget']}{challenger_flag}
 tar -C {remote}/output -czf {remote}/results.tgz .
 python3 - <<'PY'
 import hashlib,json
