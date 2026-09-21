@@ -50,6 +50,11 @@ void signal_handler(int) noexcept { g_stop.store(true, std::memory_order_relaxed
                std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+[[nodiscard]] std::int64_t monotonic_ns() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 [[nodiscard]] bool exact_sha(std::string_view value) noexcept {
     if (value.size() != 40) return false;
     for (const char ch : value) {
@@ -119,6 +124,15 @@ void atomic_write(const fs::path& path, std::string_view content) {
     return fallback;
 }
 
+[[nodiscard]] double number64(const json::value* value,
+                              double fallback = std::numeric_limits<double>::quiet_NaN()) noexcept {
+    if (value == nullptr) return fallback;
+    if (value->is_double()) return value->as_double();
+    if (value->is_int64()) return static_cast<double>(value->as_int64());
+    if (value->is_uint64()) return static_cast<double>(value->as_uint64());
+    return fallback;
+}
+
 [[nodiscard]] std::int32_t price_e4(double price) noexcept {
     if (!std::isfinite(price) || price <= 0.0 || price >= 1.0) return 0;
     return static_cast<std::int32_t>(std::llround(price * kPriceScaleE4));
@@ -156,6 +170,7 @@ struct Options {
     std::int64_t state_publish_ms = 100;
     fs::path compact_label_tape_dir;
     bool selection_explicit = false;
+    bool pure_arb_paper = false;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -178,6 +193,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--state-only") options.state_only = true;
         else if (arg == "--state-publish-ms") options.state_publish_ms = std::stoll(next());
         else if (arg == "--compact-label-tape-dir") options.compact_label_tape_dir = next();
+        else if (arg == "--pure-arb-paper") options.pure_arb_paper = true;
         else throw std::runtime_error("unknown argument: " + arg);
     }
     if (options.fair_only && options.selection_only) {
@@ -194,6 +210,9 @@ Options parse_options(int argc, char** argv) {
     }
     if (!options.compact_label_tape_dir.empty() && (!options.state_only || !options.selection_only)) {
         throw std::runtime_error("--compact-label-tape-dir requires --selection-only --state-only");
+    }
+    if (options.pure_arb_paper && (!options.selection_only || options.state_only || options.fair_only)) {
+        throw std::runtime_error("--pure-arb-paper requires the full selection-only causal book observer");
     }
     if (options.selection.empty()) {
         options.selection = options.run_root + "/micro_maker/reward_selection.json";
@@ -216,6 +235,11 @@ struct SelectedToken {
     std::uint8_t is_yes = 0;
     std::int64_t start_wall_ms = 0;
     std::int64_t end_wall_ms = 0;
+    std::string asset;
+    std::string horizon;
+    double fee_rate = 0.0;
+    double fee_exponent = 1.0;
+    std::uint8_t fee_verified = 0;
 };
 
 [[nodiscard]] std::vector<std::pair<std::string, std::pair<std::string, std::string>>>
@@ -378,13 +402,43 @@ void apply_selection_windows(std::vector<SelectedToken>& tokens, const fs::path&
         const auto market_id = text(find_value(row, "market_id"));
         const auto start_ms = integer64(find_value(row, "start_timestamp_ms"));
         const auto end_ms = integer64(find_value(row, "end_timestamp_ms"));
-        if (market_id.empty() || start_ms <= 0 || end_ms <= start_ms) {
+        const auto asset = text(find_value(row, "asset"));
+        const auto horizon = text(find_value(row, "horizon"));
+        if (market_id.empty() || start_ms <= 0 || end_ms <= start_ms
+            || asset.empty() || horizon.empty()) {
             throw std::runtime_error("selection market window invalid");
+        }
+        double fee_rate = 0.0;
+        double fee_exponent = 1.0;
+        bool fee_verified = false;
+        const auto* fee_value = find_value(row, "fee_schedule");
+        if (fee_value != nullptr && fee_value->is_object()) {
+            const auto& fee = fee_value->as_object();
+            const auto rate = number64(find_value(fee, "rate"));
+            const auto exponent = number64(find_value(fee, "exponent"), 1.0);
+            if (std::isfinite(rate) && rate >= 0.0 && rate <= 1.0
+                && std::isfinite(exponent) && exponent >= 0.0) {
+                fee_rate = rate;
+                fee_exponent = exponent;
+                fee_verified = true;
+            }
+        }
+        if (!fee_verified
+            && boolean(find_value(row, "fees_enabled_explicit"), false)
+            && !boolean(find_value(row, "fees_enabled"), true)) {
+            fee_rate = 0.0;
+            fee_exponent = 1.0;
+            fee_verified = true;
         }
         for (auto& token : tokens) {
             if (token.market_id == market_id) {
                 token.start_wall_ms = start_ms;
                 token.end_wall_ms = end_ms;
+                token.asset = asset;
+                token.horizon = horizon;
+                token.fee_rate = fee_rate;
+                token.fee_exponent = fee_exponent;
+                token.fee_verified = fee_verified ? 1 : 0;
                 ++assigned;
             }
         }
@@ -418,17 +472,42 @@ struct FlowSample {
     std::uint64_t connection_epoch = 0;
 };
 
+struct PureArbDirectionState {
+    bool active = false;
+    std::uint64_t cycles = 0;
+    double paper_locked_pnl = 0.0;
+    double max_edge_per_share = 0.0;
+    double last_edge_per_share = 0.0;
+    double last_executable_shares = 0.0;
+    double last_locked_pnl = 0.0;
+    std::int64_t last_detect_wall_ms = 0;
+};
+
+struct PureArbMarketState {
+    std::string market_id;
+    std::string asset;
+    std::string horizon;
+    std::uint64_t yes_handle = 0;
+    std::uint64_t no_handle = 0;
+    double fee_rate = 0.0;
+    double fee_exponent = 1.0;
+    std::uint8_t fee_verified = 0;
+    PureArbDirectionState buy{};
+    PureArbDirectionState sell{};
+};
+
 class ExactWsObserver final {
 public:
     ExactWsObserver(std::vector<SelectedToken> tokens, std::string ws_url,
                     fs::path output_dir, std::string model_sha, bool state_only = false,
                     std::int64_t state_publish_ms = 100, bool recover_missing_lineage = false,
-                    fs::path compact_label_tape_dir = {})
+                    fs::path compact_label_tape_dir = {}, bool pure_arb_paper = false)
         : tokens_(std::move(tokens)), ws_url_(std::move(ws_url)),
           output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)),
           state_only_(state_only), state_publish_ms_(state_publish_ms),
           recover_missing_lineage_(recover_missing_lineage),
-          compact_label_tape_dir_(std::move(compact_label_tape_dir)) {
+          compact_label_tape_dir_(std::move(compact_label_tape_dir)),
+          pure_arb_paper_(pure_arb_paper) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_handle = 0;
         std::size_t max_market_handle = 0;
@@ -446,7 +525,22 @@ public:
         flow_samples_.resize(max_handle + 1);
         book_token_seen_.resize(max_handle + 1, 0);
         book_market_seen_.resize(max_market_handle + 1, 0);
+        pure_arb_latest_books_.resize(max_handle + 1);
+        pure_arb_book_epochs_.resize(max_handle + 1, 0);
+        pure_arb_book_receive_wall_ms_.resize(max_handle + 1, 0);
+        pure_arb_markets_.resize(max_market_handle + 1);
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
+        for (const auto& token : tokens_) {
+            auto& market = pure_arb_markets_[token.market_handle];
+            market.market_id = token.market_id;
+            market.asset = token.asset;
+            market.horizon = token.horizon;
+            market.fee_rate = token.fee_rate;
+            market.fee_exponent = token.fee_exponent;
+            market.fee_verified = token.fee_verified;
+            if (token.is_yes != 0) market.yes_handle = token.instrument_handle;
+            else market.no_handle = token.instrument_handle;
+        }
         for (const auto& token : tokens_) {
             lanes_[token.instrument_handle] = std::make_unique<pm::v7::maker::MakerInstrumentLane>(1);
         }
@@ -455,6 +549,8 @@ public:
         evidence_path_ = output_dir_ / "fillability_ws.jsonl";
         status_path_ = output_dir_ / "fillability_ws_status.json";
         flow_path_ = output_dir_ / "fillability_flow_snapshot.json";
+        pure_arb_status_path_ = output_dir_ / "pure_arb_status.json";
+        pure_arb_trades_path_ = output_dir_ / "pure_arb_trades.jsonl";
         fs::create_directories(output_dir_ / "book_features");
         if (!state_only_) {
             output_.open(evidence_path_, std::ios::app);
@@ -466,6 +562,10 @@ public:
         }
         session_id_ = std::to_string(wall_ms()) + "-" + std::to_string(::getpid());
         if (!compact_label_tape_dir_.empty()) initialize_compact_label_tape();
+        if (pure_arb_paper_) {
+            pure_arb_output_.open(pure_arb_trades_path_, std::ios::app);
+            if (!pure_arb_output_) throw std::runtime_error("cannot open pure arb PAPER evidence file");
+        }
     }
 
     void on_frame(std::string_view payload, const pm::fast::FeedReceiveStamp& receive) {
@@ -609,11 +709,259 @@ public:
         }
         connection_epoch_.fetch_add(1, std::memory_order_relaxed);
         reconnects_.fetch_add(1, std::memory_order_relaxed);
+        reset_pure_arb_state();
         for (std::size_t i=1; i<lanes_.size(); ++i) {
             if (lanes_[i]) *lanes_[i] = pm::v7::maker::MakerInstrumentLane(1);
             feature_start_ns_[i] = 0;
             flow_samples_[i].clear();
         }
+    }
+
+    [[nodiscard]] static double pure_arb_fee_per_share(
+        double price, double rate, double exponent) noexcept {
+        if (!std::isfinite(price) || price <= 0.0 || price >= 1.0
+            || !std::isfinite(rate) || rate < 0.0 || rate > 1.0
+            || !std::isfinite(exponent) || exponent < 0.0) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        return rate == 0.0 ? 0.0 : rate * std::pow(price * (1.0 - price), exponent);
+    }
+
+    void refresh_pure_arb_metadata(const fs::path& selection) {
+        if (!pure_arb_paper_) return;
+        apply_selection_windows(tokens_, selection);
+        for (const auto& token : tokens_) {
+            auto& market = pure_arb_markets_[token.market_handle];
+            market.market_id = token.market_id;
+            market.asset = token.asset;
+            market.horizon = token.horizon;
+            market.fee_rate = token.fee_rate;
+            market.fee_exponent = token.fee_exponent;
+            market.fee_verified = token.fee_verified;
+        }
+    }
+
+    void reset_pure_arb_state() noexcept {
+        if (!pure_arb_paper_) return;
+        for (auto& book : pure_arb_latest_books_) book = pm::v7::BookHotSnapshot{};
+        std::fill(pure_arb_book_epochs_.begin(), pure_arb_book_epochs_.end(), 0);
+        std::fill(pure_arb_book_receive_wall_ms_.begin(), pure_arb_book_receive_wall_ms_.end(), 0);
+        for (auto& market : pure_arb_markets_) {
+            market.buy.active = false;
+            market.sell.active = false;
+        }
+    }
+
+    void record_pure_arb_cycle(PureArbMarketState& market,
+                               PureArbDirectionState& direction,
+                               const char* kind,
+                               double edge_per_share,
+                               std::int64_t shares_microunits,
+                               std::int32_t yes_e4,
+                               std::int32_t no_e4,
+                               std::int64_t receive_wall_ms,
+                               std::int64_t receive_monotonic_ns,
+                               std::int64_t decision_ns) {
+        const double shares = micro_shares(shares_microunits);
+        const double locked = shares * edge_per_share;
+        direction.active = true;
+        ++direction.cycles;
+        direction.paper_locked_pnl += locked;
+        direction.max_edge_per_share = std::max(direction.max_edge_per_share, edge_per_share);
+        direction.last_edge_per_share = edge_per_share;
+        direction.last_executable_shares = shares;
+        direction.last_locked_pnl = locked;
+        direction.last_detect_wall_ms = receive_wall_ms;
+        pure_arb_total_pnl_ += locked;
+        ++pure_arb_total_cycles_;
+        if (!pure_arb_output_) return;
+        json::object event{
+            {"schema", "polymarket_v7_pure_arb_paper_cycle_v1"},
+            {"model_sha", model_sha_},
+            {"paper_only", true},
+            {"authenticated_execution", false},
+            {"real_order_submission", false},
+            {"real_capital_at_risk", false},
+            {"execution_authority", "ZERO_AUTHORITY_PAPER_SIMULATION"},
+            {"strategy", "PURE_COMPLETE_SET_ARB"},
+            {"kind", kind},
+            {"asset", market.asset},
+            {"horizon", market.horizon},
+            {"market_id", market.market_id},
+            {"receive_wall_ms", receive_wall_ms},
+            {"receive_to_decision_ns", std::max<std::int64_t>(0, decision_ns - receive_monotonic_ns)},
+            {"edge_per_share", edge_per_share},
+            {"executable_shares_l1", shares},
+            {"paper_locked_pnl_pre_gas", locked},
+            {"yes_price", e4_price(yes_e4)},
+            {"no_price", e4_price(no_e4)},
+            {"fee_rate", market.fee_rate},
+            {"fee_exponent", market.fee_exponent},
+            {"artificial_delay_ms", 0},
+            {"paired_fok_simulation", true},
+            {"one_cycle_per_positive_episode", true},
+            {"onchain_fixed_cost_modelled", false},
+            {"prefunded_complete_set_for_sell", true},
+        };
+        pure_arb_output_ << json::serialize(event) << '\n';
+        pure_arb_output_.flush();
+    }
+
+    void evaluate_pure_arb(const TradeEvidence& row) {
+        if (!pure_arb_paper_ || row.instrument_handle == 0
+            || row.instrument_handle >= by_handle_.size()) return;
+        const auto* token = by_handle_[row.instrument_handle];
+        if (token == nullptr || token->market_handle >= pure_arb_markets_.size()) return;
+        pure_arb_latest_books_[row.instrument_handle] = row.book;
+        pure_arb_book_epochs_[row.instrument_handle] = row.connection_epoch;
+        pure_arb_book_receive_wall_ms_[row.instrument_handle] = row.receive_wall_ms;
+        auto& market = pure_arb_markets_[token->market_handle];
+        if (market.yes_handle == 0 || market.no_handle == 0
+            || market.yes_handle >= pure_arb_latest_books_.size()
+            || market.no_handle >= pure_arb_latest_books_.size()) return;
+
+        const auto started_ns = monotonic_ns();
+        const auto& yes = pure_arb_latest_books_[market.yes_handle];
+        const auto& no = pure_arb_latest_books_[market.no_handle];
+        const auto yes_epoch = pure_arb_book_epochs_[market.yes_handle];
+        const auto no_epoch = pure_arb_book_epochs_[market.no_handle];
+        const auto now_wall = row.receive_wall_ms;
+
+        const bool valid = market.fee_verified != 0
+            && token->start_wall_ms <= now_wall && now_wall < token->end_wall_ms
+            && yes_epoch != 0 && yes_epoch == no_epoch
+            && yes.valid != 0 && no.valid != 0
+            && yes.lineage_continuous != 0 && no.lineage_continuous != 0
+            && yes.best_bid_e4 > 0 && yes.best_ask_e4 > yes.best_bid_e4 && yes.best_ask_e4 < 10'000
+            && no.best_bid_e4 > 0 && no.best_ask_e4 > no.best_bid_e4 && no.best_ask_e4 < 10'000
+            && yes.best_bid_microunits > 0 && yes.best_ask_microunits > 0
+            && no.best_bid_microunits > 0 && no.best_ask_microunits > 0;
+        if (!valid) {
+            market.buy.active = false;
+            market.sell.active = false;
+            if (market.fee_verified == 0) ++pure_arb_fee_blocked_evaluations_;
+            return;
+        }
+
+        const double yes_ask = e4_price(yes.best_ask_e4);
+        const double no_ask = e4_price(no.best_ask_e4);
+        const double yes_bid = e4_price(yes.best_bid_e4);
+        const double no_bid = e4_price(no.best_bid_e4);
+        const double buy_fee = pure_arb_fee_per_share(
+            yes_ask, market.fee_rate, market.fee_exponent)
+            + pure_arb_fee_per_share(no_ask, market.fee_rate, market.fee_exponent);
+        const double sell_fee = pure_arb_fee_per_share(
+            yes_bid, market.fee_rate, market.fee_exponent)
+            + pure_arb_fee_per_share(no_bid, market.fee_rate, market.fee_exponent);
+        if (!std::isfinite(buy_fee) || !std::isfinite(sell_fee)) {
+            market.buy.active = false;
+            market.sell.active = false;
+            return;
+        }
+        const double buy_edge = 1.0 - yes_ask - no_ask - buy_fee;
+        const double sell_edge = yes_bid + no_bid - 1.0 - sell_fee;
+        const auto buy_qty = std::min(yes.best_ask_microunits, no.best_ask_microunits);
+        const auto sell_qty = std::min(yes.best_bid_microunits, no.best_bid_microunits);
+        market.buy.last_edge_per_share = buy_edge;
+        market.sell.last_edge_per_share = sell_edge;
+        market.buy.last_executable_shares = micro_shares(buy_qty);
+        market.sell.last_executable_shares = micro_shares(sell_qty);
+        ++pure_arb_evaluations_;
+
+        const auto decision_ns = monotonic_ns();
+        pure_arb_last_decision_compute_ns_ = std::max<std::int64_t>(0, decision_ns - started_ns);
+        pure_arb_max_decision_compute_ns_ = std::max(
+            pure_arb_max_decision_compute_ns_, pure_arb_last_decision_compute_ns_);
+        pure_arb_last_receive_to_decision_ns_ = std::max<std::int64_t>(
+            0, decision_ns - row.receive_monotonic_ns);
+        pure_arb_max_receive_to_decision_ns_ = std::max(
+            pure_arb_max_receive_to_decision_ns_, pure_arb_last_receive_to_decision_ns_);
+
+        if (buy_edge > 1e-12 && buy_qty > 0) {
+            if (!market.buy.active) {
+                record_pure_arb_cycle(market, market.buy, "BUY_COMPLETE_SET",
+                    buy_edge, buy_qty, yes.best_ask_e4, no.best_ask_e4,
+                    row.receive_wall_ms, row.receive_monotonic_ns, decision_ns);
+            }
+        } else {
+            market.buy.active = false;
+        }
+
+        if (sell_edge > 1e-12 && sell_qty > 0) {
+            if (!market.sell.active) {
+                record_pure_arb_cycle(market, market.sell, "SELL_COMPLETE_SET",
+                    sell_edge, sell_qty, yes.best_bid_e4, no.best_bid_e4,
+                    row.receive_wall_ms, row.receive_monotonic_ns, decision_ns);
+            }
+        } else {
+            market.sell.active = false;
+        }
+    }
+
+    void write_pure_arb_status(bool stopped) {
+        if (!pure_arb_paper_) return;
+        json::array contexts;
+        std::uint64_t fee_ready = 0;
+        for (std::size_t i = 1; i < pure_arb_markets_.size(); ++i) {
+            const auto& market = pure_arb_markets_[i];
+            if (market.market_id.empty()) continue;
+            fee_ready += market.fee_verified != 0;
+            contexts.emplace_back(json::object{
+                {"asset", market.asset},
+                {"horizon", market.horizon},
+                {"market_id", market.market_id},
+                {"fee_verified", market.fee_verified != 0},
+                {"buy_complete_set", json::object{
+                    {"active", market.buy.active},
+                    {"cycles", market.buy.cycles},
+                    {"paper_locked_pnl_pre_gas", market.buy.paper_locked_pnl},
+                    {"last_edge_per_share", market.buy.last_edge_per_share},
+                    {"max_edge_per_share", market.buy.max_edge_per_share},
+                    {"last_executable_shares_l1", market.buy.last_executable_shares},
+                    {"last_locked_pnl_pre_gas", market.buy.last_locked_pnl},
+                    {"last_detect_wall_ms", market.buy.last_detect_wall_ms}}},
+                {"sell_complete_set", json::object{
+                    {"active", market.sell.active},
+                    {"cycles", market.sell.cycles},
+                    {"paper_locked_pnl_pre_gas", market.sell.paper_locked_pnl},
+                    {"last_edge_per_share", market.sell.last_edge_per_share},
+                    {"max_edge_per_share", market.sell.max_edge_per_share},
+                    {"last_executable_shares_l1", market.sell.last_executable_shares},
+                    {"last_locked_pnl_pre_gas", market.sell.last_locked_pnl},
+                    {"last_detect_wall_ms", market.sell.last_detect_wall_ms}}},
+            });
+        }
+        json::object status{
+            {"schema", "polymarket_v7_pure_arb_paper_status_v1"},
+            {"timestamp_ms", wall_ms()},
+            {"model_sha", model_sha_},
+            {"paper_only", true},
+            {"authenticated_execution", false},
+            {"real_order_submission", false},
+            {"real_capital_at_risk", false},
+            {"execution_authority", "ZERO_AUTHORITY_PAPER_SIMULATION"},
+            {"state", stopped ? "stopped" : "running"},
+            {"strategy", "PURE_COMPLETE_SET_ARB"},
+            {"assets", json::array{"BTC","ETH","SOL","XRP","DOGE","BNB"}},
+            {"horizons", json::array{"M5","M15","H1","H4","D1"}},
+            {"expected_contexts", 30},
+            {"fee_ready_contexts", fee_ready},
+            {"artificial_delay_ms", 0},
+            {"one_cycle_per_positive_episode", true},
+            {"paired_fok_simulation", true},
+            {"prefunded_complete_set_for_sell", true},
+            {"onchain_fixed_cost_modelled", false},
+            {"evaluations", pure_arb_evaluations_},
+            {"fee_blocked_evaluations", pure_arb_fee_blocked_evaluations_},
+            {"cycles_total", pure_arb_total_cycles_},
+            {"paper_locked_pnl_pre_gas_total", pure_arb_total_pnl_},
+            {"last_decision_compute_ns", pure_arb_last_decision_compute_ns_},
+            {"max_decision_compute_ns", pure_arb_max_decision_compute_ns_},
+            {"last_receive_to_decision_ns", pure_arb_last_receive_to_decision_ns_},
+            {"max_receive_to_decision_ns", pure_arb_max_receive_to_decision_ns_},
+            {"contexts", std::move(contexts)},
+        };
+        atomic_write(pure_arb_status_path_, json::serialize(status) + "\n");
     }
 
     void start() {
@@ -638,6 +986,7 @@ public:
                 throw std::runtime_error("cannot flush canonical observer evidence");
             }
         }
+        if (pure_arb_output_.is_open()) pure_arb_output_.flush();
         if (compact_label_output_.is_open()) {
             compact_label_output_.flush();
             if (!compact_label_output_) throw std::runtime_error("cannot flush compact PM label tape");
@@ -653,6 +1002,7 @@ public:
                 if (!disk_pressure()) write(row);
                 else ++trade_events_suppressed_disk_pressure_;
             }
+            evaluate_pure_arb(row);
             write_book(row);
             wrote = true;
         }
@@ -711,6 +1061,7 @@ public:
         root["book_events_suppressed_disk_pressure"] = book_events_suppressed_disk_pressure_;
         root["trade_events_suppressed_disk_pressure"] = trade_events_suppressed_disk_pressure_;
         root["state_only"] = state_only_;
+        root["pure_arb_paper_enabled"] = pure_arb_paper_;
         root["state_publish_ms"] = state_publish_ms_;
         root["book_event_tape_enabled"] = !state_only_;
         root["compact_label_tape_enabled"] = compact_label_output_.is_open();
@@ -761,6 +1112,7 @@ public:
         if (!compact_label_tape_dir_.empty()) {
             atomic_write(compact_label_tape_dir_ / (session_id_ + ".status.json"), serialized_status);
         }
+        write_pure_arb_status(stopped);
         if (publish_flow) write_flow_snapshot(root["timestamp_ms"].as_int64());
     }
 
@@ -1023,6 +1375,22 @@ private:
     bool recover_missing_lineage_ = false;
     fs::path compact_label_tape_dir_;
     fs::path compact_label_path_;
+    bool pure_arb_paper_ = false;
+    fs::path pure_arb_status_path_;
+    fs::path pure_arb_trades_path_;
+    std::ofstream pure_arb_output_;
+    std::vector<pm::v7::BookHotSnapshot> pure_arb_latest_books_;
+    std::vector<std::uint64_t> pure_arb_book_epochs_;
+    std::vector<std::int64_t> pure_arb_book_receive_wall_ms_;
+    std::vector<PureArbMarketState> pure_arb_markets_;
+    std::uint64_t pure_arb_evaluations_ = 0;
+    std::uint64_t pure_arb_fee_blocked_evaluations_ = 0;
+    std::uint64_t pure_arb_total_cycles_ = 0;
+    double pure_arb_total_pnl_ = 0.0;
+    std::int64_t pure_arb_last_decision_compute_ns_ = 0;
+    std::int64_t pure_arb_max_decision_compute_ns_ = 0;
+    std::int64_t pure_arb_last_receive_to_decision_ns_ = 0;
+    std::int64_t pure_arb_max_receive_to_decision_ns_ = 0;
     std::ofstream compact_label_output_;
     std::uint64_t compact_label_records_ = 0;
     std::uint64_t compact_label_records_suppressed_disk_pressure_ = 0;
@@ -1104,7 +1472,7 @@ int main(int argc, char** argv) {
             ExactWsObserver observer(
                 std::move(tokens), options.ws_url, options.output_dir, options.model_sha,
                 options.state_only, options.state_publish_ms, options.selection_only,
-                options.compact_label_tape_dir);
+                options.compact_label_tape_dir, options.pure_arb_paper);
             const fs::path disk_pressure_marker = fs::path(options.run_root) / "control" / "DISK_PRESSURE";
             const auto local_disk_pressure = [&]() {
                 if (fs::exists(disk_pressure_marker)) return true;
@@ -1134,6 +1502,7 @@ int main(int argc, char** argv) {
                 if (now - last_membership_check_ms >= 1000) {
                     last_membership_check_ms = now;
                     observer.set_disk_pressure(local_disk_pressure());
+                    if (options.pure_arb_paper) observer.refresh_pure_arb_metadata(options.selection);
                     // Price/feature refreshes do not change the subscription.
                     // Restarting on every mtime update erased queue evidence.
                     reload = !options.selection_only
@@ -1151,7 +1520,11 @@ int main(int argc, char** argv) {
                         reload = reload || load_selected_pairs(options.selection, options.selection_only, options.model_sha) != selected_pairs;
                     }
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                if (options.pure_arb_paper) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(50));
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
             }
             observer.stop();
         }
