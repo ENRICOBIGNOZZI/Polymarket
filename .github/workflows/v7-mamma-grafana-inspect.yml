@@ -90,9 +90,39 @@ jobs:
           for p in "$HOME/.config/polymarket/grafana.ini" /opt/homebrew/etc/grafana/grafana.ini /usr/local/etc/grafana/grafana.ini; do
             if [[ -f "$p" ]]; then echo "--- $p"; grep -E '^(provisioning|root_url|http_addr|http_port|paths|data|logs|plugins|provisioning)' "$p" || true; fi
           done
-          echo "=== PROVISIONING FILES ==="
-          find "$HOME/.config/polymarket" /opt/homebrew/etc/grafana /usr/local/etc/grafana -maxdepth 5 -type f \
-            \( -name '*.yml' -o -name '*.yaml' -o -name '*.json' \) 2>/dev/null | grep -E 'grafana|dashboard|provision' | head -200 || true
+          echo "=== ACTIVE CACHE TREE ==="
+          find "$HOME/.cache/polymarket-grafana-london" -maxdepth 5 -type f \
+            \( -name '*.yml' -o -name '*.yaml' -o -name '*.json' -o -name '*.ini' -o -name '*.log' \) 2>/dev/null | sort | head -300 || true
+          echo "=== ACTIVE DASHBOARD PROVIDERS ==="
+          for p in "$HOME/.cache/polymarket-grafana-london/config/provisioning/dashboards/"*.yml "$HOME/.cache/polymarket-grafana-london/config/provisioning/dashboards/"*.yaml; do
+            [[ -f "$p" ]] || continue
+            echo "--- $p"
+            cat "$p"
+          done
+          echo "=== ACTIVE DASHBOARD FILES ==="
+          find "$HOME/.cache/polymarket-grafana-london" -type f -name '*.json' 2>/dev/null | while read -r p; do
+            python3 - "$p" <<'PY'
+import json,sys,os
+try:
+    v=json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+if isinstance(v,dict) and (v.get('uid') or v.get('title')):
+    print(os.path.abspath(sys.argv[1]), 'uid='+str(v.get('uid')), 'title='+str(v.get('title')))
+PY
+          done
+          echo "=== GRAFANA API SEARCH ==="
+          curl -sS -w '\nHTTP_SEARCH=%{http_code}\n' 'http://127.0.0.1:3000/api/search?query=Pure%20Arbitrage' || true
+          echo "=== GRAFANA UID LOOKUP ==="
+          curl -sS -w '\nHTTP_UID=%{http_code}\n' 'http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7-pure-arb' || true
+          echo "=== GRAFANA LOG TAIL ==="
+          for p in "$HOME/.cache/polymarket-grafana-london/logs/"*.log; do
+            [[ -f "$p" ]] || continue
+            echo "--- $p"
+            tail -n 250 "$p" | grep -Ei 'provision|dashboard|error|warn|folder|pure' || true
+          done
+          echo "=== SERVICE CONTROL STATUS ==="
+          sudo -n /usr/local/sbin/polymarket-service-control status || true
           echo "=== DASHBOARD UIDS ==="
           python3 - <<'PY'
           import sqlite3,os,json
