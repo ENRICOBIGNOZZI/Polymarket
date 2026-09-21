@@ -1,0 +1,119 @@
+name: V7 Direct Action nested risk London research
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-direct-action-risk-research-request.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: v7-direct-action-risk-research
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Require explicit PAPER risk research request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-direct-action-risk-research-request.json
+          test -s "$request"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-direct-action-risk-research
+          aws-region: eu-west-2
+
+      - name: Run nested risk frontier on London PAPER evidence
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: python3 ops/v7_direct_action_risk_research_ssm.py "$REQUEST" "$GITHUB_SHA"
+
+      - name: Require leakage-safe empirical risk frontier
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          request=json.loads(Path(sys.argv[1]).read_text())
+          result=json.loads((Path(request["output_directory"])/"risk_frontier.json").read_text())
+          assert result["paper_only"] is True
+          assert result["authenticated_execution"] is False
+          assert result["real_order_submission"] is False
+          assert result["real_capital_at_risk"] is False
+          assert result["state"]=="READY", result["state"]
+          assert result["risk_budget"] is None
+          assert result["mean_covariance_estimation"] is False
+          assert result["gaussian_risk_assumption"] is False
+          nested=result["nested_frontier"]
+          assert nested["state"]=="READY"
+          assert nested["selection_semantics"]==(
+              "INNER_VALIDATION_ONLY_OUTER_OOS_NEVER_USED_TO_CHOOSE_RISK_POLICY"
+          )
+          for fold in nested["folds"]:
+              selection=fold.get("selection") or {}
+              assert selection.get("state") in (
+                  "NO_RISK_BUDGET_NO_AUTOMATIC_SELECTION",
+                  "INSUFFICIENT_INNER_FOLDS_NO_POLICY_SELECTION",
+              )
+              assert selection.get("policy_id") is None
+          print(json.dumps({
+              "state":result["state"],
+              "outer_folds":len(nested["folds"]),
+              "selection":"NO_SINGLE_POLICY_WITHOUT_HUMAN_RISK_BUDGET",
+              "validation_pareto_sets":[
+                  (fold.get("selection") or {}).get("qualified_policy_ids",[])
+                  for fold in nested["folds"]
+              ],
+          },sort_keys=True))
+          PY
+
+      - name: Publish immutable nested risk research
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Risk research results unchanged."
+            exit 0
+          fi
+          git commit -m "Publish London Direct Action nested risk frontier"
+          if ! git push origin HEAD:main; then
+            git fetch origin main
+            if git rebase origin/main && git push origin HEAD:main; then
+              echo "Published after clean rebase."
+            else
+              git rebase --abort || true
+              branch="research/direct-action-risk-results-${GITHUB_RUN_ID}"
+              git push origin "HEAD:refs/heads/${branch}"
+              echo "Published fallback branch ${branch}; manual merge required."
+              exit 1
+            fi
+          fi
