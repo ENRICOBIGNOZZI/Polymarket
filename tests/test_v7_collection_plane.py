@@ -12,6 +12,9 @@ def test_collection_plane_is_separate_from_trading_model_lifecycle():
     assert "ZERO_AUTHORITY_DATA_COLLECTION" in script
     assert "PM_V7_AUTHENTICATED_EXECUTION=1" not in script
     assert "PM_V7_REAL_ORDER_SUBMISSION=1" not in script
+    assert "v7_runtime_resource_plan.py" not in script
+    assert "trading_runtime_resource_plan_required" in script
+    assert "PM_V7_COLLECTION_NICE" in script
 
 
 def test_collection_service_has_its_own_systemd_lifecycle_and_root():
