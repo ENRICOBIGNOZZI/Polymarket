@@ -890,6 +890,7 @@ class DirectActionValueModel:
         maximum_effective_signal_age_ms=None,
         partial_pooling_enabled=True,
         partial_pooling_penalty_multiplier=4.0,
+        minimum_bilateral_opposite_side_markets=0,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -910,6 +911,12 @@ class DirectActionValueModel:
         self.partial_pooling_enabled = bool(partial_pooling_enabled)
         self.partial_pooling_penalty_multiplier = float(
             partial_pooling_penalty_multiplier)
+        self.minimum_bilateral_opposite_side_markets = int(
+            minimum_bilateral_opposite_side_markets)
+        if self.minimum_bilateral_opposite_side_markets < 0:
+            raise ValueError(
+                "minimum bilateral opposite-side markets must be nonnegative")
+        self.bilateral_support_markets = 0
         if (
             not finite(self.partial_pooling_penalty_multiplier)
             or self.partial_pooling_penalty_multiplier < 1.0
@@ -1225,6 +1232,8 @@ class DirectActionValueModel:
             partial_pooling_enabled=self.partial_pooling_enabled,
             partial_pooling_penalty_multiplier=(
                 self.partial_pooling_penalty_multiplier),
+            minimum_bilateral_opposite_side_markets=(
+                self.minimum_bilateral_opposite_side_markets),
         )
 
     def _prequential_selected_policy_calibration(
@@ -1489,6 +1498,73 @@ class DirectActionValueModel:
                if include_score_values else {}),
         }
 
+    def _bilateral_support_summary(self, rows):
+        """Count markets with causal executable support on both YES and NO."""
+        bilateral_markets = set()
+        yes_markets = set()
+        no_markets = set()
+        for row in rows:
+            market = str(row.get("market_id") or "")
+            if not market:
+                continue
+            sides = decision_action_sides(row)
+            if "YES" not in sides or "NO" not in sides:
+                continue
+            side_ready = {}
+            for side in ("YES", "NO"):
+                ready = False
+                for latency in self.train_latencies_ms:
+                    for horizon in self.action_horizons_ms:
+                        if horizon <= latency:
+                            continue
+                        kernel, _ = action_execution_kernel(
+                            row,
+                            horizon_ms=horizon,
+                            latency_ms=latency,
+                            side=side,
+                            entry_cap=self.entry_cap,
+                        )
+                        if kernel is not None:
+                            ready = True
+                            break
+                    if ready:
+                        break
+                side_ready[side] = ready
+            if side_ready["YES"]:
+                yes_markets.add(market)
+            if side_ready["NO"]:
+                no_markets.add(market)
+            if side_ready["YES"] and side_ready["NO"]:
+                bilateral_markets.add(market)
+        return {
+            "bilateral_markets": len(bilateral_markets),
+            "yes_supported_markets": len(yes_markets),
+            "no_supported_markets": len(no_markets),
+            "minimum_required_markets": (
+                self.minimum_bilateral_opposite_side_markets),
+            "opposite_side_ready": (
+                len(bilateral_markets)
+                >= self.minimum_bilateral_opposite_side_markets
+            ),
+            "semantics": (
+                "BOTH_SIDES_REQUIRE_CAUSAL_DECISION_ARRIVAL_EXIT_SUPPORT_"
+                "IN_THE_SAME_TRAINING_MARKET"
+            ),
+        }
+
+    def _eligible_action_sides(self, row):
+        sides = decision_action_sides(row)
+        if not ("YES" in sides and "NO" in sides):
+            return sides
+        ready = (
+            int(getattr(self, "bilateral_support_markets", 0))
+            >= self.minimum_bilateral_opposite_side_markets
+        )
+        if ready:
+            return sides
+        selected = selected_action_side(row)
+        return (selected,)
+
     def _streaming_ridge(self):
         return StreamingRidge(
             self.model_feature_names,
@@ -1613,6 +1689,13 @@ class DirectActionValueModel:
                 1e-6, deployment_mean.target_std)
 
         self.mean_model = deployment_mean
+        support_rows = [
+            row for row in rows
+            if str(row.get("market_id")) in mean_fit_markets
+        ]
+        bilateral_support = self._bilateral_support_summary(support_rows)
+        self.bilateral_support_markets = int(
+            bilateral_support["bilateral_markets"])
         training_states_used = sum(
             1 for row in rows if str(row["market_id"]) in mean_fit_markets)
         self.training_receipt = {
@@ -1640,7 +1723,11 @@ class DirectActionValueModel:
                 "CONFIGURED_VENUE_PLUS_TRANSPORT_FLOOR"
             ),
             "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
-            "opposite_side_counterfactual": "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_AND_EXIT_EVIDENCE",
+            "opposite_side_counterfactual": (
+                "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_"
+                "EXIT_EVIDENCE_AND_TRAINING_SUPPORT_GATE"
+            ),
+            "bilateral_side_support": bilateral_support,
             "entry_cap": self.entry_cap,
             "hard_order_notional": self.hard_order_notional,
             "model": "STREAMING_RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
@@ -2009,13 +2096,13 @@ class DirectActionValueModel:
             and any(
                 (decision_side_state(row, side) is not None
                  and float(decision_side_state(row, side)["ask"]) <= self.entry_cap + 1e-12)
-                for side in decision_action_sides(row)
+                for side in self._eligible_action_sides(row)
             )
         ):
             return [], "OUTSIDE_LIVE_GEOMETRY"
 
         scored = []
-        for side in decision_action_sides(row):
+        for side in self._eligible_action_sides(row):
             lower, upper = self._quantity_bounds(row, available_capital, side)
             if upper + 1e-12 < lower or upper <= 0:
                 continue
