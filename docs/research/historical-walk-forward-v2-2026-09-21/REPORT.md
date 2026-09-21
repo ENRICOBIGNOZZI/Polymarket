@@ -3,19 +3,20 @@
 ## Direct answers
 
 - Positive gross/net executable alpha: **ZERO POINT ESTIMATE / INSUFFICIENT EVIDENCE**
-- PM lag after causal external signal: **UNKNOWN / INSUFFICIENT EVIDENCE**
+- PM lag after causal external signal: **POSITIVE DESCRIPTIVE 250MS MOVE**
 - Prior zero-trade diagnosis: **see PM executable-edge distribution and funnel below.**
 - Principal bottleneck: **SEE_FUNNEL_AND_FRICTION_DECOMPOSITION**
 
 ## Identity
 
-- Starting SHA: 92167499de26a9f7daf7891c8a0a284af7064a76
-- Data SHA: a6f5806690c74fd77442f8943b1644d053475bcaf040a83e310b0ab064c22649
+- Starting SHA: f613cd80fb37556ea993fb2583596d26b42311bb
+- Data SHA: de51aca99c14342a59ea62a49df32f11335d1b183c263ac8b5b3501f926603be
 - Input state: READY
-- Decisions: 280669
-- Markets: 1552
-- Short-horizon pairs: 146473
-- OOS predictions: 194968
+- Decisions: 300318
+- Markets: 1654
+- Short-horizon pairs: 61090
+- OOS predictions: 212118
+- Full-window repricing models ready: 7
 
 ## Selected combined-policy economics
 
