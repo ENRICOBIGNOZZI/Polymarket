@@ -48,6 +48,15 @@ jobs:
           systemctl show polymarket-v7-paper.service -p ActiveEnterTimestamp -p ExecMainStatus -p ExecMainCode -p Result -p MainPID -p Environment --no-pager | head -30 || true
           echo "=== PAPER STATUS ==="
           systemctl --no-pager --full status polymarket-v7-paper.service || true
+          echo "=== SUPERVISOR CONTROL ==="
+          ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
+          for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json; do
+            echo "--- $name ---"
+            cat "$ROOT/control/$name" 2>/dev/null || true
+            echo
+          done
+          echo "--- KILL ---"
+          if [[ -e "$ROOT/control/KILL" ]]; then ls -l "$ROOT/control/KILL"; cat "$ROOT/control/KILL" || true; else echo ABSENT; fi
           echo "=== PAPER JOURNAL ==="
           journalctl -u polymarket-v7-paper.service -n 160 --no-pager || true'
           encoded="$(printf '%s' "$payload" | base64 -w0)"
