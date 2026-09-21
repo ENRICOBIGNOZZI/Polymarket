@@ -1,6 +1,10 @@
 name: V7 independent collection health
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-collection-health-request.json
   schedule:
     - cron: "*/10 * * * *"
   workflow_run:
