@@ -2114,3 +2114,65 @@ def test_shock_reentry_respects_active_per_market_exposure_cap():
         (float(value.get("replay_max_gross_notional") or 0.0) for value in outcomes),
         default=0.0,
     ) <= 5.0 + 1e-12
+
+
+
+def test_marginal_edge_sizing_does_not_explode_from_fixed_cash_intercept_at_low_price():
+    class FixedInterceptModel(DirectActionValueModel):
+        def __init__(self):
+            super().__init__(
+                action_horizons_ms=(500,),
+                train_latencies_ms=(50,),
+                hard_order_notional=100.0,
+            )
+            self.fitted = True
+            self.regime_action_target_counts = {}
+            self.side_regime_action_target_counts = {}
+            self.selection_optimism_penalty = 0.0
+
+        def _score_quantity(self, row, *, size, horizon_ms, latency_ms, side,
+                            portfolio_state, capital_budget):
+            state = decision_side_state(row, side)
+            notional = float(size) * float(state["ask"])
+            # Deliberately large fixed intercept plus a stable 2% marginal edge.
+            value = 1.0 + 0.02 * notional
+            return {
+                "action": "TRADE",
+                "side": side,
+                "size": float(size),
+                "exit_horizon_ms": int(horizon_ms),
+                "latency_ms": int(latency_ms),
+                "notional": notional,
+                "calibrated_lower_value": value,
+                "policy_utility": value,
+                "predicted_total_net_cash_pnl": value,
+                "predicted_total_net_pnl": value,
+                "policy_loss": -value,
+                "evidence_support_probability": 1.0,
+            }
+
+    model = FixedInterceptModel()
+    policy = EdgeSizingPolicy(context_count=30)
+    cheap = row("m12000", signal=2.0, exit_bid=.10, depth=10000.0, ask=.01, minimum=5.0)
+    rich = row("m12001", signal=2.0, exit_bid=.60, depth=10000.0, ask=.50, minimum=5.0)
+    cheap_pick = model.select_action_edge_sized(
+        cheap, latency_ms=50, available_capital=100.0,
+        capital_budget=10_000.0, sizing_policy=policy)
+    rich_pick = model.select_action_edge_sized(
+        rich, latency_ms=50, available_capital=100.0,
+        capital_budget=10_000.0, sizing_policy=policy)
+    assert cheap_pick["action"] == "TRADE"
+    assert rich_pick["action"] == "TRADE"
+    assert math.isclose(
+        cheap_pick["raw_marginal_edge_per_dollar"], 0.02,
+        rel_tol=0.0, abs_tol=1e-10)
+    assert math.isclose(
+        rich_pick["raw_marginal_edge_per_dollar"], 0.02,
+        rel_tol=0.0, abs_tol=1e-10)
+    assert math.isclose(
+        cheap_pick["desired_notional_before_constraints"],
+        rich_pick["desired_notional_before_constraints"],
+        rel_tol=0.0, abs_tol=1e-10)
+    # Average total utility/notional is intentionally very different because
+    # of the fixed intercept; it must not drive sizing anymore.
+    assert cheap_pick["admission_return_on_notional"] > rich_pick["admission_return_on_notional"]
