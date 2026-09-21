@@ -632,14 +632,30 @@ def feature_names(records):
 
 
 def settlement_predictors(train, test):
-    """Reuse the three existing settlement families; never substitute a proxy."""
-    output = {"pm": [], "logistic_offset": [], "boosted_offset": []}
+    """Reuse the existing settlement families without making PM depend on labels.
+
+    The PM baseline is the contemporaneous midpoint and is therefore available
+    causally for every valid test row without fitting. Learned correction
+    families remain unavailable until resolved labels exist strictly before the
+    fold cutoff.
+    """
+    output = {
+        "pm": [(row["bid"] + row["ask"]) / 2 for row in test],
+        "logistic_offset": [None] * len(test),
+        "boosted_offset": [None] * len(test),
+    }
     if not train:
-        return output, {"state": "INSUFFICIENT_TRAINING"}
+        return output, {"state": "PM_BASELINE_ONLY_INSUFFICIENT_SETTLEMENT_TRAINING",
+                        "families": ["pm"], "training_cutoff_ns": None,
+                        "failures": {"logistic_offset": "INSUFFICIENT_TRAINING",
+                                     "boosted_offset": "INSUFFICIENT_TRAINING"}}
     try:
         from research.learning.models import Candidate, FAMILIES
     except ImportError:
-        return output, {"state": "EXISTING_SETTLEMENT_FAMILIES_UNAVAILABLE"}
+        return output, {"state": "PM_BASELINE_ONLY_EXISTING_FAMILIES_UNAVAILABLE",
+                        "families": ["pm"], "training_cutoff_ns": None,
+                        "failures": {"logistic_offset": "IMPORT_ERROR",
+                                     "boosted_offset": "IMPORT_ERROR"}}
     cutoff = min(row["decision_ns"] for row in test) if test else max(row["decision_ns"] for row in train) + 1
     def adapt(row):
         return {
@@ -652,6 +668,8 @@ def settlement_predictors(train, test):
     train_rows, test_rows = [adapt(row) for row in train], [adapt(row) for row in test]
     failures = {}
     for family in FAMILIES:
+        if family == "pm":
+            continue
         try:
             model = Candidate(family, ridge=8.0, weighting="market", seed=20260920).fit(train_rows, cutoff)
             output[family] = [float(value) for value in model.predict(test_rows)]
