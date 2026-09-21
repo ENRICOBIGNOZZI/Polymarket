@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_multi_alpha_2h_request_v1",
   "version": 1,
-  "request_id": "multi-alpha-2h-fast-discovery-20260921",
+  "request_id": "multi-alpha-2h-fast-discovery-retry1-20260921",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "285d2d1222d1f7b935243b1a7297573ed705f9ba",
+  "expected_research_sha": "6685061b950b078f3bde296f08347cd460420ab0",
   "minimum_wall_ns": 1790007780000000000,
   "output_directory": "docs/research/multi-alpha-2h-2026-09-21",
   "paper_only": true,
