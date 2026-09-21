@@ -1496,3 +1496,69 @@ def test_partial_pooling_multiplier_below_one_is_rejected():
         assert "partial pooling penalty multiplier" in str(exc)
     else:
         raise AssertionError("expected invalid pooling multiplier to fail")
+
+
+
+def test_bilateral_support_gate_requires_training_market_support():
+    rows = [
+        bilateral_row("m" + str(index + 9400), no_depth=10.0)
+        for index in range(4)
+    ]
+    probe = bilateral_row("m9499", no_depth=10.0)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_bilateral_opposite_side_markets=5,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels(rows)
+    support = model._bilateral_support_summary(rows)
+    assert support["bilateral_markets"] == 4
+    assert support["yes_supported_markets"] == 4
+    assert support["no_supported_markets"] == 4
+    assert support["opposite_side_ready"] is False
+
+    model.bilateral_support_markets = 4
+    assert model._eligible_action_sides(probe) == ("YES",)
+    model.bilateral_support_markets = 5
+    assert model._eligible_action_sides(probe) == ("YES", "NO")
+
+
+def test_bilateral_support_gate_never_blocks_selected_side():
+    legacy = row("m9500")
+    model = DirectActionValueModel(
+        minimum_bilateral_opposite_side_markets=100,
+        selection_calibration_mode="OFF",
+    )
+    model.bilateral_support_markets = 0
+    assert model._eligible_action_sides(legacy) == ("SELECTED",)
+
+
+def test_bilateral_support_receipt_uses_training_only_markets():
+    rows = [
+        bilateral_row("m" + str(index + 9510), no_depth=10.0)
+        for index in range(12)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_bilateral_opposite_side_markets=8,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    support = model.training_receipt["bilateral_side_support"]
+    assert support["bilateral_markets"] == 12
+    assert support["minimum_required_markets"] == 8
+    assert support["opposite_side_ready"] is True
+
+
+def test_negative_bilateral_support_threshold_is_rejected():
+    try:
+        DirectActionValueModel(minimum_bilateral_opposite_side_markets=-1)
+    except ValueError as exc:
+        assert "minimum bilateral opposite-side markets" in str(exc)
+    else:
+        raise AssertionError("expected negative bilateral support threshold to fail")
