@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_native_2h_alpha_main_request_v1",
   "version": 1,
-  "request_id": "native-2h-alpha-equity-gallery-v4-fs-discovery-20260922",
+  "request_id": "native-2h-alpha-equity-gallery-v5-hft-root-20260922",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "cd927bd320662031e197702a5c22024180689039",
+  "expected_research_sha": "45ba8718af304121f80938fff79cd31cb9d6e8af",
   "minimum_wall_ns": 1790007780000000000,
   "research_branch": "multi-alpha-2h-20260921",
   "output_directory": "docs/research/native-alpha-2h-2026-09-21",
