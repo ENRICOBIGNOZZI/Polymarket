@@ -32,6 +32,8 @@ SOURCE_PATHS = (
     "research/learning/models.py",
     "research/learning/validation.py",
     "scripts/v7_evidence_store.py",
+    "config/v7_native_risk_policy.json",
+    "config/v7_crypto_signal_policy.json",
     "research/requirements-learning.txt",
 )
 
