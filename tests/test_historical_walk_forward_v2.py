@@ -15,6 +15,7 @@ from research.walk_forward_v2.core import (
     valid_native,
     native_repricing_point,
     attach_native_repricing,
+    attach_native_repricing_stream,
 )
 
 
@@ -321,3 +322,36 @@ def test_full_window_repricing_fit_uses_all_observed_history_without_promotion()
         assert model["label_sources"] == {"NATIVE_REPRICING_KIND6_ASOF_HORIZON": 10}
         assert model["training_start_ns"] == rows[0]["decision_ns"]
         assert model["training_end_ns"] == rows[-1]["decision_ns"]
+
+
+
+def test_native_kind6_streaming_attaches_without_materializing_label_corpus(tmp_path):
+    origin = record("stream")
+    origin.update({
+        "server_id": "s1", "run_id": "r1", "capture_id": "c1",
+        "signal_version": 5, "repricing_origin_signal_version": 5,
+        "decision_monotonic_ns": 2_000_000_000,
+    })
+    label = {
+        "schema": "polymarket_v7_native_observation_v1",
+        "paper_only": True, "execution_authority": False, "kind": 6,
+        "server_id": "s1", "run_id": "r1", "capture_id": "c1",
+        "market_id": "stream", "token_id": "yes-stream",
+        "repricing_origin_signal_version": 5, "repricing_horizon_ms": 250,
+        "decision_monotonic_ns": 2_000_000_000,
+        "decision_wall_ns": origin["decision_ns"],
+        "observed_monotonic_ns": 2_250_000_001,
+        "close_monotonic_ns": 200_000_000_000,
+        "connection_epoch": 7, "repricing_pair_valid": True, "book_valid": True,
+        "bid_e4": 5200, "ask_e4": 5300, "tick_e4": 100,
+        "ask_quantity": 6_000_000,
+    }
+    path = tmp_path / "native.jsonl"
+    import json
+    path.write_text(json.dumps(label) + "\n")
+    proof = attach_native_repricing_stream([origin], [path])
+    assert proof["native_label_rows"] == 1
+    assert proof["matched_target_rows"] == 1
+    assert proof["short_horizon_observed_pairs"] == 1
+    assert origin["targets"]["250"]["state"] == "OBSERVED"
+    assert origin["arrivals"]["250"]["quantity"] == 6.0
