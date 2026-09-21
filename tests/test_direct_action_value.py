@@ -28,6 +28,8 @@ from research.walk_forward_v3.direct_action import (
     summarize_direct_action,
     merge_direct_action_summaries,
     bilateral_evidence_summary,
+    configured_operational_latency_floor_ms,
+    effective_signal_age_ms,
 )
 
 
@@ -1293,3 +1295,103 @@ def test_prequential_selection_scores_are_generated_on_later_market_blocks():
         "FINAL_MODEL_MAY_LATER_REFIT_ON_HISTORICAL_SCORE_BLOCKS;"
         "NOT_A_FINAL_MODEL_CONFORMAL_COVERAGE_CLAIM"
     )
+
+
+
+def test_effective_signal_age_and_operational_latency_floor_are_distinct():
+    r = row("m9100")
+    r["signal_age_ns"] = 20_000_000
+    r["paper_venue_delay_ns"] = 25_000_000
+    r["paper_assumed_transport_delay_ns"] = 50_000_000
+
+    assert math.isclose(
+        configured_operational_latency_floor_ms(r), 75.0, abs_tol=1e-12)
+    assert math.isclose(effective_signal_age_ms(r, 50), 70.0, abs_tol=1e-12)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+    action = model._action_record(
+        r, size=5.0, horizon_ms=500, latency_ms=50)
+    features = action["features"]
+    assert math.isclose(
+        features["state.effective_research_age_ms"], 70.0, abs_tol=1e-12)
+    assert math.isclose(
+        features["state.effective_operational_age_ms"], 95.0, abs_tol=1e-12)
+    assert math.isclose(
+        features["system.operational_latency_floor_ms"], 75.0, abs_tol=1e-12)
+    assert features["system.operational_latency_floor_known"] == 1.0
+    assert math.isclose(
+        features["system.research_latency_minus_operational_floor_ms"],
+        -25.0, abs_tol=1e-12)
+    assert action["research_latency_operationally_supported"] is False
+
+
+def test_unknown_operational_latency_never_claims_research_latency_is_supported():
+    r = row("m9101")
+    r["paper_venue_delay_ns"] = -1
+    r["paper_assumed_transport_delay_ns"] = 50_000_000
+    assert configured_operational_latency_floor_ms(r) is None
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+    action = model._action_record(
+        r, size=5.0, horizon_ms=500, latency_ms=50)
+    assert action["operational_latency_floor_ms"] is None
+    assert action["research_latency_operationally_supported"] is None
+
+
+def test_effective_signal_age_gate_fail_closed_before_action_scoring():
+    import numpy as np
+
+    r = row("m9102")
+    r["signal_age_ns"] = 80_000_000
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        maximum_effective_signal_age_ms=100.0,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+
+    class FlatModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in names}
+            self.scale = {name: 1.0 for name in names}
+            self.beta = np.zeros(1 + 2 * len(names), dtype=float)
+            self.beta[0] = 1.0
+
+        def predict(self, record):
+            return 1.0
+
+    model.mean_model = FlatModel(model.model_feature_names)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.fitted = True
+
+    scored, state = model.score_actions(r, latency_ms=50)
+    assert scored == []
+    assert state == "EFFECTIVE_SIGNAL_AGE_GATE"
+
+
+def test_prequential_clone_preserves_effective_signal_age_gate():
+    model = DirectActionValueModel(
+        maximum_effective_signal_age_ms=125.0,
+        selection_calibration_mode="PREQUENTIAL",
+    )
+    clone = model._prequential_clone()
+    assert clone.maximum_effective_signal_age_ms == 125.0
+    assert clone.selection_calibration_mode == "OFF"
