@@ -18,7 +18,7 @@ def test_collection_service_has_its_own_systemd_lifecycle_and_root():
     unit = (
         ROOT / "ops/systemd/polymarket-v7-collection.service.in"
     ).read_text()
-    assert "ExecStart=@APP_DIR@/scripts/v7_collection_plane.sh" in unit
+    assert "ExecStart=/usr/bin/bash @APP_DIR@/scripts/v7_collection_plane.sh" in unit
     assert "PM_V7_COLLECTION_ROOT=@COLLECTION_ROOT@" in unit
     assert "PM_V7_COLLECTION_SHA=@EXPECTED_SHA@" in unit
     assert "PM_V7_AUTHENTICATED_EXECUTION=0" in unit
