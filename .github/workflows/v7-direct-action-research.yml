@@ -1,0 +1,116 @@
+name: V7 direct action London research
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-direct-action-research-request.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: v7-direct-action-research
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Require explicit PAPER research request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-direct-action-research-request.json
+          test -s "$request"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-direct-action-research
+          aws-region: eu-west-2
+
+      - name: Run direct-action benchmark on London PAPER evidence
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: python3 ops/v7_direct_action_research_ssm.py "$REQUEST" "$GITHUB_SHA"
+
+      - name: Require causal friction-complete research output
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          request=json.loads(Path(sys.argv[1]).read_text())
+          root=Path(request["output_directory"])
+          result=json.loads((root/"direct_action.json").read_text())
+          assert result["paper_only"] is True
+          assert result["authenticated_execution"] is False
+          assert result["real_order_submission"] is False
+          assert result["real_capital_at_risk"] is False
+          assert result["state"]=="READY", result["state"]
+          assert result["mean_covariance_estimation"] is False
+          assert result["summary"]["opportunities"]>0
+          assert len(result["folds"])>0
+          for fold in result["folds"]:
+              training=fold["training"]
+              assert training["mean_covariance_estimation"] is False
+              assert training["training_state_cap"] is None
+              assert training["matrix_strategy"]=="ONE_PASS_SUFFICIENT_STATISTICS_THEN_P_X_P_NORMAL_EQUATIONS"
+              assert training["policy_loss"]=="NEGATIVE_POLICY_UTILITY_WITH_NO_TRADE_BASELINE_ZERO"
+              assert training["gram_matrix_bytes"] < 5_000_000
+          print(json.dumps({
+              "state":result["state"],
+              "opportunities":result["summary"]["opportunities"],
+              "selected_trades":result["summary"]["selected_trades"],
+              "observed_selected_trades":result["summary"]["observed_selected_trades"],
+              "total_observed_net_pnl":result["summary"]["total_observed_net_pnl"],
+              "max_active_positions":result["summary"]["max_active_positions"],
+              "max_gross_notional":result["summary"]["max_gross_notional"],
+          },sort_keys=True))
+          PY
+
+      - name: Publish immutable direct-action research result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Direct-action research results unchanged."
+            exit 0
+          fi
+          git commit -m "Publish London direct-action research result"
+          if ! git push origin HEAD:main; then
+            git fetch origin main
+            if git rebase origin/main && git push origin HEAD:main; then
+              echo "Published after clean rebase."
+            else
+              git rebase --abort || true
+              branch="research/direct-action-results-${GITHUB_RUN_ID}"
+              git push origin "HEAD:refs/heads/${branch}"
+              echo "Published fallback branch ${branch}; manual merge required."
+              exit 1
+            fi
+          fi
