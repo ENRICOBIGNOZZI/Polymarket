@@ -1,0 +1,82 @@
+name: V7 inspect stale SSM deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-inspect-stale-ssm-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate request
+        id: req
+        run: |
+          python3 - deploy/v7-inspect-stale-ssm-request.json "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v['schema']=='polymarket_v7_inspect_stale_ssm_request_v1'
+          assert re.fullmatch(r'[0-9a-f-]{36}',v['command_id'])
+          assert v['read_only'] is True
+          assert v['paper_only'] is True
+          with open(sys.argv[2],'a') as h:h.write('command_id='+v['command_id']+'\n')
+          PY
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-inspect-stale-ssm
+          aws-region: eu-west-2
+      - name: Inspect command safely
+        env:
+          COMMAND_ID: ${{ steps.req.outputs.command_id }}
+        run: |
+          set -euo pipefail
+          aws ssm list-commands --instance-id "$INSTANCE_ID" --region eu-west-2 --output json > /tmp/list.json
+          aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region eu-west-2 --output json > /tmp/invocation.json || true
+          python3 - "$COMMAND_ID" /tmp/list.json /tmp/invocation.json <<'PY' | tee stale-ssm-inspection.txt
+          import json,re,sys
+          cid=sys.argv[1]
+          listing=json.load(open(sys.argv[2]))
+          row=next((x for x in listing.get('Commands',[]) if x.get('CommandId')==cid),{})
+          try: inv=json.load(open(sys.argv[3]))
+          except Exception: inv={}
+          params=row.get('Parameters') if isinstance(row.get('Parameters'),dict) else {}
+          payload=params.get('commands') or []
+          if isinstance(payload,str):payload=[payload]
+          text='\n'.join(map(str,payload))
+          shas=sorted(set(re.findall(r'(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])',text)))
+          markers=[]
+          for pattern in (r'(?:SHA|POLYMARKET_EXPECTED_SHA)=["\']?([0-9a-f]{40})',
+                          r'--expected-sha\s+["\']?([0-9a-f]{40})',
+                          r'by-sha/([0-9a-f]{40})'):
+              markers += re.findall(pattern,text)
+          safe={
+            'command_id':cid,'status':row.get('Status'),'comment':row.get('Comment'),
+            'requested_date_time':str(row.get('RequestedDateTime') or ''),
+            'document_name':row.get('DocumentName'),'target_count':len(row.get('InstanceIds') or []),
+            'all_40hex_shas':shas,'target_markers':sorted(set(markers)),
+            'payload_bytes':len(text.encode()),'invocation_status':inv.get('Status'),
+            'status_details':inv.get('StatusDetails'),
+            'stdout_tail':str(inv.get('StandardOutputContent') or '')[-1200:],
+            'stderr_tail':str(inv.get('StandardErrorContent') or '')[-1200:],
+          }
+          print('STALE_SSM_INSPECTION='+json.dumps(safe,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: stale-ssm-inspection-${{ github.run_id }}
+          path: stale-ssm-inspection.txt
+          retention-days: 7
