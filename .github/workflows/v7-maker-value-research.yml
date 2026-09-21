@@ -1,0 +1,114 @@
+name: V7 Maker value London research
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-maker-value-challenger-request.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-maker-value-research
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Require explicit Maker PAPER research request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-maker-value-challenger-request.json
+          test -s "$request"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-maker-value-research
+          aws-region: eu-west-2
+
+      - name: Run Maker value challenger on London PAPER evidence
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: python3 ops/v7_maker_value_challenger_ssm.py "$REQUEST" "$GITHUB_SHA"
+
+      - name: Require zero-authority Maker economics receipt
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          request=json.loads(Path(sys.argv[1]).read_text())
+          result=json.loads((Path(request['output_directory'])/'maker_value.json').read_text())
+          assert result['paper_only'] is True
+          assert result['authenticated_execution'] is False
+          assert result['real_order_submission'] is False
+          assert result['real_capital_at_risk'] is False
+          assert result['execution_authority']=='ZERO_AUTHORITY_RESEARCH_ONLY'
+          assert result['automatic_promotion'] is False
+          assert result['no_make_baseline_value_per_posted_share']==0.0
+          assert result['label_semantics']==(
+              'SIGNED_EXECUTABLE_MARKOUT_FROM_ACTUAL_FILL_PRICE;'
+              'SPREAD_CAPTURE_ALREADY_EMBEDDED_DO_NOT_ADD_AGAIN'
+          )
+          assert result['counterfactual_scope']==(
+              'OBSERVED_PLACEMENT_ACTION_CELLS_ONLY;'
+              'NO_COUNTERFACTUAL_QUEUE_TRANSFER'
+          )
+          assert result['state'] in ('READY','NO_MAKER_EPISODES')
+          print(json.dumps({
+              'state':result['state'],
+              'diagnostics':result.get('diagnostics'),
+              'split':result.get('split'),
+              'predictive_state':(result.get('predictive_heads') or {}).get('state'),
+              'positive_lcb_actions':result.get('positive_lcb_actions_diagnostic_only'),
+              'subsidies':result.get('subsidies'),
+              'complete_set':result.get('complete_set'),
+          },sort_keys=True))
+          PY
+
+      - name: Publish immutable Maker value research
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Maker value research unchanged."
+            exit 0
+          fi
+          git commit -m "Publish London Maker value challenger"
+          if ! git push origin HEAD:main; then
+            git fetch origin main
+            if git rebase origin/main && git push origin HEAD:main; then
+              echo "Published after clean rebase."
+            else
+              git rebase --abort || true
+              branch="research/maker-value-results-${GITHUB_RUN_ID}"
+              git push origin "HEAD:refs/heads/${branch}"
+              echo "Published fallback branch ${branch}; manual merge required."
+              exit 1
+            fi
+          fi
