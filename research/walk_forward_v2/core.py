@@ -990,6 +990,63 @@ def asset_markout_predictors(train, test):
     return output, details
 
 
+def _with_asset_intercepts(rows, assets):
+    names = ["asset_intercept::" + asset for asset in assets]
+    output = []
+    for row in rows:
+        clone = dict(row)
+        features = dict(row["features"])
+        for asset, name in zip(assets, names):
+            features[name] = 1.0 if row["asset"] == asset else 0.0
+        clone["features"] = features
+        output.append(clone)
+    return output, names
+
+
+def partial_pool_markout_predictors(train, test):
+    """Common slopes plus ridge-shrunk asset intercepts.
+
+    This is a preregistered diagnostic challenger, not promotion-eligible.
+    Ridge remains 8.0 and the economic target is unchanged.
+    """
+    assets = sorted({row["asset"] for row in train + test})
+    base_names = feature_names(train)
+    aug_train, dummy_names = _with_asset_intercepts(train, assets)
+    aug_test, _ = _with_asset_intercepts(test, assets)
+    names = base_names + dummy_names
+    output = {str(h): [None] * len(test) for h in HORIZONS_MS}
+    details = {}
+    for horizon in HORIZONS_MS:
+        key = str(horizon)
+        eligible = [
+            row for row in aug_train
+            if row.get("targets", {}).get(key, {}).get("state") == "OBSERVED"
+        ]
+        if len(eligible) < 8:
+            details[key] = {
+                "state": "INSUFFICIENT_TRAINING_TARGETS",
+                "rows": len(eligible),
+                "ridge": 8.0,
+                "promotion_eligible": False,
+            }
+            continue
+        model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: executable_markout_target(row, h))
+        output[key] = model.predict_many(aug_test)
+        details[key] = {
+            "state": "READY",
+            "rows": len(eligible),
+            "unique_markets": len({row["market_id"] for row in eligible}),
+            "ridge": 8.0,
+            "feature_names": names,
+            "asset_intercepts": dummy_names,
+            "common_slopes": base_names,
+            "target": "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees",
+            "promotion_eligible": False,
+        }
+    return output, details
+
+
 def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                                 edge_threshold=.005, execution_reserve=.005,
                                 entry_cap=.75, shares=5.0,
@@ -1423,6 +1480,8 @@ def walk_forward(records, *, desired_folds=3):
             fold["train_repricing"], fold["test"])
         asset_markout, asset_markout_meta = asset_markout_predictors(
             fold["train_repricing"], fold["test"])
+        partial_pool_markout, partial_pool_meta = partial_pool_markout_predictors(
+            fold["train_repricing"], fold["test"])
         for index, row in enumerate(fold["test"]):
             evaluations.append({
                 "fold": fold["fold"], "cutoff_ns": fold["cutoff_ns"], "decision_id": row["decision_id"],
@@ -1432,6 +1491,9 @@ def walk_forward(records, *, desired_folds=3):
                 "repricing_predictions": {key: values[index] for key, values in repricing.items()},
                 "markout_predictions": {key: values[index] for key, values in markout.items()},
                 "asset_markout_predictions": {key: values[index] for key, values in asset_markout.items()},
+                "partial_pool_markout_predictions": {
+                    key: values[index] for key, values in partial_pool_markout.items()
+                },
             })
         settlement_ids = [row["decision_id"] for row in fold["train_settlement"]]
         repricing_ids = [row["decision_id"] for row in fold["train_repricing"]]
@@ -1448,6 +1510,7 @@ def walk_forward(records, *, desired_folds=3):
         fold["settlement"] = settlement_meta
         fold["repricing"] = repricing_meta
         fold["asset_markout"] = asset_markout_meta
+        fold["partial_pool_markout"] = partial_pool_meta
     return evaluations, {"schema": SCHEMA + "_folds_v1", **SAFETY, "receipt": receipt, "folds": all_folds,
                          "oos_predictions": len(evaluations)}
 
@@ -1552,7 +1615,7 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         return outcome
     funnel["simulated_order"] = True
     outcome["requested"] = requested
-    outcome["reserved_cost"] = min(3.75, requested * entry_cap)
+    outcome["reserved_cost"] = requested * entry_cap
     if ideal == "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND":
         book = {"ask": row["ask"], "bid": row["bid"], "quantity": requested, "time_ns": row["decision_ns"]}
     else:
@@ -1619,7 +1682,7 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
         row = event["row"]
         prediction, repricing = selector(event)
         available = row["market_id"] not in used_markets
-        capital_available = reserved + min(3.75, shares * entry_cap) <= capital_budget + 1e-12
+        capital_available = reserved + shares * entry_cap <= capital_budget + 1e-12
         outcome = replay_one(
             row, prediction, repricing, latency_ms=latency_ms,
             edge_threshold=edge_threshold, entry_cap=entry_cap, shares=shares,
