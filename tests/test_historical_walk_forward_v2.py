@@ -5,6 +5,7 @@ import math
 from research.walk_forward_v2.core import (
     HORIZONS_MS,
     Ridge,
+    asset_markout_predictors,
     book_targets,
     build_dataset,
     folds,
@@ -595,3 +596,44 @@ def test_economic_evaluation_retains_only_fill_level_equity_events():
             event["decision_ns"] for event in events
         )
         assert len(events) <= economics["models"][name]["metrics"]["fills"]
+
+
+
+def test_per_asset_markout_models_use_same_hyperparameters_but_separate_coefficients():
+    train = []
+    base = 1_789_921_800_000_000_001
+    for asset, future_bid in (("BTC", .56), ("ETH", .44)):
+        for index in range(10):
+            row = record(f"{asset.lower()}{index}", decision_ns=base + len(train) * 1_000_000_000)
+            row["asset"] = asset
+            row["fee_rate"] = 0.0
+            row["features"]["x"] = float(index)
+            row["targets"] = {}
+            for horizon in HORIZONS_MS:
+                row["targets"][str(horizon)] = {
+                    "state": "OBSERVED",
+                    "arrival_bid": future_bid,
+                    "mid_change": future_bid - .495,
+                    "observed_time_ns": row["decision_ns"] + horizon * 1_000_000,
+                }
+            train.append(row)
+
+    test = []
+    for asset in ("BTC", "ETH"):
+        row = record(f"test-{asset.lower()}", decision_ns=base + 100_000_000_000 + len(test))
+        row["asset"] = asset
+        row["fee_rate"] = 0.0
+        row["features"]["x"] = 5.0
+        test.append(row)
+
+    predictions, meta = asset_markout_predictors(train, test)
+    btc = predictions["1000"][0]
+    eth = predictions["1000"][1]
+
+    assert btc is not None and eth is not None
+    assert btc > .03
+    assert eth < -.03
+    assert meta["1000"]["BTC"]["ridge"] == 8.0
+    assert meta["1000"]["ETH"]["ridge"] == 8.0
+    assert meta["1000"]["BTC"]["feature_names"] == meta["1000"]["ETH"]["feature_names"]
+    assert meta["1000"]["BTC"]["target"] == meta["1000"]["ETH"]["target"]
