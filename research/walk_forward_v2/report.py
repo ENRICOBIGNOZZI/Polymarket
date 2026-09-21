@@ -79,6 +79,7 @@ def public_economics(economics):
         **SAFETY,
         "prediction_metrics": economics.get("prediction_metrics", {}),
         "pm_edge_distribution": economics.get("pm_edge_distribution", {}),
+        "asset_selection_diagnostics": economics.get("asset_selection_diagnostics", {}),
         "models": {
             name: {
                 "metrics": value.get("metrics", {}),
@@ -89,6 +90,7 @@ def public_economics(economics):
         },
         "latency": economics.get("latency", {}),
         "horizon_latency": economics.get("horizon_latency", {}),
+        "asset_horizon_latency": economics.get("asset_horizon_latency", {}),
         "latency_reference_horizon_ms": economics.get("latency_reference_horizon_ms"),
         "idealized_upper_bounds": economics.get("idealized_upper_bounds", {}),
     }
@@ -357,7 +359,8 @@ def publish(output, *, root, start_sha, data, folds, economics, final_models):
                                   "primary": methodology["primary_latency"],
                                   "reference_horizon_ms": public.get("latency_reference_horizon_ms"),
                                   "fixed": public.get("latency", {}),
-                                  "horizon_latency": public.get("horizon_latency", {})},
+                                  "horizon_latency": public.get("horizon_latency", {}),
+                                  "asset_horizon_latency": public.get("asset_horizon_latency", {})},
         "uncertainty.json": {"schema": SCHEMA + "_uncertainty_v1", **SAFETY,
                               "models": {key: value["uncertainty"] for key, value in public.get("models", {}).items()}},
         "full_window_repricing_models.json": final_models,
