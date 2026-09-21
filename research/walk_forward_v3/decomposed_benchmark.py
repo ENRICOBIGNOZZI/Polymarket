@@ -7,6 +7,7 @@ challenger on exactly the same chronological OOS folds.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import math
 from pathlib import Path
 
@@ -95,6 +96,50 @@ def performance_snapshot(outcomes):
     tail95 = ((risk.get("tail_loss") or {}).get("0.95") or {})
     tail99 = ((risk.get("tail_loss") or {}).get("0.99") or {})
 
+    no_trade_reasons = Counter(
+        str(row.get("reason") or "UNKNOWN")
+        for row in rows if row.get("action") != "TRADE"
+    )
+    calibrated = [
+        row for row in observed
+        if _finite(row.get("predicted_total_net_cash_pnl"))
+    ]
+    prediction_correlation = None
+    prediction_mae = None
+    mean_predicted_cash = None
+    if calibrated:
+        predicted = [
+            float(row["predicted_total_net_cash_pnl"])
+            for row in calibrated
+        ]
+        realized = [float(row["realized_pnl"]) for row in calibrated]
+        mean_predicted_cash = sum(predicted) / len(predicted)
+        prediction_mae = sum(
+            abs(left - right)
+            for left, right in zip(predicted, realized)
+        ) / len(predicted)
+        mx = mean_predicted_cash
+        my = sum(realized) / len(realized)
+        covariance = sum(
+            (left - mx) * (right - my)
+            for left, right in zip(predicted, realized)
+        )
+        variance_x = sum((value - mx) ** 2 for value in predicted)
+        variance_y = sum((value - my) ** 2 for value in realized)
+        if variance_x > 0 and variance_y > 0:
+            prediction_correlation = (
+                covariance / math.sqrt(variance_x * variance_y)
+            )
+
+    losses = sorted(
+        (-float(row["realized_pnl"]), row)
+        for row in observed if float(row["realized_pnl"]) < 0
+    )
+    losses.reverse()
+    total_loss = sum(value for value, _ in losses)
+    worst_three_loss = sum(value for value, _ in losses[:3])
+    worst_five_loss = sum(value for value, _ in losses[:5])
+
     return {
         "schema": SCHEMA + "_performance_v1",
         **SAFETY,
@@ -115,6 +160,29 @@ def performance_snapshot(outcomes):
         "total_observed_net_pnl": pnl,
         "net_pnl_per_day": pnl_day,
         "mean_observed_net_pnl": summary.get("mean_observed_net_pnl"),
+        "mean_predicted_cash_pnl_on_observed": mean_predicted_cash,
+        "prediction_realized_correlation": prediction_correlation,
+        "prediction_mean_absolute_error": prediction_mae,
+        "predicted_positive_realized_negative": sum(
+            float(row["predicted_total_net_cash_pnl"]) > 0
+            and float(row["realized_pnl"]) < 0
+            for row in calibrated
+        ),
+        "predicted_positive_realized_positive": sum(
+            float(row["predicted_total_net_cash_pnl"]) > 0
+            and float(row["realized_pnl"]) > 0
+            for row in calibrated
+        ),
+        "no_trade_reasons": dict(no_trade_reasons.most_common()),
+        "loss_concentration": {
+            "total_negative_pnl_abs": total_loss,
+            "worst_three_negative_pnl_abs": worst_three_loss,
+            "worst_five_negative_pnl_abs": worst_five_loss,
+            "worst_three_fraction": (
+                worst_three_loss / total_loss if total_loss > 0 else None),
+            "worst_five_fraction": (
+                worst_five_loss / total_loss if total_loss > 0 else None),
+        },
         "turnover_notional": turnover,
         "net_pnl_per_dollar_turnover": pnl_turnover,
         "mean_selected_notional": (
