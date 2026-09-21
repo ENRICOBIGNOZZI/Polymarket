@@ -144,7 +144,8 @@ jobs:
           SH
           )"
           command="${command/__SHA__/$TARGET_SHA}"
-          wrapped="$(printf 'bash -lc %q' "$command")"
+          encoded="$(printf '%s' "$command" | base64 -w0)"
+          wrapped="printf '%s' '$encoded' | base64 -d | bash"
           params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["300"]},separators=(",",":")))' "$wrapped")"
           cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$params" --comment "Polymarket V7 Grafana London monitoring-only hotfix" --region "$AWS_REGION" --query 'Command.CommandId' --output text)"
           for i in $(seq 1 90); do
