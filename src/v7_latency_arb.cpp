@@ -118,8 +118,9 @@ LatencyArbDecision LatencyArbLane::construct_candidate(
         }
 
         const auto& instrument = yes ? market.yes : market.no;
-        const auto quantity = std::min(position_microunits_, book.best_bid_microunits);
-        if (quantity < instrument.min_order_microunits) {
+        const auto quantity = position_microunits_;
+        if (quantity < instrument.min_order_microunits
+            || book.best_bid_microunits <= 0) {
             return finish(LatencyArbReason::InsufficientDepth);
         }
         auto id = next_intent_id_++;
