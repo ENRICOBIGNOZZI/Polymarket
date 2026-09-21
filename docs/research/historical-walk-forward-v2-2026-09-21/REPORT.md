@@ -10,25 +10,25 @@
 
 ## Identity
 
-- Starting SHA: 53ed4b3387fe18332a742b99d800f9b2ea0f28a9
-- Data SHA: a6e44d7665d2aac9d7edb8f8ad0e3c0eee1d13c04a0ef8f9653895a1627e6a77
+- Starting SHA: da149e283c9e1bf4a5babfd03a3fa99af3877794
+- Data SHA: cdacd427485cd79a0323930898c61dff39655d7c9aabb73417be59bb1206a36c
 - Input state: READY
-- Decisions: 330677
-- Markets: 1714
-- Short-horizon pairs: 65950
-- OOS predictions: 239957
+- Decisions: 339148
+- Markets: 1738
+- Short-horizon pairs: 67556
+- OOS predictions: 247551
 - Full-window midpoint models ready: 7
 - Full-window executable-markout models ready: 7
 
 ## 500ms reference executable-markout economics
 
-- Simulated orders: 17
-- Fills: 4
-- Marked fills: 4
-- Positive marked fills: 2
-- Net executable markout: 0.17329999999999973
-- Markout/fill: 0.04332499999999993
-- Fill rate: 0.23529411764705882
+- Simulated orders: 28
+- Fills: 11
+- Marked fills: 8
+- Positive marked fills: 3
+- Net executable markout: 0.28099999999999936
+- Markout/fill: 0.03512499999999992
+- Fill rate: 0.39285714285714285
 
 The report never converts unavailable books, labels, forecasts, or fills into zero.
 
@@ -59,3 +59,5 @@ The report never converts unavailable books, labels, forecasts, or fills into ze
 ![13-friction-decomposition.png](13-friction-decomposition.png)
 
 ![14-fill-rate-vs-predicted-edge.png](14-fill-rate-vs-predicted-edge.png)
+
+![15-equity-drawdown-500-1000-2000ms.png](15-equity-drawdown-500-1000-2000ms.png)
