@@ -1,0 +1,30 @@
+name: V7 export deployment SSH public key
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/v7-export-ssh-public.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Derive public key only
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          umask 077
+          key="$RUNNER_TEMP/key"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          chmod 600 "$key"
+          pub="$(ssh-keygen -y -f "$key")"
+          rm -f "$key"
+          test -n "$pub"
+          printf 'V7_SSH_PUBLIC_KEY=%s\n' "$pub"
