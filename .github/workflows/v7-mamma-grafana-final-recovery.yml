@@ -1,0 +1,82 @@
+name: V7 mamma Grafana final recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-mamma-grafana-final-recovery-request.json
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate request
+        run: |
+          python3 - deploy/v7-mamma-grafana-final-recovery-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v=={"schema":"polymarket_v7_mamma_grafana_final_recovery_v1","monitoring_only":True}
+          PY
+
+      - name: Join tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+
+      - name: Recover mamma Grafana
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -P "$SERVER_PORT" \
+            ops/v7_mamma_grafana_recover.sh "$SERVER_USER@$SERVER_HOST:/tmp/v7_mamma_grafana_recover.sh"
+          ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          chmod 700 /tmp/v7_mamma_grafana_recover.sh
+          /tmp/v7_mamma_grafana_recover.sh
+          rm -f /tmp/v7_mamma_grafana_recover.sh
+
+          echo "=== PURE ARB DATASOURCE ==="
+          result="$(curl -fsS --get \
+            --data-urlencode 'query=polymarket_pure_arb_up' \
+            http://100.102.9.16:19091/api/v1/query)"
+          printf '%s\n' "$result"
+          python3 - "$result" <<'PY'
+          import json,sys
+          v=json.loads(sys.argv[1])
+          rows=v.get('data',{}).get('result',[])
+          assert rows, v
+          assert any(float(row['value'][1])==1.0 for row in rows)
+          print('MAMMA_PURE_ARB_METRIC_OK=1')
+          PY
+
+          echo "=== FOLDER SEARCH ==="
+          search="$(curl -fsS 'http://127.0.0.1:3000/api/search?folderUIDs=afyms0c1xjabkf')"
+          printf '%s\n' "$search"
+          python3 - "$search" <<'PY'
+          import json,sys
+          rows=json.loads(sys.argv[1])
+          assert any(x.get('uid')=='polymarket-v7-pure-arb' for x in rows), rows
+          print('MAMMA_FOLDER_PURE_ARB_OK=1')
+          PY
+          REMOTE
