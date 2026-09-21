@@ -119,8 +119,12 @@ def action_side_sign(row, side):
 def decision_side_state(row, side=None):
     side = side or selected_action_side(row)
     pair = row.get("pair")
-    if side in ("YES", "NO") and isinstance(pair, dict):
-        state = pair.get(side)
+    if (
+        side in ("YES", "NO")
+        and isinstance(pair, dict)
+        and pair.get("state") == "BILATERAL_EXECUTABLE_READY"
+    ):
+        state = pair.get(side.lower())
         if isinstance(state, dict):
             return {
                 "bid": float(state["bid"]),
@@ -141,8 +145,12 @@ def decision_side_state(row, side=None):
 
 def observed_side_state(container, side, row):
     pair = container.get("pair") if isinstance(container, dict) else None
-    if side in ("YES", "NO") and isinstance(pair, dict):
-        state = pair.get(side)
+    if (
+        side in ("YES", "NO")
+        and isinstance(pair, dict)
+        and pair.get("state") == "BILATERAL_EXECUTABLE_READY"
+    ):
+        state = pair.get(side.lower())
         if isinstance(state, dict):
             return {
                 "bid": float(state["bid"]),
@@ -166,9 +174,14 @@ def observed_side_state(container, side, row):
 
 def decision_action_sides(row):
     pair = row.get("pair")
-    if isinstance(pair, dict) and all(
-        isinstance(pair.get(side), dict) and float(pair[side].get("ask_quantity") or 0) > 0
-        for side in ("YES", "NO")
+    if (
+        isinstance(pair, dict)
+        and pair.get("state") == "BILATERAL_EXECUTABLE_READY"
+        and all(
+            isinstance(pair.get(side), dict)
+            and float(pair[side].get("ask_quantity") or 0) > 0
+            for side in ("yes", "no")
+        )
     ):
         return ("YES", "NO")
     return (selected_action_side(row),)
