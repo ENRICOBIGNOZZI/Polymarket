@@ -1,0 +1,90 @@
+name: V7 mamma-portfolio tailnet probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-mamma-tailnet-probe-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate request
+        run: |
+          python3 - deploy/v7-mamma-tailnet-probe-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v=={"schema":"polymarket_v7_mamma_tailnet_probe_v1","read_only":True}
+          PY
+      - name: Join tailnet ephemerally
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
+          audience: api.tailscale.com/TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
+          tags: tag:ci
+          version: latest
+      - name: Inspect mamma-portfolio
+        run: |
+          set -euo pipefail
+          echo '=== SELF ==='
+          tailscale status --json | python3 - <<'PY'
+          import json,sys
+          v=json.load(sys.stdin)
+          s=v.get("Self") or {}
+          print("self_hostname="+str(s.get("HostName")))
+          print("self_dns="+str(s.get("DNSName")))
+          PY
+          echo '=== TARGET STATUS ==='
+          tailscale status --json > /tmp/ts.json
+          python3 - <<'PY'
+          import json
+          v=json.load(open('/tmp/ts.json'))
+          peers=v.get('Peer') or {}
+          found=[]
+          for _,p in peers.items():
+              host=str(p.get('HostName') or '')
+              dns=str(p.get('DNSName') or '')
+              if host=='mamma-portfolio' or dns.startswith('mamma-portfolio.'):
+                  found.append({
+                    'HostName':host,'DNSName':dns,'TailscaleIPs':p.get('TailscaleIPs'),
+                    'OS':p.get('OS'),'Online':p.get('Online'),'Active':p.get('Active'),
+                    'Tags':p.get('Tags')
+                  })
+          print(json.dumps(found,sort_keys=True))
+          if not found:
+              raise SystemExit('mamma-portfolio peer not found')
+          PY
+          echo '=== PING ==='
+          tailscale ping --timeout=10s mamma-portfolio.tail1bae85.ts.net || true
+          echo '=== HTTP ==='
+          for scheme in http https; do
+            for port in '' ':3000'; do
+              url="$scheme://mamma-portfolio.tail1bae85.ts.net$port/dashboards"
+              echo "--- $url"
+              curl -k -sS -o /tmp/body -D /tmp/head --max-time 12 "$url" || true
+              head -20 /tmp/head || true
+              printf 'BODY_PREFIX='
+              head -c 240 /tmp/body | tr '\n' ' ' || true
+              echo
+            done
+          done
+          echo '=== PORTS ==='
+          python3 - <<'PY'
+          import socket
+          host='mamma-portfolio.tail1bae85.ts.net'
+          for port in (22,3000,80,443):
+              s=socket.socket(); s.settimeout(3)
+              try:
+                  s.connect((host,port)); print(f'{port}=OPEN')
+              except Exception as e:
+                  print(f'{port}=CLOSED:{type(e).__name__}')
+              finally:
+                  s.close()
+          PY
