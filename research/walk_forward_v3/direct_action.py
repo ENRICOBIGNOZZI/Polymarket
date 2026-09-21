@@ -3551,6 +3551,14 @@ def summarize_direct_action(outcomes):
             row.get("calibration_multiplier_used") for row in trades),
         "selected_admission_edge_per_dollar_distribution": numeric_distribution(
             row.get("admission_edge_per_dollar") for row in trades),
+        "selected_admission_lower_value_distribution": numeric_distribution(
+            row.get("admission_lower_value") for row in trades),
+        "selected_admission_return_on_notional_distribution": numeric_distribution(
+            row.get("admission_return_on_notional") for row in trades),
+        "selected_raw_marginal_edge_per_dollar_distribution": numeric_distribution(
+            row.get("raw_marginal_edge_per_dollar") for row in trades),
+        "selected_marginal_edge_per_dollar_distribution": numeric_distribution(
+            row.get("marginal_edge_per_dollar") for row in trades),
         "selected_context_capital_fraction_distribution": numeric_distribution(
             row.get("context_capital_fraction") for row in trades),
         "desired_notional_before_constraints_distribution": numeric_distribution(
@@ -3632,6 +3640,15 @@ def merge_direct_action_summaries(summaries):
     result["max_gross_notional"] = max(
         float(summary.get("max_gross_notional") or 0.0) for summary in summaries)
 
+    for count_key in ("no_trade_reasons", "sizing_mode_counts", "entry_policy_counts"):
+        counts = Counter()
+        for summary in summaries:
+            counts.update({
+                str(name): int(value)
+                for name, value in (summary.get(count_key) or {}).items()
+            })
+        result[count_key] = dict(sorted(counts.items()))
+
     for dimension in ("by_asset", "by_side", "by_exit_horizon_ms"):
         cells = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
         for summary in summaries:
@@ -3661,6 +3678,27 @@ def merge_direct_action_summaries(summaries):
             for summary in summaries
         ],
     }
+    for distribution_key in (
+        "selected_calibration_multiplier_distribution",
+        "selected_admission_edge_per_dollar_distribution",
+        "selected_admission_lower_value_distribution",
+        "selected_admission_return_on_notional_distribution",
+        "selected_raw_marginal_edge_per_dollar_distribution",
+        "selected_marginal_edge_per_dollar_distribution",
+        "selected_context_capital_fraction_distribution",
+        "desired_notional_before_constraints_distribution",
+        "desired_notional_after_constraints_distribution",
+        "capital_utilization_before_selected_distribution",
+        "available_capital_before_selected_distribution",
+        "unused_available_capital_after_selected_distribution",
+    ):
+        result[distribution_key] = {
+            "state": "SEE_EXACT_PER_FOLD_DISTRIBUTIONS",
+            "folds": [
+                summary.get(distribution_key) or numeric_distribution([])
+                for summary in summaries
+            ],
+        }
     return result
 
 
