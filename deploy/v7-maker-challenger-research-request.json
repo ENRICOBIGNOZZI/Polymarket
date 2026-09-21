@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_maker_challenger_ssm_request_v1",
   "version": 1,
-  "request_id": "maker-causal-value-london-20260921T1729CEST",
+  "request_id": "maker-causal-value-retry-20260921T1734CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "output_directory": "docs/research/maker-challenger-2026-09-21",
   "paper_only": true,
