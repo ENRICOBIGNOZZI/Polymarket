@@ -26,7 +26,14 @@ def load_native_limits(policy:dict[str,Any], allocation:dict[str,Any])->dict[str
         raise ValueError('canonical allocation sum')
     limits={key:policy.get(key) for key in KEYS}
     if any(not isinstance(v,int) or isinstance(v,bool) or v<=0 for v in limits.values()):raise ValueError('positive integer risk limits required')
+    fraction=Decimal(str(policy.get('target_order_fraction_of_context')))
+    target_cap=policy.get('target_order_notional_cap_microdollars')
+    if (not fraction.is_finite() or fraction<=0 or fraction>1
+            or not isinstance(target_cap,int) or isinstance(target_cap,bool) or target_cap<=0):
+        raise ValueError('capital based sizing contract invalid')
     if not (limits[KEYS[3]]<=limits[KEYS[2]]<=limits[KEYS[1]]<=limits[KEYS[0]]):raise ValueError('inconsistent nested risk caps')
+    if target_cap>limits['max_single_order_microdollars']:
+        raise ValueError('target order cap exceeds single order cap')
     allocated_micro=int(values[2]*1_000_000)
     if limits[KEYS[0]]>allocated_micro:raise ValueError('native suballocation exceeds canonical allocation')
     encoded=json.dumps(policy,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
@@ -34,6 +41,9 @@ def load_native_limits(policy:dict[str,Any], allocation:dict[str,Any])->dict[str
         'risk_policy_sha256':hashlib.sha256(encoded).hexdigest(),
         'canonical_engine_budget_microdollars':allocated_micro,
         'native_suballocation_microdollars':limits[KEYS[0]],
+        'target_order_fraction_of_context':float(fraction),
+        'target_order_notional_cap_microdollars':target_cap,
+        'paper_sizing_contract':str(policy.get('paper_sizing_contract') or ''),
         'paper_only':True,'real_order_submission':False,'limits_increased':False}
 
 
