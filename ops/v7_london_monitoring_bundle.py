@@ -64,11 +64,13 @@ def build(root: Path, output: Path, deployed_directory: Path, expected_sha: str)
     if grafana.get('datasource_uid') != 'prometheus-v7':
         raise ValueError('unexpected datasource identity')
     assets: dict[str, bytes] = {}
-    dashboard_files = [grafana[key] for key in
-                       ('dashboard_file', 'latency_dashboard', 'external_fair_dashboard') if grafana.get(key)]
-    multi = root / 'monitoring/grafana/dashboards/polymarket-v7-multi-crypto.json'
-    if multi.is_file():
-        dashboard_files.append(str(multi.relative_to(root)))
+    dashboard_files = [grafana[key] for key in (
+        'dashboard_file',
+        'latency_dashboard',
+        'external_fair_dashboard',
+        'multi_crypto_dashboard',
+        'pure_arb_dashboard',
+    ) if grafana.get(key)]
     seen_uids: set[str] = set()
     for relative in dashboard_files:
         path = source_file(root, relative)
