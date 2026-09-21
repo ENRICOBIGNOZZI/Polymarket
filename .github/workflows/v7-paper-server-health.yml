@@ -141,6 +141,18 @@ jobs:
           print('server_health=PASS')
           print('full_data_health_ok='+str(bool(r.get('full_data_health_ok'))).lower())
           print('full_data_health_reasons='+','.join(map(str,r.get('full_data_health_reasons') or [])))
+          c=r.get('bilateral_capture') or {}
+          kinds=c.get('recent_kind_counts') or {}
+          pairs=c.get('pair_state_by_kind') or {}
+          print('bilateral_capture_recent_kind2='+str(int(kinds.get('2') or 0)))
+          print('bilateral_capture_recent_kind6='+str(int(kinds.get('6') or 0)))
+          print('bilateral_capture_ready_kind2='+str(int((pairs.get('2') or {}).get('BILATERAL_EXECUTABLE_READY') or 0)))
+          print('bilateral_capture_ready_kind6='+str(int((pairs.get('6') or {}).get('BILATERAL_EXECUTABLE_READY') or 0)))
+          print('bilateral_capture_prices_only_kind2='+str(int((pairs.get('2') or {}).get('PRICES_ONLY') or 0)))
+          print('bilateral_capture_prices_only_kind6='+str(int((pairs.get('6') or {}).get('PRICES_ONLY') or 0)))
+          print('native_observations_dropped='+str(int(c.get('native_observations_dropped') or 0)))
+          print('native_observations_queue_depth='+str(int(c.get('native_observations_queue_depth') or 0)))
+          print('bilateral_capture_scan_truncated='+str(bool(c.get('scan_truncated'))).lower())
           PY
 
       - name: Publish health summary
@@ -155,6 +167,17 @@ jobs:
           print(f"- full data health: {'PASS' if r.get('full_data_health_ok') else 'WARMING/DEGRADED'}")
           if r.get('full_data_health_reasons'):
               print("- data readiness reasons: "+", ".join(map(str,r['full_data_health_reasons'])))
+          c=r.get('bilateral_capture') or {}
+          kinds=c.get('recent_kind_counts') or {}
+          pairs=c.get('pair_state_by_kind') or {}
+          print(f"- bilateral capture window: {c.get('window_seconds', 0)}s")
+          print(f"- recent decision/repricing rows: {kinds.get('2', 0)} / {kinds.get('6', 0)}")
+          print("- bilateral executable-ready decision/repricing rows: "
+                f"{(pairs.get('2') or {}).get('BILATERAL_EXECUTABLE_READY', 0)} / "
+                f"{(pairs.get('6') or {}).get('BILATERAL_EXECUTABLE_READY', 0)}")
+          print(f"- native observation drops / queue: {c.get('native_observations_dropped', 0)} / {c.get('native_observations_queue_depth', 0)}")
+          if c.get('scan_truncated'):
+              print("- bilateral capture audit: bounded scan truncated; counts are lower bounds")
           PY
 
       - name: Upload health evidence
