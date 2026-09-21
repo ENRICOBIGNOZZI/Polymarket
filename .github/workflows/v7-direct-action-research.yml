@@ -81,6 +81,12 @@ jobs:
               assert training["training_state_cap"] is None
               assert training["matrix_strategy"]=="ONE_PASS_SUFFICIENT_STATISTICS_THEN_P_X_P_NORMAL_EQUATIONS"
               assert training["policy_loss"]=="NEGATIVE_POLICY_UTILITY_WITH_NO_TRADE_BASELINE_ZERO"
+              assert training["calibration_holdout_excluded_from_mean_fit"] is True
+              assert training["calibration_holdouts_disjoint"] is True
+              assert training["selection_calibration_state"] in (
+                  "TEMPORAL_MARKET_BLOCK_POST_ARGMAX_ONE_SIDED",
+                  "INSUFFICIENT_POST_ARGMAX_CALIBRATION",
+              )
               embedded=set(training["execution_frictions_in_training_target"])
               assert "exit_l1_capacity_and_zero_value_residual_lower_bound" in embedded
               assert training["gram_matrix_bytes"] < 5_000_000
@@ -94,6 +100,20 @@ jobs:
               "max_gross_notional":result["summary"]["max_gross_notional"],
               "bilateral_ready_fraction":bilateral.get("bilateral_ready_decision_fraction"),
               "bilateral_pair_states":bilateral.get("decision_pair_states"),
+              "total_selection_optimism_penalty":result["summary"].get("total_predicted_selection_optimism_penalty"),
+              "fold_selection_calibration":[
+                  {
+                      "state":fold["training"].get("selection_calibration_state"),
+                      "penalty":fold["training"].get("selection_optimism_penalty"),
+                      "observed_fraction":(
+                          fold["training"].get("selection_calibration") or {}
+                      ).get("observed_fraction"),
+                      "observed_markets":(
+                          fold["training"].get("selection_calibration") or {}
+                      ).get("observed_selected_markets"),
+                  }
+                  for fold in result["folds"]
+              ],
           },sort_keys=True))
           PY
 
