@@ -697,7 +697,7 @@ int main(int argc, char** argv) {
                                        std::int64_t receive_monotonic_ns) noexcept {
             NativeEvidenceEvent evidence{};
             evidence.kind = NativeEvidenceKind::OrderSubmitted;
-            if (policy == ExecutionPolicyId::AggressiveTaker) {
+            if (strategy == StrategyId::CryptoInformedTaker) {
                 evidence.slow_context = decision_slow_context;
                 evidence.probability = decision_probability;
                 evidence.economics = decision_economics;
@@ -935,7 +935,8 @@ int main(int argc, char** argv) {
             do {
                 progressed = false;
                 if (binance_ready && pending_binance.local_receive_monotonic_ns == receive_ns) {
-                    (void)external_state.on_venue_event(pending_binance, external_policy);
+                    if (!options.latency_arb)
+                        (void)external_state.on_venue_event(pending_binance, external_policy);
                     if (options.latency_arb
                         && pending_binance.event_type == ExternalEventType::Trade
                         && pending_binance.trade_price > 0.0) {
@@ -946,7 +947,8 @@ int main(int argc, char** argv) {
                     binance_ready = false; refill_binance(); progressed = true;
                 }
                 if (coinbase_ready && pending_coinbase.local_receive_monotonic_ns == receive_ns) {
-                    (void)external_state.on_venue_event(pending_coinbase, external_policy);
+                    if (!options.latency_arb)
+                        (void)external_state.on_venue_event(pending_coinbase, external_policy);
                     if (options.latency_arb
                         && pending_coinbase.event_type == ExternalEventType::BookTop
                         && pending_coinbase.bid > 0.0
@@ -960,7 +962,8 @@ int main(int argc, char** argv) {
                     coinbase_ready = false; refill_coinbase(); progressed = true;
                 }
                 if (bybit_ready && pending_bybit.local_receive_monotonic_ns == receive_ns) {
-                    (void)external_state.on_venue_event(pending_bybit, external_policy);
+                    if (!options.latency_arb)
+                        (void)external_state.on_venue_event(pending_bybit, external_policy);
                     bybit_ready = false; refill_bybit(); progressed = true;
                 }
                 if (pm_ready && pending_pm.event.receive_monotonic_ns == receive_ns) {
@@ -1016,6 +1019,8 @@ int main(int argc, char** argv) {
                             }
                         }
                     }
+                    if (event.instrument_handle == kYes) yes_book = event.book;
+                    else if (event.instrument_handle == kNo) no_book = event.book;
                     if (!options.latency_arb) {
                     maker::MakerDecision maker_decision;
                     bool maker_event = false;
@@ -1096,7 +1101,8 @@ int main(int argc, char** argv) {
                     pm_ready = false; refill_pm(); progressed = true;
                 }
             } while (progressed);
-            if (has_external) current_signal = external_state.advance_external_cancel_signal(receive_ns, external_policy);
+            if (has_external && !options.latency_arb)
+                current_signal = external_state.advance_external_cancel_signal(receive_ns, external_policy);
 
             const auto protect_now = monotonic_now_ns();
             const int shock_direction = fresh_shock_direction(current_signal.direction,
