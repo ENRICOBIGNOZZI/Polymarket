@@ -50,7 +50,11 @@ struct NativeCryptoDecisionPolicy {
     std::uint32_t required_slow_context_mask = 0;
     std::uint8_t probability_ev_enabled = 0;
     std::uint8_t require_pm_book_pre_signal = 0;
-    std::array<std::uint8_t, 3> reserved{};
+    // Research/PAPER option: capital-based desired notional may be clipped to
+    // the observed executable L1 quantity instead of rejecting the opportunity.
+    // Fixed-quantity and probability-EV behavior remain unchanged.
+    std::uint8_t clip_capital_target_to_visible_depth = 0;
+    std::array<std::uint8_t, 2> reserved{};
 };
 
 struct NativeCryptoInstrumentContext {
