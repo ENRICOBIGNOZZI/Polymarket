@@ -84,12 +84,12 @@ jobs:
                 force_deleted=$((force_deleted+1))
               fi
             done < <(python3 - <<'PY'
-import json
-value=json.load(open('deploy/v7-branch-cleanup-request.json',encoding='utf-8'))
-for branch in value.get('force_delete') or []:
-    print(branch)
-PY
-)
+          import json
+          value=json.load(open('deploy/v7-branch-cleanup-request.json',encoding='utf-8'))
+          for branch in value.get('force_delete') or []:
+              print(branch)
+          PY
+          )
             git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
           fi
 
