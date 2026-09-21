@@ -1234,3 +1234,124 @@ def test_recent_window_index_never_skips_overlapping_repricing_origin(tmp_path):
     index, _ = compact_window_index(path, cache)
     assert compact_index_intersects_repricing(index, 1_000, 1_000)
     assert not compact_index_intersects_repricing(index, 1_001, 2_000)
+
+
+def test_recent_window_index_preserves_semantic_dataset_parity(tmp_path):
+    import json
+
+    hft = tmp_path / "research" / "hft_permanent"
+    compact = hft / "compact"
+    closed = hft / "compact_closed"
+    compact.mkdir(parents=True)
+    closed.mkdir()
+    (tmp_path / "research" / "public_settlements").mkdir()
+
+    base = 1_790_000_000_000_000_000
+
+    def native_row(market, wall_ns, version):
+        mono = 1_000_000_000 + version * 10_000_000
+        return {
+            "schema": "polymarket_v7_native_observation_v1",
+            "paper_only": True,
+            "execution_authority": False,
+            "kind": 2,
+            "server_id": "s1",
+            "run_id": "r1",
+            "capture_id": "c1",
+            "market_id": market,
+            "token_id": "yes-" + market,
+            "asset": "BTC",
+            "horizon": "M5",
+            "signal_version": version,
+            "repricing_origin_signal_version": version,
+            "decision_wall_ns": wall_ns,
+            "decision_monotonic_ns": mono,
+            "trigger_monotonic_ns": mono - 2_000_000,
+            "receive_monotonic_ns": mono - 1_000_000,
+            "close_monotonic_ns": mono + 110_000_000_000,
+            "close_wall_ns": wall_ns + 110_000_000_000,
+            "direction": 1,
+            "reason": 1,
+            "accepted": True,
+            "signal_valid": True,
+            "confirmed_non_opposing": True,
+            "book_valid": True,
+            "pm_book_pre_signal": True,
+            "bid_e4": 4900,
+            "ask_e4": 5000,
+            "tick_e4": 100,
+            "bid_quantity": 10_000_000,
+            "ask_quantity": 10_000_000,
+            "minimum_order_microunits": 1_000_000,
+            "fee_rate": 0.0,
+            "fee_exponent": 1.0,
+            "connection_epoch": 7,
+            "external_features": {"binance_return_100ms_bp": 1.0},
+        }
+
+    def label_row(origin):
+        mono = int(origin["decision_monotonic_ns"])
+        wall = int(origin["decision_wall_ns"])
+        close_mono = int(origin["close_monotonic_ns"])
+        close_wall = int(origin["close_wall_ns"])
+        return {
+            "schema": "polymarket_v7_native_observation_v1",
+            "paper_only": True,
+            "execution_authority": False,
+            "kind": 6,
+            "server_id": origin["server_id"],
+            "run_id": origin["run_id"],
+            "capture_id": origin["capture_id"],
+            "market_id": origin["market_id"],
+            "token_id": origin["token_id"],
+            "repricing_origin_signal_version": origin[
+                "repricing_origin_signal_version"],
+            "repricing_horizon_ms": 100,
+            "decision_monotonic_ns": mono,
+            "decision_wall_ns": wall,
+            "observed_monotonic_ns": mono + 100_000_001,
+            "close_monotonic_ns": close_mono,
+            "close_wall_ns": close_wall,
+            "connection_epoch": 7,
+            "repricing_pair_valid": True,
+            "book_valid": True,
+            "bid_e4": 5000,
+            "ask_e4": 5100,
+            "tick_e4": 100,
+            "bid_quantity": 4_000_000,
+            "ask_quantity": 4_000_000,
+        }
+
+    old = native_row("old", base - 3_600_000_000_000, 1)
+    recent = native_row("recent", base + 1_000_000_000, 2)
+    (closed / "old.jsonl").write_text(
+        json.dumps(old) + "\n" + json.dumps(label_row(old)) + "\n",
+        encoding="utf-8",
+    )
+    (compact / "recent.jsonl").write_text(
+        json.dumps(recent) + "\n" + json.dumps(label_row(recent)) + "\n",
+        encoding="utf-8",
+    )
+
+    plain = build_dataset(
+        tmp_path,
+        minimum_wall_ns=base,
+        include_settlement_labels=False,
+        use_compact_window_index=False,
+    )
+    indexed = build_dataset(
+        tmp_path,
+        minimum_wall_ns=base,
+        include_settlement_labels=False,
+        use_compact_window_index=True,
+    )
+
+    assert plain["input_state"] == indexed["input_state"] == "READY"
+    assert plain["data_sha256"] == indexed["data_sha256"]
+    assert plain["decisions"] == indexed["decisions"]
+    assert plain["book_evidence"] == indexed["book_evidence"]
+    assert len(indexed["decisions"]) == 1
+    assert indexed["decisions"][0]["market_id"] == "recent"
+    assert indexed["decisions"][0]["targets"]["100"]["state"] == "OBSERVED"
+    assert indexed["decisions"][0]["arrivals"]["100"]["ask"] == .51
+    assert indexed["compact_window_index"]["decision_files_skipped"] >= 1
