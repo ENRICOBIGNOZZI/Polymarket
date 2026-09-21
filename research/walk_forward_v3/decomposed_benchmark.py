@@ -19,6 +19,8 @@ from research.walk_forward_v2.core import (
 )
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
+    EdgeSizingPolicy,
+    FrictionPolicy,
     evaluate_direct_action_policy,
     load_trade_frequency_challenger_config,
     summarize_direct_action,
@@ -230,6 +232,82 @@ def _comparison(reference, challenger):
     return result
 
 
+FREQUENCY_CONFIDENCE_SCALES = (1.0, 0.50, 0.0)
+MINIMUM_SIZE_DIAGNOSTIC_POLICY = EdgeSizingPolicy(
+    context_count=30,
+    knots=((0.0, 0.0), (1.0, 0.0)),
+).validated()
+
+
+def _frequency_frontier(
+    model,
+    rows,
+    *,
+    latency_ms,
+    capital_budget,
+    entry_policy,
+    max_market_exposure,
+):
+    """Exploratory OOS entry-frequency frontier at venue-minimum size.
+
+    This deliberately holds sizing at the minimum feasible order so the
+    experiment identifies whether additional entries add economic value rather
+    than conflating entry frequency with capital deployment.
+    """
+    if isinstance(model, DecomposedActionValueModel):
+        friction_owner = model.base
+        penalty_owner = model
+        penalty_name = "decomposed_selection_optimism_penalty"
+    else:
+        friction_owner = model
+        penalty_owner = model
+        penalty_name = "selection_optimism_penalty"
+
+    original_friction = friction_owner.friction_policy
+    original_penalty = float(getattr(penalty_owner, penalty_name, 0.0))
+    entries = []
+    try:
+        for scale in FREQUENCY_CONFIDENCE_SCALES:
+            friction_owner.friction_policy = FrictionPolicy(
+                capital_charge_bps_per_second=(
+                    original_friction.capital_charge_bps_per_second),
+                asset_concentration_lambda=(
+                    original_friction.asset_concentration_lambda),
+                common_factor_concentration_lambda=(
+                    original_friction.common_factor_concentration_lambda),
+                uncertainty_aversion=(
+                    original_friction.uncertainty_aversion * scale),
+            ).validated()
+            setattr(
+                penalty_owner,
+                penalty_name,
+                original_penalty * scale,
+            )
+            outcomes = evaluate_direct_action_policy(
+                model,
+                rows,
+                latency_ms=latency_ms,
+                capital_budget=capital_budget,
+                live_geometry=True,
+                entry_policy=entry_policy,
+                sizing_policy=MINIMUM_SIZE_DIAGNOSTIC_POLICY,
+                max_market_exposure=max_market_exposure,
+            )
+            entries.append({
+                "confidence_penalty_scale": float(scale),
+                "uncertainty_aversion": float(
+                    friction_owner.friction_policy.uncertainty_aversion),
+                "selection_penalty": float(
+                    getattr(penalty_owner, penalty_name, 0.0)),
+                "sizing": "VENUE_MINIMUM_ONLY_DIAGNOSTIC",
+                "oos": performance_snapshot(outcomes),
+            })
+    finally:
+        friction_owner.friction_policy = original_friction
+        setattr(penalty_owner, penalty_name, original_penalty)
+    return entries
+
+
 def walk_forward_horse_race(
     records,
     *,
@@ -255,6 +333,14 @@ def walk_forward_horse_race(
                 "A1_DIRECT_CHALLENGER",
                 "A2_DECOMPOSED",
             )
+        },
+        "frequency_frontier": {
+            "diagnostic_only": True,
+            "selection_use": "NONE_FAST_DIAGNOSTIC_ONLY",
+            "sizing": "VENUE_MINIMUM_ONLY_TO_ISOLATE_ENTRY_FREQUENCY",
+            "confidence_penalty_scales": list(FREQUENCY_CONFIDENCE_SCALES),
+            "A1_DIRECT_CHALLENGER": [],
+            "A2_DECOMPOSED": [],
         },
     }
     if not found:
@@ -303,6 +389,30 @@ def walk_forward_horse_race(
             sizing_policy=sizing,
             max_market_exposure=float(capital_budget) / sizing.context_count,
         )
+
+        market_cap = float(capital_budget) / sizing.context_count
+        result["frequency_frontier"]["A1_DIRECT_CHALLENGER"].append({
+            "fold": fold["fold"],
+            "entries": _frequency_frontier(
+                direct,
+                test,
+                latency_ms=latency_ms,
+                capital_budget=capital_budget,
+                entry_policy=entry_policy,
+                max_market_exposure=market_cap,
+            ),
+        })
+        result["frequency_frontier"]["A2_DECOMPOSED"].append({
+            "fold": fold["fold"],
+            "entries": _frequency_frontier(
+                decomposed,
+                test,
+                latency_ms=latency_ms,
+                capital_budget=capital_budget,
+                entry_policy=entry_policy,
+                max_market_exposure=market_cap,
+            ),
+        })
 
         entries = (
             ("A0_BASELINE", baseline, baseline_outcomes),
