@@ -7,6 +7,7 @@ import sys
 from research.walk_forward_v2.core import (
     HORIZONS_MS,
     Ridge,
+    quantity_for_notional_microdollars,
     asset_markout_predictors,
     asset_selection_diagnostics,
     live_parity_policy_diagnostics,
@@ -1062,3 +1063,68 @@ def test_existing_champion_is_refit_when_it_remains_best(tmp_path, monkeypatch):
     assert champion["training_window"]["decision_rows"] == 1200
     assert champion["training_window"]["maximum_decision_ns"] == 300
     assert champion["selection_action"] == "REFIT_CHAMPION"
+
+
+
+def test_live_zero_chase_refuses_one_tick_worse_arrival():
+    row = record("zero-chase")
+    row["fee_rate"] = 0.0
+    row["timeline"] = [book(row, row["decision_ns"] + 50_000_000, ask=.51)]
+    row["timeline_times"] = [row["timeline"][0]["time_ns"]]
+    row["targets"] = {
+        "500": {"state": "OBSERVED", "arrival_bid": .55}
+    }
+    live = replay_one(
+        copy.deepcopy(row), .03, None,
+        latency_ms=50, valuation_mode="EXECUTABLE_MARKOUT",
+        markout_horizon_ms=500, edge_threshold=.005, execution_reserve=.005,
+        entry_cap=.80, shares=5.0, minimum_tte_ns=105_000_000_000,
+        maximum_tte_ns=120_000_000_000, require_full_visible_depth=True,
+        limit_chase_ticks=0)
+    research_chase = replay_one(
+        copy.deepcopy(row), .03, None,
+        latency_ms=50, valuation_mode="EXECUTABLE_MARKOUT",
+        markout_horizon_ms=500, edge_threshold=.005, execution_reserve=.005,
+        entry_cap=.80, shares=5.0, minimum_tte_ns=105_000_000_000,
+        maximum_tte_ns=120_000_000_000, require_full_visible_depth=True,
+        limit_chase_ticks=2)
+    assert live["status"] == "NO_FILL_LIMIT_NOT_TOUCHED"
+    assert research_chase["filled"] == 4.0
+
+
+def test_capital_notional_quantity_matches_native_integer_formula():
+    q = quantity_for_notional_microdollars(83_333_333, .50)
+    assert math.isclose(q, 166.666666, abs_tol=1e-12)
+
+    row = record("capital-size")
+    row["fee_rate"] = 0.0
+    row["quantity"] = 200.0
+    row["minimum"] = 5.0
+    row["timeline"] = [book(row, row["decision_ns"] + 50_000_000, ask=.50)]
+    row["timeline"][0]["quantity"] = 200.0
+    row["timeline_times"] = [row["timeline"][0]["time_ns"]]
+    row["targets"] = {
+        "500": {"state": "OBSERVED", "arrival_bid": .55}
+    }
+    outcome = replay_one(
+        row, .03, None,
+        latency_ms=50, valuation_mode="EXECUTABLE_MARKOUT",
+        markout_horizon_ms=500, edge_threshold=.005, execution_reserve=.005,
+        entry_cap=.80, minimum_tte_ns=105_000_000_000,
+        maximum_tte_ns=120_000_000_000, require_full_visible_depth=True,
+        limit_chase_ticks=0, target_notional_microdollars=83_333_333)
+    assert math.isclose(outcome["requested"], 166.666666, abs_tol=1e-12)
+    assert math.isclose(outcome["filled"], 166.666666, abs_tol=1e-12)
+    assert outcome["reserved_microdollars"] <= 83_333_333
+
+    thin = copy.deepcopy(row)
+    thin["quantity"] = 100.0
+    rejected = replay_one(
+        thin, .03, None,
+        latency_ms=50, valuation_mode="EXECUTABLE_MARKOUT",
+        markout_horizon_ms=500, edge_threshold=.005, execution_reserve=.005,
+        entry_cap=.80, minimum_tte_ns=105_000_000_000,
+        maximum_tte_ns=120_000_000_000, require_full_visible_depth=True,
+        limit_chase_ticks=0, target_notional_microdollars=83_333_333)
+    assert rejected["status"] == "FILTERED"
+    assert rejected["funnel"]["sufficient_depth"] is False
