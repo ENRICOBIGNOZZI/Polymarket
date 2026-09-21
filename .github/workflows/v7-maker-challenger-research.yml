@@ -69,8 +69,16 @@ jobs:
           assert result["execution_authority"]=="ZERO_AUTHORITY_RESEARCH_ONLY"
           assert result["state"] in (
               "FORWARD_EVIDENCE_AVAILABLE",
+              "CAUSAL_VALUE_EVIDENCE_AVAILABLE",
               "SCREENING_ONLY_NO_FROZEN_FORWARD_REPORT",
           )
+          causal=result.get("causal_value_challenger") or {}
+          assert result.get("causal_value_state") in (
+              "READY","NO_MAKER_EPISODES","UNAVAILABLE"
+          )
+          if result.get("causal_value_state")=="READY":
+              assert causal.get("execution_authority")=="ZERO_AUTHORITY_RESEARCH_ONLY"
+              assert causal.get("automatic_promotion") is False
           for action,value in (result.get("actions") or {}).items():
               assert "trading_only_screening_ev_per_submitted_share" in value
               assert "NOT_A_JOINT_OOS_ESTIMATOR" in value["screening_semantics"]
@@ -79,6 +87,8 @@ jobs:
               "screening_order":result.get("screening_order"),
               "fillability_root_cause":result.get("fillability_root_cause"),
               "complete_set_state":result.get("complete_set_state"),
+              "causal_value_state":result.get("causal_value_state"),
+              "causal_positive_lcb_actions":result.get("causal_positive_lcb_actions_diagnostic_only"),
               "frozen_forward_state":result.get("frozen_forward_state"),
           },sort_keys=True))
           PY
