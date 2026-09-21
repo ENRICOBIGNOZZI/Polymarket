@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json,subprocess,tempfile
 from pathlib import Path
+from scripts.v7_model_runtime_approval import maker_economic_hash
 ROOT=Path(__file__).resolve().parents[1]
 SHA='a'*40
 
@@ -29,10 +30,10 @@ def test_manual_artifacts_validate_and_daily_cycle_never_pushes():
     assert build.index('validate_candidate.py') < build.index('runtime_artifact_manifest.py')
     assert 'candidate_validation.json' in push and "state')=='PROMOTABLE'" in push
     assert 'v7-model-runtime-approval.json' in push
-    assert "approval.get('approved') is True" in push
-    assert "approval.get('target_model_sha')==target" in push
-    assert "approval['bundle_id']==manifest.get('bundle_id')" in push
-    assert "backtest_report_sha256" in push
+    assert 'v7_model_runtime_approval.py' in push
+    assert '--reviewed-report "$REVIEWED_REPORT"' in push
+    assert 'model_runtime_approval.json' in push
+    assert 'reviewed_backtest_report' in push
     assert 'research.learning.daily' in cycle
     assert 'push_runtime_artifacts.sh' not in cycle
 
@@ -46,4 +47,32 @@ def test_runtime_model_approval_defaults_fail_closed():
     assert approval['automatic_promotion'] is False
     assert approval['target_model_sha'] is None
     assert approval['bundle_id'] is None
+    assert approval['backtest_report_path'] is None
     assert approval['backtest_report_sha256'] is None
+    assert approval['economic_model_identity_sha256'] is None
+
+def test_economic_model_identity_ignores_provenance_but_not_policy_mapping():
+    left=maker()
+    left.update({
+        'code_sha':SHA,'version':1,'generated_ts_ms':1,
+        'training_source_model_shas':[SHA],
+        'training_window':{'records':10},'validation_window':None,
+    })
+    right=json.loads(json.dumps(left))
+    right.update({
+        'model_sha':'b'*40,'code_sha':'b'*40,'version':999,'generated_ts_ms':999,
+        'training_source_model_shas':['b'*40],
+        'training_window':{'records':999},'validation_window':{'x':1},
+    })
+    assert maker_economic_hash(left)==maker_economic_hash(right)
+    right['learned_placement_policy']={'predictive_oos_valid':True,'coefficient':1.0}
+    assert maker_economic_hash(left)!=maker_economic_hash(right)
+
+def test_london_cutover_requires_reviewed_approval_only_for_changed_economic_model():
+    cutover=(ROOT/'ops/v7_london_cutover.sh').read_text()
+    assert 'TARGET_MODEL_IDENTITY' in cutover
+    assert 'ACTIVE_MODEL_IDENTITY' in cutover
+    assert 'v7_model_runtime_approval.py' in cutover
+    assert 'EXPLICIT_REVIEWED_APPROVAL_VERIFIED' in cutover
+    assert 'NOT_REQUIRED_SAME_ECONOMIC_MODEL' in cutover
+    assert 'reviewed_backtest_report' in cutover
