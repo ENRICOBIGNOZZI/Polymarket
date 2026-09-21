@@ -153,3 +153,56 @@ def test_forward_shadow_bootstrap_starts_at_existing_eof(tmp_path: Path):
         assert tailer.timely == 1
     finally:
         tailer.output.close()
+
+
+
+def test_shadow_hot_set_activates_only_growing_native_files(tmp_path: Path):
+    run_root = tmp_path / "run"
+    native_root = run_root / "research" / "native_observations" / "r"
+    native_root.mkdir(parents=True)
+    tape = native_root / "m.jsonl"
+    tape.write_text(json.dumps(native(), sort_keys=True) + "\n", encoding="utf-8")
+
+    artifact_path = tmp_path / "artifact.json"
+    artifact_raw = json.dumps(artifact(), sort_keys=True, separators=(",", ":"))
+    artifact_path.write_text(artifact_raw, encoding="utf-8")
+    artifact_sha = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    control = run_root / "control"
+    control.mkdir()
+    (control / "native_engine_manager_status.json").write_text(json.dumps({
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "run_id": "r",
+    }), encoding="utf-8")
+    args = argparse.Namespace(
+        run_root=run_root, artifact=artifact_path, artifact_sha256=artifact_sha,
+        source_code_sha="1" * 40, output=tmp_path / "out.jsonl",
+        status=tmp_path / "status.json", poll_ms=5,
+        maximum_inference_age_ms=50, duration_seconds=0,
+    )
+    tailer = Tailer(args)
+    try:
+        tailer.bootstrap_existing_files()
+        assert tailer.files() == []
+
+        fresh = native()
+        fresh["signal_version"] = 8
+        fresh["decision_monotonic_ns"] += 1_000_000
+        fresh["decision_wall_ns"] = time.time_ns()
+        fresh["trigger_monotonic_ns"] = fresh["decision_monotonic_ns"] - 1_000_000
+        fresh["receive_monotonic_ns"] = fresh["decision_monotonic_ns"] - 500_000
+        with tape.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(fresh, sort_keys=True) + "\n")
+
+        tailer._next_file_refresh_ns = 0
+        hot = tailer.files()
+        assert tape in hot
+        tailer.process_file(tape)
+        assert tailer.scored == 1
+        before = tailer.offsets[str(tape)]
+        tailer.process_file(tape)
+        assert tailer.offsets[str(tape)] == before
+        assert tailer.scored == 1
+    finally:
+        tailer.output.close()
