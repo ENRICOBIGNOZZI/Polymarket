@@ -1074,12 +1074,8 @@ def _polylog_level_crossings(coefficients, level, lower, upper):
 
 def effective_age_bucket(signal_age_ms, latency_ms):
     age = max(0.0, float(signal_age_ms)) + float(latency_ms)
-    if age <= 10.0:
-        return "le10"
-    if age <= 25.0:
-        return "10_25"
     if age <= 50.0:
-        return "25_50"
+        return "le50"
     if age <= 100.0:
         return "50_100"
     if age <= 250.0:
@@ -1330,9 +1326,7 @@ class DirectActionValueModel:
         self.base_names = self._base_feature_names(rows)
         self.assets = tuple(sorted({str(row.get("asset") or "UNKNOWN") for row in rows}))
         self.contract_horizons = tuple(sorted({str(row.get("horizon") or "UNKNOWN") for row in rows}))
-        self.age_buckets = (
-            "le10", "10_25", "25_50", "50_100", "100_250", "gt250",
-        )
+        self.age_buckets = ("le50", "50_100", "100_250", "gt250")
         names = [
             "state.ask", "state.bid", "state.spread", "state.depth",
             "state.minimum", "state.tte_s", "state.signal_age_ms",
@@ -1481,11 +1475,7 @@ class DirectActionValueModel:
             "interaction.signal_effective_age": signal * effective_action_age_ms,
             "interaction.horizon_effective_age": (
                 math.log1p(float(horizon_ms)) * effective_action_age_ms),
-            "age::le10": 1.0 if effective_action_age_ms <= 10.0 else 0.0,
-            "age::10_25": (
-                1.0 if 10.0 < effective_action_age_ms <= 25.0 else 0.0),
-            "age::25_50": (
-                1.0 if 25.0 < effective_action_age_ms <= 50.0 else 0.0),
+            "age::le50": 1.0 if effective_action_age_ms <= 50.0 else 0.0,
             "age::50_100": (
                 1.0 if 50.0 < effective_action_age_ms <= 100.0 else 0.0),
             "age::100_250": (
@@ -2812,11 +2802,13 @@ class DirectActionValueModel:
             for horizon in self.action_horizons_ms:
                 if horizon <= latency_ms:
                     continue
-                cell_support = int(
-                    getattr(self, "action_cell_target_counts", {}).get(
-                        action_cell_support_key(latency_ms, horizon, side), 0))
-                if cell_support <= 0:
-                    continue
+                cell_counts = getattr(self, "action_cell_target_counts", None)
+                if cell_counts is not None:
+                    cell_support = int(cell_counts.get(
+                        action_cell_support_key(
+                            latency_ms, horizon, side), 0))
+                    if cell_support <= 0:
+                        continue
                 quantities = self._continuous_quantity_candidates(
                     row, horizon_ms=horizon, latency_ms=latency_ms, side=side,
                     lower=lower, upper=upper,
