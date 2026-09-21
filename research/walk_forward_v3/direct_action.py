@@ -870,6 +870,8 @@ class DirectActionValueModel:
         prequential_calibration_blocks=2,
         maximum_effective_action_age_ms=None,
         minimum_regime_action_targets=0,
+        support_policy_mode="DIAGNOSTIC",
+        support_ridge=8.0,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -889,6 +891,8 @@ class DirectActionValueModel:
         )
         self.minimum_regime_action_targets = int(
             minimum_regime_action_targets)
+        self.support_policy_mode = str(support_policy_mode).upper()
+        self.support_ridge = float(support_ridge)
         if (
             self.maximum_effective_action_age_ms is not None
             and (
@@ -900,6 +904,13 @@ class DirectActionValueModel:
                 "positive finite maximum effective action age required")
         if self.minimum_regime_action_targets < 0:
             raise ValueError("nonnegative regime support threshold required")
+        if self.support_policy_mode not in (
+            "DIAGNOSTIC", "ROBUST_WORST_CASE",
+        ):
+            raise ValueError(
+                "support policy mode must be DIAGNOSTIC or ROBUST_WORST_CASE")
+        if not finite(self.support_ridge) or self.support_ridge <= 0:
+            raise ValueError("positive finite support ridge required")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -1171,6 +1182,109 @@ class DirectActionValueModel:
         return sorted(first, key=lambda market: (first[market], market))
 
 
+    def _support_record(self, row, *, horizon_ms, latency_ms, side):
+        # Evidence availability for a causal state/side/horizon is independent
+        # of candidate q at L1. Use q=0 so the head cannot learn spurious size
+        # effects from duplicated candidate sizes.
+        return self._action_record(
+            row,
+            size=0.0,
+            horizon_ms=horizon_ms,
+            latency_ms=latency_ms,
+            side=side,
+        )
+
+    def _iter_support_records(self, rows, *, markets=None):
+        market_filter = set(markets) if markets is not None else None
+        for row in rows:
+            if market_filter is not None and str(row["market_id"]) not in market_filter:
+                continue
+            if not _valid_state(row):
+                continue
+            for side in decision_action_sides(row):
+                decision_state = decision_side_state(row, side)
+                if decision_state is None:
+                    continue
+                if float(decision_state["ask"]) > self.entry_cap + 1e-12:
+                    continue
+                for latency_ms in self.train_latencies_ms:
+                    for horizon_ms in self.action_horizons_ms:
+                        if horizon_ms <= latency_ms:
+                            continue
+                        kernel, state = action_execution_kernel(
+                            row,
+                            horizon_ms=horizon_ms,
+                            latency_ms=latency_ms,
+                            side=side,
+                            entry_cap=self.entry_cap,
+                        )
+                        record = self._support_record(
+                            row,
+                            horizon_ms=horizon_ms,
+                            latency_ms=latency_ms,
+                            side=side,
+                        )
+                        record["target"] = 1.0 if kernel is not None else 0.0
+                        record["support_state"] = state
+                        yield record
+
+    def _predict_evidence_support(
+        self, row, *, horizon_ms, latency_ms, side,
+    ):
+        model = getattr(self, "support_model", None)
+        if model is None:
+            return None
+        record = self._support_record(
+            row,
+            horizon_ms=horizon_ms,
+            latency_ms=latency_ms,
+            side=side,
+        )
+        raw = float(model.predict(record))
+        return min(1.0, max(0.0, raw))
+
+    def _support_diagnostics(self, rows, markets):
+        if getattr(self, "support_model", None) is None:
+            return {
+                "state": "UNAVAILABLE_NO_SUPPORT_MODEL",
+                "records": 0,
+                "observed_support_rate": None,
+                "mean_predicted_support": None,
+                "brier_score": None,
+                "by_reason": {},
+            }
+        total = 0
+        actual_sum = predicted_sum = squared_error = 0.0
+        reasons = Counter()
+        for record in self._iter_support_records(rows, markets=markets):
+            actual = float(record["target"])
+            predicted = min(
+                1.0, max(0.0, float(self.support_model.predict(record))))
+            total += 1
+            actual_sum += actual
+            predicted_sum += predicted
+            squared_error += (predicted - actual) ** 2
+            reasons[str(record.get("support_state") or "UNKNOWN")] += 1
+        return {
+            "state": "READY" if total else "NO_SUPPORT_RECORDS",
+            "records": total,
+            "observed_support_rate": actual_sum / total if total else None,
+            "mean_predicted_support": predicted_sum / total if total else None,
+            "brier_score": squared_error / total if total else None,
+            "by_reason": dict(reasons),
+        }
+
+    def _support_worst_case_pnl(self, row, *, size, side):
+        state = decision_side_state(row, side)
+        if state is None:
+            return None
+        ask = float(state["ask"])
+        entry_fee = fee_per_share(row, ask) * float(size)
+        return -(
+            float(size) * ask
+            + float(entry_fee)
+        )
+
     def _prequential_clone(self):
         return DirectActionValueModel(
             size_grid=self.size_grid,
@@ -1187,6 +1301,8 @@ class DirectActionValueModel:
             prequential_calibration_blocks=self.prequential_calibration_blocks,
             maximum_effective_action_age_ms=self.maximum_effective_action_age_ms,
             minimum_regime_action_targets=self.minimum_regime_action_targets,
+            support_policy_mode=self.support_policy_mode,
+            support_ridge=self.support_ridge,
         )
 
     def _prequential_selected_policy_calibration(
@@ -1578,6 +1694,36 @@ class DirectActionValueModel:
                     factory(None, target_states, regime_action_targets),
                     lambda action: action["target"])
 
+        self.support_model = None
+        self.support_training_records = 0
+        self.support_global_rate = None
+        self.support_calibration = {
+            "state": "UNAVAILABLE_NO_SUPPORT_MODEL",
+            "records": 0,
+            "observed_support_rate": None,
+            "mean_predicted_support": None,
+            "brier_score": None,
+            "by_reason": {},
+        }
+        try:
+            support_model = StreamingRidge(
+                self.model_feature_names,
+                ridge=self.support_ridge,
+                batch_size=self.streaming_batch_size,
+            ).fit_factory(
+                lambda: self._iter_support_records(
+                    rows, markets=mean_fit_markets),
+                lambda record: record["target"],
+            )
+            self.support_model = support_model
+            self.support_training_records = int(support_model.rows)
+            self.support_global_rate = float(support_model.target_mean)
+            self.support_calibration = self._support_diagnostics(
+                rows, calibration_markets)
+        except ValueError as exc:
+            if str(exc) != "streaming ridge received zero rows":
+                raise
+
         if self.scale_model is None:
             self.uncertainty_floor = max(
                 1e-6, deployment_mean.target_std)
@@ -1611,6 +1757,22 @@ class DirectActionValueModel:
             ),
             "partial_pooling": (
                 "GLOBAL_BASE_PLUS_RIDGE_SHRUNK_ASSET_CONTRACT_AGE_DEVIATIONS"
+            ),
+            "evidence_support_head": (
+                "STREAMING_RIDGE_LINEAR_PROBABILITY_ON_CAUSAL_ACTION_OBSERVABILITY"
+            ),
+            "evidence_support_target": (
+                "ACTION_ECONOMICS_OBSERVABLE_INCLUDING_OBSERVED_NO_FILL;"
+                "CENSORED_ARRIVAL_OR_EXIT_EQUALS_ZERO"
+            ),
+            "support_policy_mode": self.support_policy_mode,
+            "support_ridge": self.support_ridge,
+            "support_training_records": self.support_training_records,
+            "support_global_rate": self.support_global_rate,
+            "support_calibration": dict(self.support_calibration),
+            "support_semantics": (
+                "EPISTEMIC_EVIDENCE_SUPPORT_NOT_ECONOMIC_FILL_PROBABILITY;"
+                "DIRECT_CASH_TARGET_ALREADY_INCLUDES_FILL_AND_NO_FILL"
             ),
             "minimum_regime_action_targets": (
                 self.minimum_regime_action_targets),
@@ -1833,8 +1995,33 @@ class DirectActionValueModel:
             base, row, portfolio_state=portfolio_state,
             capital_budget=capital_budget,
             friction_policy=self.friction_policy)
-        lower_cash = (
+        base_lower_cash = (
             mean - uncertainty_penalty - selection_optimism_penalty)
+        evidence_support_probability = self._predict_evidence_support(
+            row,
+            horizon_ms=horizon_ms,
+            latency_ms=latency_ms,
+            side=side,
+        )
+        support_worst_case_pnl = self._support_worst_case_pnl(
+            row, size=size, side=side)
+        support_penalty = 0.0
+        lower_cash = base_lower_cash
+        if self.support_policy_mode == "ROBUST_WORST_CASE":
+            if (
+                evidence_support_probability is None
+                or support_worst_case_pnl is None
+            ):
+                lower_cash = float("-inf")
+                support_penalty = float("inf")
+            else:
+                robust = (
+                    evidence_support_probability * base_lower_cash
+                    + (1.0 - evidence_support_probability)
+                    * support_worst_case_pnl
+                )
+                lower_cash = min(base_lower_cash, robust)
+                support_penalty = max(0.0, base_lower_cash - lower_cash)
         policy_utility = lower_cash - residual["total_residual_friction"]
         return {
             **base,
@@ -1843,6 +2030,11 @@ class DirectActionValueModel:
             "predicted_abs_error_scale": scale,
             "uncertainty_penalty": float(uncertainty_penalty),
             "selection_optimism_penalty": float(selection_optimism_penalty),
+            "base_lower_cash_before_support": float(base_lower_cash),
+            "evidence_support_probability": evidence_support_probability,
+            "support_worst_case_pnl": support_worst_case_pnl,
+            "support_robustness_penalty": float(support_penalty),
+            "support_policy_mode": self.support_policy_mode,
             "calibrated_lower_cash_value": float(lower_cash),
             "calibrated_lower_value": float(policy_utility),
             "policy_utility": float(policy_utility),
@@ -1921,6 +2113,13 @@ class DirectActionValueModel:
 
             _, linear, quadratic, log_term = mean_shape
 
+            support_probability = self._predict_evidence_support(
+                row,
+                horizon_ms=horizon_ms,
+                latency_ms=latency_ms,
+                side=side,
+            )
+
             if scale_shape is not None and (
                 _polylog_value(scale_shape, midpoint)
                 > self.uncertainty_floor
@@ -1929,6 +2128,22 @@ class DirectActionValueModel:
                 linear -= uncertainty_multiplier * sl
                 quadratic -= uncertainty_multiplier * sq
                 log_term -= uncertainty_multiplier * sg
+
+            if self.support_policy_mode == "ROBUST_WORST_CASE":
+                if support_probability is None:
+                    continue
+                support_probability = min(
+                    1.0, max(0.0, float(support_probability)))
+                linear *= support_probability
+                quadratic *= support_probability
+                log_term *= support_probability
+                decision_state = decision_side_state(row, side)
+                entry_cost_per_share = (
+                    float(decision_state["ask"])
+                    + fee_per_share(row, float(decision_state["ask"]))
+                )
+                linear -= (
+                    (1.0 - support_probability) * entry_cost_per_share)
 
             linear -= capital_linear
 
@@ -2299,6 +2514,12 @@ def summarize_direct_action(outcomes):
         "total_predicted_selection_optimism_penalty": sum(
             float(row.get("selection_optimism_penalty") or 0.0)
             for row in trades),
+        "total_support_robustness_penalty": sum(
+            float(row.get("support_robustness_penalty") or 0.0)
+            for row in trades
+            if finite(row.get("support_robustness_penalty"))),
+        "selected_evidence_support_probability": numeric_distribution(
+            row.get("evidence_support_probability") for row in trades),
         "selected_size_distribution": numeric_distribution(
             row.get("size") for row in trades),
         "selected_notional_distribution": numeric_distribution(
@@ -2332,6 +2553,7 @@ def merge_direct_action_summaries(summaries):
         "negative_observed_trades", "total_predicted_residual_friction",
         "total_predicted_uncertainty_penalty",
         "total_predicted_selection_optimism_penalty",
+        "total_support_robustness_penalty",
     )
     result = {"schema": SCHEMA + "_summary_v2", **SAFETY}
     for key in additive:
@@ -2340,6 +2562,7 @@ def merge_direct_action_summaries(summaries):
             "total_predicted_residual_friction",
             "total_predicted_uncertainty_penalty",
             "total_predicted_selection_optimism_penalty",
+            "total_support_robustness_penalty",
         ):
             result[key] = int(result[key])
 
@@ -2386,6 +2609,13 @@ def merge_direct_action_summaries(summaries):
     result["observed_pnl_distribution"] = {
         "state": "SEE_EXACT_PER_FOLD_DISTRIBUTIONS",
         "folds": [summary["observed_pnl_distribution"] for summary in summaries],
+    }
+    result["selected_evidence_support_probability"] = {
+        "state": "SEE_EXACT_PER_FOLD_DISTRIBUTIONS",
+        "folds": [
+            summary["selected_evidence_support_probability"]
+            for summary in summaries
+        ],
     }
     return result
 
@@ -2560,6 +2790,9 @@ def walk_forward_direct_action(
                         "signal_age_ms", "effective_action_age_ms", "notional",
                         "policy_utility", "predicted_total_net_cash_pnl",
                         "uncertainty_penalty", "selection_optimism_penalty",
+                        "evidence_support_probability",
+                        "support_robustness_penalty",
+                        "support_worst_case_pnl",
                         "total_residual_friction",
                         "realized_pnl", "target_state",
                         "censored_worst_case_pnl",
