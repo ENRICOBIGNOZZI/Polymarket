@@ -41,7 +41,9 @@
         1
       ]
     ],
-    "support_probability_weighted": true
+    "support_probability_weighted": true,
+    "edge_semantics": "INCREMENTAL_CONSERVATIVE_UTILITY_PER_DOLLAR",
+    "admission_semantics": "TOTAL_CONSERVATIVE_VALUE_AT_VENUE_MINIMUM_MUST_BE_POSITIVE"
   },
   "objective": "CAUSAL_EXECUTABLE_NET_PNL_PER_UNIT_TIME",
   "selection": "RESEARCH_ONLY_NO_AUTOMATIC_PROMOTION"
