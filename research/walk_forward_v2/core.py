@@ -76,6 +76,24 @@ def sigmoid(value):
     return 1 / (1 + math.exp(-max(-40, min(40, value))))
 
 
+def decision_evidence_digest(decisions):
+    """Streaming semantic identity of the causal evidence attached to decisions."""
+    hasher = hashlib.sha256()
+    for row in decisions:
+        payload = {
+            "decision_id": row.get("decision_id"),
+            "information_end_ns": row.get("information_end_ns"),
+            "targets": row.get("targets") or {},
+            "arrivals": row.get("arrivals") or {},
+            "label": row.get("label"),
+            "label_information_ns": row.get("label_information_ns"),
+            "label_provenance": row.get("label_provenance"),
+        }
+        hasher.update(canonical(payload))
+        hasher.update(b"\n")
+    return hasher.hexdigest()
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1055,11 +1073,13 @@ def build_dataset(
         result["input_state"] = "NO_ADMISSIBLE_NATIVE_REPRICING_LABELS"
     # Dataset identity is semantic, not an implementation receipt. Index/cache
     # diagnostics must never change the hash of identical causal evidence.
+    result["decision_evidence_sha256"] = decision_evidence_digest(
+        result["decisions"])
     result["data_sha256"] = digest({
         "minimum_wall_ns": minimum_wall_ns,
         "sources": result["sources"],
         "decision_ids": [r["decision_id"] for r in result["decisions"]],
-        "book_evidence": result["book_evidence"],
+        "decision_evidence_sha256": result["decision_evidence_sha256"],
         "settlement_labels_included": bool(include_settlement_labels),
     })
     return result
