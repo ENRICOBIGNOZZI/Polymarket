@@ -789,12 +789,13 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         expected = prediction
     decision_price = midpoint if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else row["ask"]
     fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, decision_price)
-    gross = expected - decision_price
-    after_fee = gross - fee
+    raw_edge = expected - midpoint
+    spread_adjusted_edge = expected - decision_price
+    after_fee = spread_adjusted_edge - fee
     after_reserve = after_fee - execution_reserve
     funnel["predicted_repricing_positive"] = repricing is None or repricing > 0
-    funnel["gross_edge_positive"] = gross > 0
-    funnel["spread_adjusted_edge_positive"] = gross > 0
+    funnel["gross_edge_positive"] = raw_edge > 0
+    funnel["spread_adjusted_edge_positive"] = spread_adjusted_edge > 0
     funnel["fee_adjusted_edge_positive"] = after_fee > 0
     funnel["reserve_adjusted_edge_positive"] = after_reserve > 0
     funnel["edge_threshold"] = after_reserve >= edge_threshold
@@ -842,8 +843,9 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         funnel["positive_settlement_pnl"] = outcome["pnl"] > 0
     outcome.update({"status": "PARTIAL_FILL" if filled < requested else "FILLED", "filled": filled,
                     "requested": requested, "fees": cost_fee, "turnover": turnover,
-                    "arrival_price": book["ask"], "predicted_edge": after_reserve,
-                    "gross_edge": gross, "fee_adjusted_edge": after_fee})
+                    "arrival_price": execution_price, "predicted_edge": after_reserve,
+                    "raw_edge": raw_edge, "spread_adjusted_edge": spread_adjusted_edge,
+                    "fee_adjusted_edge": after_fee})
     return outcome
 
 
@@ -912,17 +914,25 @@ def pm_edge_distribution(evaluations, execution_reserve=.005):
             fee = fee_per_share(row, row["ask"])
             by_model[model].append({"before_cost": value - row["ask"], "after_fee": value - row["ask"] - fee,
                                     "after_reserve": value - row["ask"] - fee - execution_reserve})
+        midpoint = (row["bid"] + row["ask"]) / 2
         for horizon, value in evaluation["repricing_predictions"].items():
             if value is not None:
-                by_model["repricing_" + horizon].append({"before_cost": value, "after_fee": value - fee_per_share(row, row["ask"]),
-                                                          "after_reserve": value - fee_per_share(row, row["ask"]) - execution_reserve})
+                spread_adjusted = midpoint + value - row["ask"]
+                fee = fee_per_share(row, row["ask"])
+                by_model["repricing_" + horizon].append({
+                    "before_cost": value,
+                    "spread_adjusted": spread_adjusted,
+                    "after_fee": spread_adjusted - fee,
+                    "after_reserve": spread_adjusted - fee - execution_reserve,
+                })
     thresholds = (0, .001, .0025, .005, .01, .02)
     result = {}
     for model, values in by_model.items():
         result[model] = {
             "rows": len(values),
             "fractions": {str(t): sum(row["after_reserve"] > t for row in values) / len(values) if values else None for t in thresholds},
-            "quantiles": {key: quantile([row[key] for row in values]) for key in ("before_cost", "after_fee", "after_reserve")},
+            "quantiles": {key: quantile([row[key] for row in values if key in row])
+                          for key in ("before_cost", "spread_adjusted", "after_fee", "after_reserve")},
         }
     return result
 
@@ -1013,18 +1023,41 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
         outcomes = replay_policy(evaluations, selector, latency_ms=100,
                                  valuation_mode=valuation_mode)
         result["models"][name] = {"metrics": summarize(outcomes), "uncertainty": market_bootstrap(outcomes), "outcomes": outcomes}
-    combined_selector = variants["combined_settlement_repricing"][0]
+    learned_oos = sum(
+        event["settlement_predictions"].get("logistic_offset") is not None
+        and event["repricing_predictions"].get("250") is not None
+        for event in evaluations
+    )
+    if learned_oos:
+        primary_name = "combined_settlement_repricing"
+        primary_selector = variants[primary_name][0]
+        primary_mode = "SETTLEMENT_WITH_REPRICING_CONFIRMATION"
+    else:
+        primary_name = "repricing_250ms"
+        primary_selector = variants[primary_name][0]
+        primary_mode = "REPRICING"
+    result["latency_policy"] = {
+        "model": primary_name, "valuation_mode": primary_mode,
+        "learned_settlement_oos_rows": learned_oos,
+        "selection_rule": "COMBINED_IF_ANY_CAUSAL_LEARNED_SETTLEMENT_OOS_ELSE_REPRICING_ONLY",
+    }
     for latency in latency_ms:
         outcomes = replay_policy(
-            evaluations, combined_selector, latency_ms=latency,
-            valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION")
+            evaluations, primary_selector, latency_ms=latency,
+            valuation_mode=primary_mode)
         result["latency"][str(latency)] = summarize(outcomes)
+    result["edge_threshold_sensitivity"] = {}
+    for threshold in (0.0, .0025, .005, .01, .02):
+        outcomes = replay_policy(
+            evaluations, primary_selector, latency_ms=100,
+            valuation_mode=primary_mode, edge_threshold=threshold)
+        result["edge_threshold_sensitivity"][str(threshold)] = summarize(outcomes)
     upper = {}
     for kind in ("ZERO_LATENCY_EXECUTION_UPPER_BOUND", "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND",
                  "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND"):
         outcomes = replay_policy(
-            evaluations, combined_selector, latency_ms=100,
-            valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION", ideal=kind)
+            evaluations, primary_selector, latency_ms=100,
+            valuation_mode=primary_mode, ideal=kind)
         upper[kind] = summarize(outcomes)
     result["idealized_upper_bounds"] = upper
     return result
