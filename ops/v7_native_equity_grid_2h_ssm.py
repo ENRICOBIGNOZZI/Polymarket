@@ -82,14 +82,14 @@ assert (root/'pnl_grid.csv').is_file()
 gallery=json.load(open(root/'equity_gallery/manifest.json'))
 assert gallery['total_equity_curves']==660
 print('NATIVE_EQUITY_2H_READY')
-print(json.dumps({'window_start_ns':manifest['window_start_ns'],'window_end_ns':manifest['window_end_ns'],'rows':manifest['rows'],'assets':manifest['assets'],'summary':summary['strategies']},sort_keys=True))
+print(json.dumps({{'window_start_ns':manifest['window_start_ns'],'window_end_ns':manifest['window_end_ns'],'rows':manifest['rows'],'assets':manifest['assets'],'summary':summary['strategies']}},sort_keys=True))
 PY
 tar -C {remote}/output -czf {remote}/results.tgz .
 python3 - <<'PY'
 from pathlib import Path
 import hashlib,json
 p=Path({remote!r})/'results.tgz'
-print('NATIVE_EQUITY_RESULT='+json.dumps({'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()},sort_keys=True))
+print('NATIVE_EQUITY_RESULT='+json.dumps({{'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}},sort_keys=True))
 PY"""
     stdout,_=run(REGION,a.instance_id,command,5400)
     marker=next(x for x in stdout.splitlines() if x.startswith("NATIVE_EQUITY_RESULT="))
