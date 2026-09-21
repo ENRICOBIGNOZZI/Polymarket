@@ -872,31 +872,76 @@ def settlement_predictors(train, test):
     }
 
 
+def executable_markout_target(row, horizon_key):
+    """Future executable bid minus causal decision ask and taker fee, per share."""
+    target = row.get("targets", {}).get(str(horizon_key), {})
+    if target.get("state") != "OBSERVED":
+        return None
+    fee = cash_fee(
+        1_000_000, round(row["ask"] * 10000),
+        row["fee_rate"], row["fee_exponent"])
+    return float(target["arrival_bid"]) - float(row["ask"]) - float(fee)
+
+
 def repricing_predictors(train, test):
     names = feature_names(train)
-    out = {str(h): [None] * len(test) for h in HORIZONS_MS}
+    midpoint = {str(h): [None] * len(test) for h in HORIZONS_MS}
+    markout = {str(h): [None] * len(test) for h in HORIZONS_MS}
     details = {}
     for horizon in HORIZONS_MS:
-        eligible = [row for row in train if row.get("targets", {}).get(str(horizon), {}).get("state") == "OBSERVED"]
+        key = str(horizon)
+        eligible = [
+            row for row in train
+            if row.get("targets", {}).get(key, {}).get("state") == "OBSERVED"
+        ]
         if len(eligible) < 8:
-            details[str(horizon)] = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
+            details[key] = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
             continue
-        model = Ridge(names, ridge=8.0).fit(eligible, lambda row: row["targets"][str(horizon)]["mid_change"])
-        out[str(horizon)] = model.predict_many(test)
-        details[str(horizon)] = {"state": "READY", "rows": len(eligible), "feature_names": names,
-                                 "target": "future_observed_pm_midpoint_change"}
-    return out, details
+        midpoint_model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: row["targets"][h]["mid_change"])
+        markout_model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: executable_markout_target(row, h))
+        midpoint[key] = midpoint_model.predict_many(test)
+        markout[key] = markout_model.predict_many(test)
+        details[key] = {
+            "state": "READY", "rows": len(eligible), "feature_names": names,
+            "midpoint_target": "future_observed_pm_midpoint_change",
+            "economic_target": "future_executable_bid_minus_decision_ask_minus_taker_fee",
+        }
+    return midpoint, markout, details
+
+
+def _serialize_ridge(model, eligible, names, key, target_name):
+    model.beta = [float(value) for value in model.beta]
+    return {
+        "state": "READY",
+        "rows": len(eligible),
+        "unique_markets": len({row["market_id"] for row in eligible}),
+        "feature_names": list(names),
+        "ridge": 8.0,
+        "target": target_name,
+        "training_start_ns": min(row["decision_ns"] for row in eligible),
+        "training_end_ns": max(row["decision_ns"] for row in eligible),
+        "label_information_end_ns": max(
+            int(row["targets"][key]["observed_time_ns"]) for row in eligible),
+        "training_decision_sha256": digest([row["decision_id"] for row in eligible]),
+        "center": {name: float(model.center[name]) for name in names},
+        "scale": {name: float(model.scale[name]) for name in names},
+        "beta": model.beta,
+        "label_sources": dict(Counter(
+            row["targets"][key].get("source", "UNKNOWN") for row in eligible)),
+    }
 
 
 def fit_full_repricing(records):
-    """Freeze research-only repricing models on the full available historical window.
+    """Freeze midpoint and executable-markout models on all available history.
 
-    These fits are intentionally NOT used for historical OOS evaluation. They
-    are the post-evaluation artifacts intended for the next forward PAPER
-    experiment after an explicit promotion decision.
+    These post-OOS fits are never used to score the historical folds and are
+    never automatically promoted. The executable-markout family is the next
+    forward-PAPER candidate because its target matches tradable exit economics.
     """
     names = feature_names(records)
-    models = {}
+    midpoint_models, markout_models = {}, {}
     for horizon in HORIZONS_MS:
         key = str(horizon)
         eligible = [
@@ -905,35 +950,27 @@ def fit_full_repricing(records):
             and row.get("features") is not None
         ]
         if len(eligible) < 8:
-            models[key] = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
+            missing = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
+            midpoint_models[key] = dict(missing)
+            markout_models[key] = dict(missing)
             continue
-        model = Ridge(names, ridge=8.0).fit(
+        midpoint_model = Ridge(names, ridge=8.0).fit(
             eligible, lambda row, h=key: row["targets"][h]["mid_change"])
-        model.beta = [float(value) for value in model.beta]
-        models[key] = {
-            "state": "READY",
-            "rows": len(eligible),
-            "unique_markets": len({row["market_id"] for row in eligible}),
-            "feature_names": list(names),
-            "ridge": 8.0,
-            "target": "selected_token_pm_midpoint_change_asof_horizon",
-            "training_start_ns": min(row["decision_ns"] for row in eligible),
-            "training_end_ns": max(row["decision_ns"] for row in eligible),
-            "label_information_end_ns": max(
-                int(row["targets"][key]["observed_time_ns"]) for row in eligible),
-            "training_decision_sha256": digest([row["decision_id"] for row in eligible]),
-            "center": {name: float(model.center[name]) for name in names},
-            "scale": {name: float(model.scale[name]) for name in names},
-            "beta": model.beta,
-            "label_sources": dict(Counter(
-                row["targets"][key].get("source", "UNKNOWN") for row in eligible)),
-        }
+        markout_model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: executable_markout_target(row, h))
+        midpoint_models[key] = _serialize_ridge(
+            midpoint_model, eligible, names, key,
+            "selected_token_pm_midpoint_change_asof_horizon")
+        markout_models[key] = _serialize_ridge(
+            markout_model, eligible, names, key,
+            "future_executable_bid_minus_decision_ask_minus_taker_fee")
     return {
-        "schema": SCHEMA + "_full_window_repricing_models_v1",
+        "schema": SCHEMA + "_full_window_repricing_models_v2",
         **SAFETY,
         "automatic_promotion": False,
         "evaluation_role": "POST_OOS_FIT_FOR_NEXT_FORWARD_PAPER_ONLY",
-        "models": models,
+        "models": midpoint_models,
+        "executable_markout_models": markout_models,
     }
 
 
@@ -942,7 +979,8 @@ def walk_forward(records, *, desired_folds=3):
     evaluations = []
     for fold in all_folds:
         settlement, settlement_meta = settlement_predictors(fold["train_settlement"], fold["test"])
-        repricing, repricing_meta = repricing_predictors(fold["train_repricing"], fold["test"])
+        repricing, markout, repricing_meta = repricing_predictors(
+            fold["train_repricing"], fold["test"])
         for index, row in enumerate(fold["test"]):
             evaluations.append({
                 "fold": fold["fold"], "cutoff_ns": fold["cutoff_ns"], "decision_id": row["decision_id"],
@@ -950,6 +988,7 @@ def walk_forward(records, *, desired_folds=3):
                 "decision_ns": row["decision_ns"], "row": row,
                 "settlement_predictions": {key: values[index] for key, values in settlement.items()},
                 "repricing_predictions": {key: values[index] for key, values in repricing.items()},
+                "markout_predictions": {key: values[index] for key, values in markout.items()},
             })
         settlement_ids = [row["decision_id"] for row in fold["train_settlement"]]
         repricing_ids = [row["decision_id"] for row in fold["train_repricing"]]
