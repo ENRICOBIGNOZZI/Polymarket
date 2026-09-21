@@ -983,10 +983,19 @@ def asset_markout_predictors(train, test):
 
 def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                                 edge_threshold=.005, execution_reserve=.005,
-                                entry_cap=.75, shares=5.0):
+                                entry_cap=.75, shares=5.0,
+                                size_grid=(1.0, 2.0, 5.0, 10.0, 20.0)):
     """Explain where each asset dies before simulated execution."""
     required_prediction = execution_reserve + edge_threshold
-    result = {"required_prediction": required_prediction, "horizons": {}}
+    result = {
+        "required_prediction": required_prediction,
+        "edge_threshold": edge_threshold,
+        "execution_reserve": execution_reserve,
+        "entry_cap": entry_cap,
+        "research_size_shares": shares,
+        "size_grid": list(size_grid),
+        "horizons": {},
+    }
     assets = sorted({str(event["row"].get("asset") or "UNKNOWN") for event in evaluations})
     for horizon in horizons:
         key = str(horizon)
@@ -995,6 +1004,14 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
             rows = [event for event in evaluations if str(event["row"].get("asset") or "UNKNOWN") == asset]
             pooled_predictions, asset_predictions = [], []
             observed_targets, spreads, entry_fees, roundtrip_costs = [], [], [], []
+            asks, depths, minimums, fee_rates, fee_exponents = [], [], [], [], []
+            relative_required_edges = []
+            size_capacity = {
+                str(size): {"base_valid_rows": 0, "decision_depth_ge_size": 0,
+                            "venue_minimum_le_size": 0, "both": 0}
+                for size in size_grid
+            }
+            fee_schedules = Counter()
             base_valid = pooled_available = asset_available = 0
             pooled_threshold = asset_threshold = 0
             pooled_orderable = asset_orderable = 0
@@ -1017,10 +1034,30 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                 if not valid:
                     continue
                 base_valid += 1
-                spreads.append(float(row["ask"]) - float(row["bid"]))
-                entry_fees.append(fee_per_share(row, row["ask"]))
-                requested = min(shares, row["quantity"])
-                orderable = row["ask"] <= entry_cap and requested >= row["minimum"]
+                ask = float(row["ask"])
+                depth = float(row["quantity"])
+                minimum = float(row["minimum"])
+                rate = float(row["fee_rate"])
+                exponent = float(row["fee_exponent"])
+                spreads.append(ask - float(row["bid"]))
+                entry_fees.append(fee_per_share(row, ask))
+                asks.append(ask)
+                depths.append(depth)
+                minimums.append(minimum)
+                fee_rates.append(rate)
+                fee_exponents.append(exponent)
+                fee_schedules[f"{rate:.12g}|{exponent:.12g}"] += 1
+                relative_required_edges.append(required_prediction / ask if ask > 0 else math.nan)
+                for size in size_grid:
+                    cell = size_capacity[str(size)]
+                    cell["base_valid_rows"] += 1
+                    depth_ok = depth + 1e-12 >= size
+                    min_ok = minimum <= size + 1e-12
+                    cell["decision_depth_ge_size"] += int(depth_ok)
+                    cell["venue_minimum_le_size"] += int(min_ok)
+                    cell["both"] += int(depth_ok and min_ok)
+                requested = min(shares, depth)
+                orderable = ask <= entry_cap and requested >= minimum
 
                 pooled = event.get("markout_predictions", {}).get(key)
                 if pooled is not None:
@@ -1043,7 +1080,16 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                             asset_orderable += 1
 
             def mean(values):
-                return sum(values) / len(values) if values else None
+                valid = [value for value in values if finite(value)]
+                return sum(valid) / len(valid) if valid else None
+            def q(values):
+                valid = sorted(value for value in values if finite(value))
+                if not valid:
+                    return None
+                return {
+                    str(level): valid[round((len(valid) - 1) * level)]
+                    for level in (.05, .25, .5, .75, .95)
+                }
             def fractions(values):
                 return {
                     str(threshold): (
@@ -1062,8 +1108,20 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                     if observed_targets else None
                 ),
                 "mean_spread": mean(spreads),
+                "spread_quantiles": q(spreads),
+                "mean_entry_price": mean(asks),
+                "entry_price_quantiles": q(asks),
                 "mean_entry_fee": mean(entry_fees),
+                "entry_fee_quantiles": q(entry_fees),
                 "mean_roundtrip_cost": mean(roundtrip_costs),
+                "roundtrip_cost_quantiles": q(roundtrip_costs),
+                "fee_rate_quantiles": q(fee_rates),
+                "fee_exponent_quantiles": q(fee_exponents),
+                "fee_schedule_counts": dict(fee_schedules),
+                "visible_depth_quantiles": q(depths),
+                "venue_minimum_quantiles": q(minimums),
+                "required_prediction_as_fraction_of_price_quantiles": q(relative_required_edges),
+                "size_capacity": size_capacity,
                 "pooled": {
                     "forecast_available": pooled_available,
                     "mean_prediction": mean(pooled_predictions),
@@ -1080,6 +1138,77 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                 },
             }
         result["horizons"][key] = horizon_result
+    return result
+
+
+def live_parity_policy_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
+                                   latency_ms=50, shares=5.0):
+    """Compare the research replay gate with current native live-policy geometry.
+
+    This is diagnostic only. It never changes the forward shadow or trader.
+    """
+    ordered = sorted(evaluations, key=lambda value: (value["decision_ns"], value["decision_id"]))
+    result = {
+        "live_policy_reference": {
+            "minimum_tte_ns": 105_000_000_000,
+            "maximum_tte_ns": 120_000_000_000,
+            "maximum_entry_price": .80,
+            "target_shares": shares,
+            "require_full_visible_depth": True,
+        },
+        "research_policy_reference": {
+            "minimum_tte_ns": 30_000_000_000,
+            "maximum_tte_ns": 120_000_000_000,
+            "maximum_entry_price": .75,
+            "target_shares": shares,
+            "require_full_visible_depth": False,
+            "edge_threshold": .005,
+            "execution_reserve": .005,
+        },
+        "horizons": {},
+    }
+    for horizon in horizons:
+        key = str(horizon)
+        per_asset = {}
+        for asset in sorted({event["row"]["asset"] for event in ordered}):
+            cell = {
+                "rows": 0,
+                "forecast_available": 0,
+                "research_tte": 0,
+                "live_tte": 0,
+                "research_entry_cap": 0,
+                "live_entry_cap": 0,
+                "research_depth_gate": 0,
+                "live_full_depth_gate": 0,
+                "passes_research_geometry": 0,
+                "passes_live_geometry": 0,
+            }
+            for event in ordered:
+                row = event["row"]
+                if row["asset"] != asset:
+                    continue
+                cell["rows"] += 1
+                prediction = event.get("asset_markout_predictions", {}).get(key)
+                if prediction is None:
+                    continue
+                cell["forecast_available"] += 1
+                tte = row["tte_ns"]
+                research_tte = 30_000_000_000 <= tte <= 120_000_000_000
+                live_tte = 105_000_000_000 <= tte <= 120_000_000_000
+                research_cap = row["ask"] <= .75
+                live_cap = row["ask"] <= .80
+                research_depth = min(shares, row["quantity"]) >= row["minimum"]
+                live_depth = row["quantity"] + 1e-12 >= shares and row["minimum"] <= shares + 1e-12
+                cell["research_tte"] += int(research_tte)
+                cell["live_tte"] += int(live_tte)
+                cell["research_entry_cap"] += int(research_cap)
+                cell["live_entry_cap"] += int(live_cap)
+                cell["research_depth_gate"] += int(research_depth)
+                cell["live_full_depth_gate"] += int(live_depth)
+                cell["passes_research_geometry"] += int(research_tte and research_cap and research_depth)
+                cell["passes_live_geometry"] += int(live_tte and live_cap and live_depth)
+            per_asset[asset] = cell
+        result["horizons"][key] = per_asset
     return result
 
 
@@ -1688,6 +1817,7 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
         "pm_edge_distribution": pm_edge_distribution(evaluations),
         "prediction_metrics": prediction_quality(evaluations),
         "asset_selection_diagnostics": asset_selection_diagnostics(evaluations),
+        "live_parity_policy_diagnostics": live_parity_policy_diagnostics(evaluations),
         "latency_reference_horizon_ms": 500,
     }
     variants = {
