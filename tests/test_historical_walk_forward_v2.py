@@ -28,6 +28,9 @@ from research.walk_forward_v2.core import (
     native_repricing_point,
     attach_native_repricing,
     attach_native_repricing_stream,
+    compact_window_index,
+    compact_index_intersects_decisions,
+    compact_index_intersects_repricing,
 )
 from research.walk_forward_v2.promotion import (
     assess_candidate,
@@ -1167,3 +1170,67 @@ def test_native_pair_l1_requires_complete_bilateral_prices_and_quantities():
     invalid = dict(raw)
     invalid["no_ask_quantity"] = -1
     assert native_pair_l1(invalid)["state"] == "PRICES_ONLY"
+
+
+def test_compact_window_index_reuses_verified_immutable_source_and_invalidates_growth(tmp_path):
+    path = tmp_path / "compact.jsonl"
+    cache = tmp_path / "cache"
+    rows = [
+        {
+            "schema": "polymarket_v7_native_observation_v1",
+            "kind": 2,
+            "decision_wall_ns": 100,
+        },
+        {
+            "schema": "polymarket_v7_native_observation_v1",
+            "kind": 6,
+            "decision_wall_ns": 110,
+        },
+        {
+            "schema": "polymarket_v7_native_observation_v1",
+            "kind": 6,
+            "decision_wall_ns": 130,
+        },
+    ]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    first, first_hit = compact_window_index(path, cache)
+    second, second_hit = compact_window_index(path, cache)
+    assert first_hit is False
+    assert second_hit is True
+    assert first == second
+    assert first["kind2_min_decision_wall_ns"] == 100
+    assert first["kind2_max_decision_wall_ns"] == 100
+    assert first["kind6_min_origin_wall_ns"] == 110
+    assert first["kind6_max_origin_wall_ns"] == 130
+    assert compact_index_intersects_decisions(first, 90)
+    assert not compact_index_intersects_decisions(first, 101)
+    assert compact_index_intersects_repricing(first, 100, 120)
+    assert not compact_index_intersects_repricing(first, 131, 150)
+
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "schema": "polymarket_v7_native_observation_v1",
+            "kind": 2,
+            "decision_wall_ns": 200,
+        }) + "\n")
+    third, third_hit = compact_window_index(path, cache)
+    assert third_hit is False
+    assert third["kind2_max_decision_wall_ns"] == 200
+    assert third["source_sha256"] != first["source_sha256"]
+
+
+def test_recent_window_index_never_skips_overlapping_repricing_origin(tmp_path):
+    path = tmp_path / "labels.jsonl"
+    cache = tmp_path / "cache"
+    path.write_text(
+        json.dumps({
+            "schema": "polymarket_v7_native_observation_v1",
+            "kind": 6,
+            "decision_wall_ns": 1_000,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    index, _ = compact_window_index(path, cache)
+    assert compact_index_intersects_repricing(index, 1_000, 1_000)
+    assert not compact_index_intersects_repricing(index, 1_001, 2_000)
