@@ -1,10 +1,10 @@
 {
   "schema": "polymarket_v7_decomposed_benchmark_ssm_request_v1",
   "version": 1,
-  "request_id": "decomposed-fast-diagnostic-20260921T2024CEST",
+  "request_id": "decomposed-fast-2h-20260921T2023CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "d3e089bcb1f4592b8df4b4b448d21e2f697a87cf",
-  "minimum_wall_ns": 1789984800000000000,
+  "expected_research_sha": "673ba53decf2f6f951f67911a5ed1a24f647c71a",
+  "minimum_wall_ns": 1790007780000000000,
   "folds": 2,
   "latency_ms": 50,
   "capital_budget": 10000,
