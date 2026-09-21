@@ -465,6 +465,8 @@ def main(argv=None):
     config = load_trade_frequency_challenger_config(args.challenger_config)
     data = build_dataset(
         args.root,
+        include_settlement_labels=False,
+        use_compact_window_index=True,
         **(
             {"minimum_wall_ns": args.minimum_wall_ns}
             if args.minimum_wall_ns is not None
