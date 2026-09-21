@@ -273,6 +273,7 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms, side=None,
     fill = min(size, float(arrival_state.get("ask_quantity") or 0.0))
     if fill <= 0:
         return {
+            "side": side,
             "cash_pnl": 0.0,
             "gross_executable_markout": 0.0,
             "filled": 0.0,
@@ -1123,13 +1124,15 @@ class DirectActionValueModel:
                 float(self.uncertainty_floor),
                 float(self.scale_model.predict(action)),
             )
-        notional = float(size) * float(row["ask"])
+        side_state = decision_side_state(row, side)
+        notional = float(size) * float(side_state["ask"])
         uncertainty_penalty = (
             float(self.friction_policy.uncertainty_aversion)
             * self.calibration_multiplier * scale
         )
         base = {
             "action": "TRADE",
+            "side": side,
             "size": float(size),
             "exit_horizon_ms": int(horizon_ms),
             "latency_ms": int(latency_ms),
