@@ -153,3 +153,65 @@ def test_forward_shadow_bootstrap_starts_at_existing_eof(tmp_path: Path):
         assert tailer.timely == 1
     finally:
         tailer.output.close()
+
+
+
+def test_shadow_status_reports_latency_quantiles_and_asset_counts(tmp_path: Path):
+    artifact_path = tmp_path / "artifact.json"
+    raw = json.dumps(artifact(), sort_keys=True, separators=(",", ":"))
+    artifact_path.write_text(raw, encoding="utf-8")
+    artifact_sha = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+
+    output = tmp_path / "out.jsonl"
+    status = tmp_path / "status.json"
+    rows = []
+    for asset, age_ms, eligible in (("BTC", 10, True), ("ETH", 20, True), ("BTC", 60, False)):
+        rows.append({
+            "schema": "polymarket_v7_executable_markout_forward_shadow_v1",
+            "decision_id": asset + str(age_ms),
+            "asset": asset,
+            "inference_age_ns": age_ms * 1_000_000,
+            "forward_eligible": eligible,
+        })
+    output.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    run_root = tmp_path / "run"
+    control = run_root / "control"
+    control.mkdir(parents=True)
+    (control / "native_engine_manager_status.json").write_text(json.dumps({
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "run_id": "r",
+    }), encoding="utf-8")
+
+    args = argparse.Namespace(
+        run_root=run_root,
+        artifact=artifact_path,
+        artifact_sha256=artifact_sha,
+        source_code_sha="0" * 40,
+        output=output,
+        status=status,
+        poll_ms=5,
+        maximum_inference_age_ms=50,
+        duration_seconds=0,
+    )
+    tailer = Tailer(args)
+    try:
+        tailer.publish_status()
+        value = json.loads(status.read_text(encoding="utf-8"))
+        assert value["scored"] == 3
+        assert value["timely"] == 2
+        assert value["late"] == 1
+        assert value["by_asset"]["BTC"]["scored"] == 2
+        assert value["by_asset"]["BTC"]["timely"] == 1
+        assert value["by_asset"]["ETH"]["timely_fraction"] == 1.0
+        latency = value["latency"]
+        assert latency["window_rows"] == 3
+        assert latency["p50_ms"] == 20.0
+        assert latency["p90_ms"] == 60.0
+        assert latency["p99_ms"] == 60.0
+        assert latency["fraction_le_25ms"] == 2 / 3
+        assert latency["fraction_le_50ms"] == 2 / 3
+    finally:
+        tailer.output.close()
