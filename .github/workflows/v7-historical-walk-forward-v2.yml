@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 2
 
       - name: Configure AWS credentials through OIDC
@@ -62,7 +62,7 @@ jobs:
 
       - name: Publish research report and PNGs
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           output="$(python3 -c 'import json;print(json.load(open("deploy/v7-historical-walk-forward-v2-request.json"))["output_directory"])')"
@@ -76,7 +76,7 @@ jobs:
           fi
           git commit -m "Publish London historical walk-forward V2 results"
           if ! git push origin HEAD:main; then
-            branch="research/historical-walk-forward-v2-results-\${GITHUB_RUN_ID}"
-            git push origin "HEAD:\${branch}"
-            gh pr create --base main --head "$branch" --title "research: publish London walk-forward V2 results" --body "Automated PAPER-only London historical walk-forward V2 results. Generated from exact main SHA \${GITHUB_SHA}; no runtime or execution authority changes."
+            branch="research/historical-walk-forward-v2-results-${GITHUB_RUN_ID}"
+            git push origin "HEAD:${branch}"
+            gh pr create --base main --head "$branch" --title "research: publish London walk-forward V2 results" --body "Automated PAPER-only London historical walk-forward V2 results. Generated from exact main SHA ${GITHUB_SHA}; no runtime or execution authority changes."
           fi
