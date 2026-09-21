@@ -1,0 +1,15 @@
+{
+  "schema": "polymarket_v7_multi_alpha_2h_request_v1",
+  "version": 1,
+  "request_id": "multi-alpha-2h-20260921",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_research_sha": "8bf49629229154caee8c8b2df79e0d519b433b60",
+  "baseline_code_sha": "0f115313c80c72fd9ee52afc36a5f3a8af85f981",
+  "minimum_wall_ns": 1790007780000000000,
+  "output_directory": "docs/research/multi-alpha-2h-2026-09-21",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}
