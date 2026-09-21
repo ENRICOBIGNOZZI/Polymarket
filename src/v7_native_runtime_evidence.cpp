@@ -98,8 +98,9 @@ constexpr std::string_view kMakerExecutionSemantics =
 }
 
 [[nodiscard]] const char* strategy_component(StrategyId strategy) noexcept {
-    return strategy == StrategyId::ProfessionalMaker
-        ? "professional_maker" : "crypto_informed_taker";
+    if (strategy == StrategyId::ProfessionalMaker) return "professional_maker";
+    if (strategy == StrategyId::CryptoLatencyArb) return "crypto_latency_arb";
+    return "crypto_informed_taker";
 }
 
 [[nodiscard]] const char* native_decision_reason_name(std::uint8_t reason) noexcept {
@@ -255,8 +256,10 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"identity_provenance", maker ? json::value("EXACT_RUNTIME_ARTIFACT_V1") : json::value(nullptr)},
             {"prediction_model_kind", event.strategy_id == StrategyId::ProfessionalMaker
                 ? (config.maker_valid_cells > 0 ? "EXECUTION_CELLS_LOADED" : "DEFAULT_BASELINE")
-                : config.probability_artifact_sha256.empty() ? "FROZEN_DIRECTIONAL_RULE"
-                : "EXPERIMENTAL_SETTLEMENT_PROBABILITY_V1"},
+                : event.strategy_id == StrategyId::CryptoLatencyArb
+                    ? "DETERMINISTIC_STALENESS_RULE"
+                    : config.probability_artifact_sha256.empty() ? "FROZEN_DIRECTIONAL_RULE"
+                    : "EXPERIMENTAL_SETTLEMENT_PROBABILITY_V1"},
             {"probability_artifact_sha256", config.probability_artifact_sha256.empty()
                 ? json::value(nullptr) : json::value(config.probability_artifact_sha256)},
             {"probability_forward_calibrated", false},
