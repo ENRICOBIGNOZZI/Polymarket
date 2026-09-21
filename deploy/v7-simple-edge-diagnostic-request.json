@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_simple_edge_diagnostic_request_v1",
   "version": 1,
-  "request_id": "simple-edge-two-hour-indexed-20260921T2110CEST",
+  "request_id": "simple-edge-two-hour-indexed-rich-20260921T2120CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "20a38172af02df967e6a8ea20294540526166def",
+  "expected_research_sha": "0dd1bd117f12538a49cf653fa1a5fbabf95b7389",
   "minimum_wall_ns": 1790007780000000000,
   "output_directory": "docs/research/simple-edge-fast-2026-09-21",
   "paper_only": true,
