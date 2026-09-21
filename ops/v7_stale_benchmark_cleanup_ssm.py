@@ -27,16 +27,27 @@ before="$(systemctl show "$PAPER" -p MainPID --value)"
 python3 - "$STALE" "$ACTIVE" <<'PY'
 import os,signal,subprocess,sys,time
 stale,active=sys.argv[1:]
-rows=subprocess.run(["ps","-eo","pid=,args="],capture_output=True,text=True,check=True).stdout.splitlines()
+rows=subprocess.run(
+    ["ps","-eo","pid=,etime=,%cpu=,%mem=,args="],
+    capture_output=True,text=True,check=True).stdout.splitlines()
 targets=[]
+active_rows=[]
 for line in rows:
     line=line.strip()
     if not line: continue
-    pid_text,_,args=line.partition(" ")
+    parts=line.split(None,4)
+    if len(parts)<5: continue
+    pid_text,etime,cpu,mem,args=parts
     if stale in args and active not in args:
         try: targets.append(int(pid_text))
         except ValueError: pass
+    if active in args:
+        active_rows.append({
+            "pid":int(pid_text),"elapsed":etime,
+            "cpu":float(cpu),"mem":float(mem),
+        })
 print("stale_targets="+",".join(map(str,targets)))
+print("active_processes_json="+__import__("json").dumps(active_rows,separators=(",",":")))
 for pid in targets:
     try: os.kill(pid,signal.SIGTERM)
     except ProcessLookupError: pass
@@ -63,18 +74,22 @@ echo "STALE_BENCHMARK_CLEANUP=OK"
     if marker is None: raise SystemExit("cleanup marker missing")
     killed=0
     targets=[]
+    active_processes=[]
     for line in stdout.splitlines():
         if line.startswith("stale_killed="):
             killed=int(line.split("=",1)[1])
         elif line.startswith("stale_targets="):
             raw=line.split("=",1)[1]
             targets=[int(v) for v in raw.split(",") if v]
+        elif line.startswith("active_processes_json="):
+            active_processes=json.loads(line.split("=",1)[1])
     value={
         "stale_prefix":a.stale_prefix,
         "active_prefix":a.active_prefix,
         "paper_pid_unchanged":True,
         "stale_targets":targets,
         "stale_killed":killed,
+        "active_processes":active_processes,
     }
     value["stdout_tail"]=stdout[-1000:]
     value["stderr_tail"]=stderr[-1000:]
