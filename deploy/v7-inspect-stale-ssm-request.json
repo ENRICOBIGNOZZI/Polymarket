@@ -1,0 +1,7 @@
+{
+  "schema": "polymarket_v7_inspect_stale_ssm_request_v1",
+  "version": 1,
+  "command_id": "fda4dce6-ad40-48d9-8e2f-c15740246ed9",
+  "read_only": true,
+  "paper_only": true
+}
