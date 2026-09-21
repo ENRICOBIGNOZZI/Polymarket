@@ -327,7 +327,7 @@ def test_full_window_repricing_fit_uses_all_observed_history_without_promotion()
         assert model["rows"] == markout["rows"] == 10
         assert model["unique_markets"] == markout["unique_markets"] == 10
         assert model["label_sources"] == {"NATIVE_REPRICING_KIND6_ASOF_HORIZON": 10}
-        assert markout["target"] == "future_executable_bid_minus_decision_ask_minus_taker_fee"
+        assert markout["target"] == "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees"
         assert model["training_start_ns"] == rows[0]["decision_ns"]
         assert model["training_end_ns"] == rows[-1]["decision_ns"]
 
@@ -471,3 +471,35 @@ def test_native_label_information_time_not_nominal_horizon_controls_training_cut
     assert point["information_ns"] == origin["decision_ns"] + 3_500_000_000
     attach_native_repricing([origin], {(key, horizon): point})
     assert origin["information_end_ns"] == origin["decision_ns"] + 3_500_000_000
+
+
+
+def test_executable_markout_charges_both_entry_and_exit_fee():
+    row = record("roundtrip-fee")
+    row["fee_rate"] = .01
+    row["fee_exponent"] = 1.0
+    row["targets"] = {
+        "500": {
+            "state": "OBSERVED",
+            "arrival_bid": .55,
+            "observed_time_ns": row["decision_ns"] + 500_000_000,
+        }
+    }
+    gross = .55 - .50
+    from research.walk_forward_v2.core import fee_per_share
+    expected = gross - fee_per_share(row, .50) - fee_per_share(row, .55)
+    assert math.isclose(executable_markout_target(row, "500"), expected, abs_tol=1e-12)
+
+    row["arrivals"] = {
+        "100": {"time_ns": row["decision_ns"] + 100_000_000,
+                "bid": .49, "ask": .50, "quantity": 5.0, "epoch": 7}
+    }
+    outcome = replay_one(
+        row, .04, None, latency_ms=100, valuation_mode="EXECUTABLE_MARKOUT",
+        markout_horizon_ms=500, edge_threshold=0.0, execution_reserve=0.0)
+    assert outcome["filled"] == 5.0
+    assert outcome["markout_exit_fee"] > 0
+    assert math.isclose(
+        outcome["markout"],
+        outcome["markout_before_fee"] - outcome["markout_entry_fee"] - outcome["markout_exit_fee"],
+        abs_tol=1e-12)
