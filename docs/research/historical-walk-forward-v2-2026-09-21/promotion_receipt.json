@@ -1,0 +1,333 @@
+{
+  "action": "HOLD",
+  "artifact_sha256": "732c1ce3f4fd297d08911341767207b9a7dafc618644bfbc2ed90cf0c21dbd47",
+  "authenticated_execution": false,
+  "automatic_promotion_scope": "PAPER_RESEARCH_CHAMPION_ONLY",
+  "candidates": [
+    {
+      "candidate_contract": {
+        "edge_threshold": 0.005,
+        "entry_cap": 0.8,
+        "execution_reserve": 0.005,
+        "maximum_tte_ns": 120000000000,
+        "minimum_tte_ns": 105000000000,
+        "require_full_visible_depth": true,
+        "ridge": 8.0,
+        "shares": 5.0
+      },
+      "candidate_id": "asset_specific_1000ms",
+      "failures": [
+        "NONPOSITIVE_TOTAL_MARKOUT",
+        "NONPOSITIVE_MARKOUT_PER_FILL",
+        "MARKET_BLOCK_LOWER_BOUND_NEGATIVE",
+        "NONROBUST_LATENCY_25MS",
+        "NONROBUST_LATENCY_50MS"
+      ],
+      "family": "ASSET_SPECIFIC",
+      "horizon_ms": 1000,
+      "latency_checks": {
+        "25": {
+          "marked_fills": 66,
+          "markout_pnl": -1.0838500000000006,
+          "state": "READY"
+        },
+        "50": {
+          "marked_fills": 64,
+          "markout_pnl": -2.9965700000000006,
+          "state": "READY"
+        }
+      },
+      "metrics": {
+        "fill_rate": 0.8705882352941177,
+        "fills": 74,
+        "marked_fills": 64,
+        "markets": 64,
+        "markout_per_fill": -0.04682140625000001,
+        "markout_per_fill_interval": [
+          -0.10865968749999999,
+          0.03409921875
+        ],
+        "markout_pnl": -2.9965700000000006
+      },
+      "qualified": false,
+      "score": -0.10865968749999999
+    },
+    {
+      "candidate_contract": {
+        "edge_threshold": 0.005,
+        "entry_cap": 0.8,
+        "execution_reserve": 0.005,
+        "maximum_tte_ns": 120000000000,
+        "minimum_tte_ns": 105000000000,
+        "require_full_visible_depth": true,
+        "ridge": 8.0,
+        "shares": 5.0
+      },
+      "candidate_id": "asset_specific_2000ms",
+      "failures": [
+        "NONPOSITIVE_TOTAL_MARKOUT",
+        "NONPOSITIVE_MARKOUT_PER_FILL",
+        "MARKET_BLOCK_LOWER_BOUND_NEGATIVE",
+        "NONROBUST_LATENCY_25MS",
+        "NONROBUST_LATENCY_50MS"
+      ],
+      "family": "ASSET_SPECIFIC",
+      "horizon_ms": 2000,
+      "latency_checks": {
+        "25": {
+          "marked_fills": 56,
+          "markout_pnl": -2.2124500000000005,
+          "state": "READY"
+        },
+        "50": {
+          "marked_fills": 55,
+          "markout_pnl": -3.9177500000000003,
+          "state": "READY"
+        }
+      },
+      "metrics": {
+        "fill_rate": 0.8589743589743589,
+        "fills": 67,
+        "marked_fills": 55,
+        "markets": 55,
+        "markout_per_fill": -0.07123181818181819,
+        "markout_per_fill_interval": [
+          -0.13315000000000002,
+          -0.0025699999999999933
+        ],
+        "markout_pnl": -3.9177500000000003
+      },
+      "qualified": false,
+      "score": -0.13315000000000002
+    },
+    {
+      "candidate_contract": {
+        "edge_threshold": 0.005,
+        "entry_cap": 0.8,
+        "execution_reserve": 0.005,
+        "maximum_tte_ns": 120000000000,
+        "minimum_tte_ns": 105000000000,
+        "require_full_visible_depth": true,
+        "ridge": 8.0,
+        "shares": 5.0
+      },
+      "candidate_id": "asset_specific_500ms",
+      "failures": [
+        "NONPOSITIVE_TOTAL_MARKOUT",
+        "NONPOSITIVE_MARKOUT_PER_FILL",
+        "MARKET_BLOCK_LOWER_BOUND_NEGATIVE",
+        "NONROBUST_LATENCY_25MS",
+        "NONROBUST_LATENCY_50MS"
+      ],
+      "family": "ASSET_SPECIFIC",
+      "horizon_ms": 500,
+      "latency_checks": {
+        "25": {
+          "marked_fills": 56,
+          "markout_pnl": -0.3365500000000006,
+          "state": "READY"
+        },
+        "50": {
+          "marked_fills": 53,
+          "markout_pnl": -1.6746000000000005,
+          "state": "READY"
+        }
+      },
+      "metrics": {
+        "fill_rate": 0.8169014084507042,
+        "fills": 58,
+        "marked_fills": 53,
+        "markets": 53,
+        "markout_per_fill": -0.03159622641509435,
+        "markout_per_fill_interval": [
+          -0.10236603773584912,
+          0.06620377358490565
+        ],
+        "markout_pnl": -1.6746000000000005
+      },
+      "qualified": false,
+      "score": -0.10236603773584912
+    },
+    {
+      "candidate_contract": {
+        "edge_threshold": 0.005,
+        "entry_cap": 0.8,
+        "execution_reserve": 0.005,
+        "maximum_tte_ns": 120000000000,
+        "minimum_tte_ns": 105000000000,
+        "require_full_visible_depth": true,
+        "ridge": 8.0,
+        "shares": 5.0
+      },
+      "candidate_id": "pooled_1000ms",
+      "failures": [
+        "INSUFFICIENT_MARKED_FILLS",
+        "NONPOSITIVE_TOTAL_MARKOUT",
+        "NONPOSITIVE_MARKOUT_PER_FILL",
+        "MARKET_BLOCK_LOWER_BOUND_NEGATIVE",
+        "NONROBUST_LATENCY_50MS"
+      ],
+      "family": "POOLED",
+      "horizon_ms": 1000,
+      "latency_checks": {
+        "25": {
+          "marked_fills": 29,
+          "markout_pnl": 1.406149999999999,
+          "state": "READY"
+        },
+        "50": {
+          "marked_fills": 25,
+          "markout_pnl": -0.31800000000000117,
+          "state": "READY"
+        }
+      },
+      "metrics": {
+        "fill_rate": 0.8409090909090909,
+        "fills": 37,
+        "marked_fills": 25,
+        "markets": 25,
+        "markout_per_fill": -0.012720000000000047,
+        "markout_per_fill_interval": [
+          -0.07073200000000002,
+          0.0485339999999999
+        ],
+        "markout_pnl": -0.31800000000000117
+      },
+      "qualified": false,
+      "score": -0.07073200000000002
+    },
+    {
+      "candidate_contract": {
+        "edge_threshold": 0.005,
+        "entry_cap": 0.8,
+        "execution_reserve": 0.005,
+        "maximum_tte_ns": 120000000000,
+        "minimum_tte_ns": 105000000000,
+        "require_full_visible_depth": true,
+        "ridge": 8.0,
+        "shares": 5.0
+      },
+      "candidate_id": "pooled_2000ms",
+      "failures": [
+        "INSUFFICIENT_MARKED_FILLS",
+        "INSUFFICIENT_MARKET_BLOCKS",
+        "NONPOSITIVE_TOTAL_MARKOUT",
+        "NONPOSITIVE_MARKOUT_PER_FILL",
+        "MARKET_BLOCK_LOWER_BOUND_NEGATIVE",
+        "NONROBUST_LATENCY_50MS"
+      ],
+      "family": "POOLED",
+      "horizon_ms": 2000,
+      "latency_checks": {
+        "25": {
+          "marked_fills": 23,
+          "markout_pnl": 1.2872,
+          "state": "READY"
+        },
+        "50": {
+          "marked_fills": 19,
+          "markout_pnl": -0.3401500000000001,
+          "state": "READY"
+        }
+      },
+      "metrics": {
+        "fill_rate": 0.8297872340425532,
+        "fills": 39,
+        "marked_fills": 19,
+        "markets": 19,
+        "markout_per_fill": -0.017902631578947375,
+        "markout_per_fill_interval": [
+          -0.12404999999999997,
+          0.06998157894736838
+        ],
+        "markout_pnl": -0.3401500000000001
+      },
+      "qualified": false,
+      "score": -0.12404999999999997
+    },
+    {
+      "candidate_contract": {
+        "edge_threshold": 0.005,
+        "entry_cap": 0.8,
+        "execution_reserve": 0.005,
+        "maximum_tte_ns": 120000000000,
+        "minimum_tte_ns": 105000000000,
+        "require_full_visible_depth": true,
+        "ridge": 8.0,
+        "shares": 5.0
+      },
+      "candidate_id": "pooled_500ms",
+      "failures": [
+        "INSUFFICIENT_MARKED_FILLS",
+        "MARKET_BLOCK_LOWER_BOUND_NEGATIVE"
+      ],
+      "family": "POOLED",
+      "horizon_ms": 500,
+      "latency_checks": {
+        "25": {
+          "marked_fills": 26,
+          "markout_pnl": 2.52,
+          "state": "READY"
+        },
+        "50": {
+          "marked_fills": 23,
+          "markout_pnl": 1.1883999999999992,
+          "state": "READY"
+        }
+      },
+      "metrics": {
+        "fill_rate": 0.8333333333333334,
+        "fills": 30,
+        "marked_fills": 23,
+        "markets": 23,
+        "markout_per_fill": 0.05166956521739127,
+        "markout_per_fill_interval": [
+          -0.0233195652173913,
+          0.14949130434782607
+        ],
+        "markout_pnl": 1.1883999999999992
+      },
+      "qualified": false,
+      "score": -0.0233195652173913
+    }
+  ],
+  "execution_authority": false,
+  "history_gate": {
+    "failures": [],
+    "passed": true,
+    "training_window": {
+      "configured_minimum_wall_ns": 1789921800000000000,
+      "decision_rows": 398781,
+      "maximum_decision_ns": 1789989310527011507,
+      "mode": "EXPANDING_ALL_CAUSAL_HISTORY"
+    }
+  },
+  "hot_path_mutation": false,
+  "paper_only": true,
+  "policy": {
+    "allowed_candidates": [
+      "asset_specific_1000ms",
+      "asset_specific_2000ms",
+      "asset_specific_500ms",
+      "pooled_1000ms",
+      "pooled_2000ms",
+      "pooled_500ms"
+    ],
+    "minimum_challenger_improvement": 0.002,
+    "minimum_fill_rate": 0.1,
+    "minimum_marked_fills": 50,
+    "minimum_market_blocks": 20,
+    "reference_latency_ms": 50,
+    "require_market_block_lower_bound_nonnegative": true,
+    "require_nonnegative_25ms_and_50ms_markout": true
+  },
+  "previous_candidate_id": null,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "reason": "NO_QUALIFIED_CANDIDATE",
+  "registry_path": "config/v7_executable_markout_research_champion.json",
+  "registry_updated": false,
+  "schema": "polymarket_v7_executable_markout_promotion_receipt_v1",
+  "selected_candidate_id": null,
+  "version": 1
+}
