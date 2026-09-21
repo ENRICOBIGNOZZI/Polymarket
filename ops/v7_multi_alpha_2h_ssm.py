@@ -118,7 +118,7 @@ assert manifest['window_end_ns']-manifest['window_start_ns']==7200*10**9
 assert manifest['selection_policy']=='DATA_QUALITY_ONLY_NO_PNL'
 assert baseline['paper_only'] is True
 assert short['automatic_promotion'] is False
-required=[f'{i:02d}_' for i in range(20)]
+required=[f'{{i:02d}}_' for i in range(20)]
 names=[p.name for p in root.iterdir()]
 for prefix in required:
     assert any(name.startswith(prefix) for name in names), prefix
