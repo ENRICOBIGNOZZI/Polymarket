@@ -128,6 +128,7 @@ struct Options {
     bool strict_signal_policy = false;
     bool validate_only = false;
     bool observation_only = false;
+    bool clip_capital_target_to_visible_depth = false;
     bool capture_native_decisions = false;
     bool capture_native_observations = false;
     bool capture_execution_windows = false;
@@ -188,6 +189,8 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--paper-terms-sha256") out.paper_terms_sha256 = next();
         else if (arg == "--signal-policy-sha256") out.signal_policy_sha256 = next();
         else if (arg == "--strict-signal-policy") out.strict_signal_policy = true;
+        else if (arg == "--clip-capital-target-to-visible-depth")
+            out.clip_capital_target_to_visible_depth = true;
         else if (arg == "--validate-only") out.validate_only = true;
         else if (arg == "--observation-only") {
             out.observation_only = true;
@@ -401,6 +404,8 @@ int main(int argc, char** argv) {
         decision_policy.target_quantity_microunits = options.target_quantity_microunits;
         decision_policy.target_notional_microdollars = options.target_notional_microdollars;
         decision_policy.maximum_entry_price_e4 = options.maximum_entry_price_e4;
+        decision_policy.clip_capital_target_to_visible_depth =
+            options.clip_capital_target_to_visible_depth ? 1 : 0;
         // Signal admission and probability/EV valuation are separate contracts.
         // A strict causal signal policy must never silently activate an absent
         // probability artifact.
