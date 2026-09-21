@@ -16,8 +16,8 @@ def audit_receipt(root, code_sha=None):
     return {
         "schema": SCHEMA + "_audit_v1", **SAFETY, "code_sha": code_sha or git_sha(root),
         "differences": [
-            {"object": "training_target", "v1": "settlement outcome", "v2": "settlement and actual PM repricing",
-             "evidence": "research/learning/models.py; research/walk_forward_v2/core.py:book_targets"},
+            {"object": "training_target", "v1": "settlement outcome", "v2": "midpoint diagnostics plus direct executable net markout",
+             "evidence": "research/learning/models.py; research/walk_forward_v2/core.py:executable_markout_target"},
             {"object": "prediction_target", "v1": "one log-loss selected family", "v2": "each family receives OOS economics",
              "evidence": "research/backtest/fit.py; research/walk_forward_v2/core.py:walk_forward"},
             {"object": "validation_objective", "v1": "settlement log loss", "v2": "prediction metrics and economic replay separated",
@@ -63,12 +63,12 @@ def method():
     return {
         "schema": SCHEMA + "_methodology_v1", **SAFETY, "clock": "INTEGER_NANOSECONDS_ONLY",
         "folds": "WHOLE_MARKET_CHRONOLOGICAL_EXPANDING_WITH_2S_EMBARGO",
-        "target": "NATIVE_KIND6_CAUSAL_ASOF_HORIZON; SAME_CAPTURE_SIGNAL_DECISION_IDENTITY; CONTINUITY_REQUIRED",
+        "target": "PRIMARY ECONOMIC TARGET = FUTURE_EXECUTABLE_BID_MINUS_CAUSAL_ASK_MINUS_TAKER_FEE; NATIVE_KIND6 SAME-CAPTURE CONTINUITY REQUIRED",
         "target_horizons_ms": [25, 50, 100, 250, 500, 1000, 2000],
         "execution": "NATIVE_KIND6_SELECTED_L1_ASOF_LATENCY; VISIBLE_DEPTH_PARTIAL_FILL; MISSING_IS_CENSORED",
         "latencies_ms": [10, 25, 50, 100, 250, 500],
         "primary_latency": "LATENCY_NOT_EMPIRICALLY_IDENTIFIED",
-        "uncertainty": "MARKET_BLOCK_BOOTSTRAP_IF_AT_LEAST_FOUR_MARKETS",
+        "uncertainty": "MARKET_BLOCK_BOOTSTRAP_OF EXECUTABLE MARKOUT AND SETTLEMENT PNL IF AT LEAST FOUR MARKETS",
     }
 
 
