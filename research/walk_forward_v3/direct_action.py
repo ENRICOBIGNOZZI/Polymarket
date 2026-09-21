@@ -163,10 +163,12 @@ def observed_side_state(container, side, row):
         bid = container.get("bid", container.get("arrival_bid"))
         ask = container.get("ask", container.get("arrival_ask"))
         quantity = container.get("quantity", container.get("arrival_quantity"))
+        bid_quantity = container.get(
+            "bid_quantity", container.get("arrival_bid_quantity"))
         if finite(bid) and finite(ask):
             return {
                 "bid": float(bid), "ask": float(ask),
-                "bid_quantity": 0.0,
+                "bid_quantity": float(bid_quantity or 0.0),
                 "ask_quantity": float(quantity or 0.0),
             }
     return None
@@ -236,7 +238,9 @@ def action_execution_kernel(
     """Size-independent causal execution kernel for one state/side/horizon.
 
     All book lookup, zero-chase, fee and exit economics are computed once.
-    Quantity enters later only through min(q, observed_arrival_depth).
+    Quantity enters later through observed entry ask capacity and future exit
+    bid capacity. Residual inventory at the chosen horizon is never assigned
+    fictitious liquidity.
     """
     if horizon_ms <= latency_ms:
         return None, "HORIZON_NOT_AFTER_EXECUTION"
@@ -264,6 +268,7 @@ def action_execution_kernel(
             "side": side,
             "state": "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED",
             "fill_capacity": 0.0,
+            "exit_capacity": 0.0,
             "decision_ask": ask0,
             "decision_bid": bid0,
             "entry_price": None,
@@ -276,6 +281,7 @@ def action_execution_kernel(
             "latency_price_drift_per_share": 0.0,
             "exit_half_spread_per_share": 0.0,
             "ideal_midpoint_alpha_per_share": None,
+            "future_mid": None,
         }, "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
 
     fill_capacity = float(arrival_state.get("ask_quantity") or 0.0)
@@ -284,6 +290,7 @@ def action_execution_kernel(
             "side": side,
             "state": "OBSERVED_NO_FILL_ZERO_DEPTH",
             "fill_capacity": 0.0,
+            "exit_capacity": 0.0,
             "decision_ask": ask0,
             "decision_bid": bid0,
             "entry_price": None,
@@ -296,6 +303,7 @@ def action_execution_kernel(
             "latency_price_drift_per_share": 0.0,
             "exit_half_spread_per_share": 0.0,
             "ideal_midpoint_alpha_per_share": None,
+            "future_mid": None,
         }, "OBSERVED_NO_FILL_ZERO_DEPTH"
 
     target = row.get("targets", {}).get(str(int(horizon_ms)), {})
@@ -307,6 +315,7 @@ def action_execution_kernel(
 
     entry_price = float(arrival_state["ask"])
     exit_bid = float(exit_state["bid"])
+    exit_capacity = max(0.0, float(exit_state.get("bid_quantity") or 0.0))
     entry_fee = fee_per_share(row, entry_price)
     exit_fee = fee_per_share(row, exit_bid)
     gross = exit_bid - entry_price
@@ -331,6 +340,7 @@ def action_execution_kernel(
         "side": side,
         "state": "OBSERVED_EXECUTABLE",
         "fill_capacity": fill_capacity,
+        "exit_capacity": exit_capacity,
         "decision_ask": ask0,
         "decision_bid": bid0,
         "entry_price": entry_price,
@@ -347,11 +357,18 @@ def action_execution_kernel(
         "ideal_midpoint_alpha_per_share": (
             float(ideal_alpha) if ideal_alpha is not None else None
         ),
+        "future_mid": float(future_mid) if future_mid is not None else None,
     }, "OBSERVED_EXECUTABLE"
 
 
 def economics_from_execution_kernel(kernel, size):
-    """Apply one candidate quantity to a previously computed kernel."""
+    """Apply quantity with conservative, capacity-aware forced exit.
+
+    Entry fill is bounded by observed arrival ask depth. At the selected exit
+    horizon, only observed bid depth is executable. Any residual inventory is
+    assigned terminal value zero in this static target, yielding a conservative
+    lower bound rather than inventing unobserved exit liquidity.
+    """
     size = float(size)
     fill = min(size, max(0.0, float(kernel["fill_capacity"])))
     side = str(kernel["side"])
@@ -361,50 +378,80 @@ def economics_from_execution_kernel(kernel, size):
             "cash_pnl": 0.0,
             "gross_executable_markout": 0.0,
             "filled": 0.0,
+            "exit_filled": 0.0,
+            "residual_inventory": 0.0,
+            "fully_exitable_at_horizon": True,
             "requested": size,
             "entry_price": None,
             "exit_bid": None,
+            "exit_bid_quantity": 0.0,
             "entry_fee": 0.0,
             "exit_fee": 0.0,
             "total_fees": 0.0,
             "decision_half_spread_cost": 0.0,
             "latency_price_drift_cost": 0.0,
             "exit_half_spread_cost": 0.0,
+            "exit_liquidity_shortfall_cost": 0.0,
             "ideal_midpoint_alpha": None,
+            "residual_terminal_value_assumption": "ZERO_WORST_CASE",
             "frictions_embedded_in_cash_pnl": True,
         }, str(kernel["state"])
 
-    state = (
-        "OBSERVED_FULL_FILL"
-        if fill + 1e-12 >= size
-        else "OBSERVED_PARTIAL_FILL"
-    )
+    exit_capacity = max(0.0, float(kernel.get("exit_capacity") or 0.0))
+    exit_fill = min(fill, exit_capacity)
+    residual = max(0.0, fill - exit_fill)
+    entry_price = float(kernel["entry_price"])
+    exit_bid = float(kernel["exit_bid"])
+    entry_fee = fill * float(kernel["entry_fee_per_share"])
+    exit_fee = exit_fill * float(kernel["exit_fee_per_share"])
+    gross = exit_fill * exit_bid - fill * entry_price
+    cash = gross - entry_fee - exit_fee
+
+    if fill + 1e-12 < size and residual > 1e-12:
+        state = "OBSERVED_PARTIAL_ENTRY_AND_EXIT_LIQUIDATION"
+    elif fill + 1e-12 < size:
+        state = "OBSERVED_PARTIAL_ENTRY_FILL"
+    elif residual > 1e-12:
+        state = "OBSERVED_PARTIAL_EXIT_LIQUIDATION"
+    else:
+        state = "OBSERVED_FULLY_EXECUTABLE_ROUND_TRIP"
+
     exit_half = kernel["exit_half_spread_per_share"]
     ideal_alpha = kernel["ideal_midpoint_alpha_per_share"]
+    future_mid = kernel.get("future_mid")
+    exit_liquidity_shortfall = (
+        residual * float(future_mid) if finite(future_mid) else None
+    )
     return {
         "side": side,
-        "cash_pnl": float(fill * kernel["cash_pnl_per_share"]),
-        "gross_executable_markout": float(
-            fill * kernel["gross_executable_markout_per_share"]),
+        "cash_pnl": float(cash),
+        "gross_executable_markout": float(gross),
         "filled": float(fill),
+        "exit_filled": float(exit_fill),
+        "residual_inventory": float(residual),
+        "fully_exitable_at_horizon": residual <= 1e-12,
         "requested": size,
-        "entry_price": kernel["entry_price"],
-        "exit_bid": kernel["exit_bid"],
-        "entry_fee": float(fill * kernel["entry_fee_per_share"]),
-        "exit_fee": float(fill * kernel["exit_fee_per_share"]),
-        "total_fees": float(
-            fill * (
-                kernel["entry_fee_per_share"] + kernel["exit_fee_per_share"])),
+        "entry_price": entry_price,
+        "exit_bid": exit_bid,
+        "exit_bid_quantity": float(exit_capacity),
+        "entry_fee": float(entry_fee),
+        "exit_fee": float(exit_fee),
+        "total_fees": float(entry_fee + exit_fee),
         "decision_half_spread_cost": float(
             fill * kernel["decision_half_spread_per_share"]),
         "latency_price_drift_cost": float(
             fill * kernel["latency_price_drift_per_share"]),
         "exit_half_spread_cost": (
-            float(fill * exit_half) if exit_half is not None else None
+            float(exit_fill * exit_half) if exit_half is not None else None
+        ),
+        "exit_liquidity_shortfall_cost": (
+            float(exit_liquidity_shortfall)
+            if exit_liquidity_shortfall is not None else None
         ),
         "ideal_midpoint_alpha": (
             float(fill * ideal_alpha) if ideal_alpha is not None else None
         ),
+        "residual_terminal_value_assumption": "ZERO_WORST_CASE",
         "frictions_embedded_in_cash_pnl": True,
     }, state
 
@@ -1113,6 +1160,7 @@ class DirectActionValueModel:
                 "fill_and_no_fill",
                 "partial_fill",
                 "exit_spread_via_executable_bid",
+                "exit_l1_capacity_and_zero_value_residual_lower_bound",
                 "entry_taker_fee",
                 "exit_taker_fee",
                 "post_fill_adverse_repricing",
