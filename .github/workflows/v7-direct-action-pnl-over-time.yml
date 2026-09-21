@@ -1,0 +1,70 @@
+name: Direct Action PnL over time
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/research/direct-action-value-2026-09-21/direct_action.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-action-pnl-over-time
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Build PnL over time report
+        run: |
+          set -euo pipefail
+          root=docs/research/direct-action-value-2026-09-21
+          test -s "$root/direct_action.json"
+          python3 scripts/v7_direct_action_pnl_report.py \
+            --input "$root/direct_action.json" \
+            --output-json "$root/pnl_over_time.json" \
+            --output-csv "$root/pnl_trade_path.csv" \
+            --output-svg "$root/pnl_over_time.svg" \
+            --rolling-trades 10 \
+            --bucket-seconds 3600
+
+      - name: Verify report identity
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("docs/research/direct-action-value-2026-09-21")
+          source=json.loads((root/"direct_action.json").read_text())
+          report=json.loads((root/"pnl_over_time.json").read_text())
+          assert report["paper_only"] is True
+          assert report["authenticated_execution"] is False
+          assert report["real_order_submission"] is False
+          assert report["source_data_sha256"]==source.get("data_sha256")
+          assert (root/"pnl_trade_path.csv").stat().st_size>0
+          assert "<svg" in (root/"pnl_over_time.svg").read_text()
+          print(json.dumps(report["summary"],sort_keys=True))
+          PY
+
+      - name: Publish PnL views
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/research/direct-action-value-2026-09-21/pnl_over_time.json
+          git add docs/research/direct-action-value-2026-09-21/pnl_trade_path.csv
+          git add docs/research/direct-action-value-2026-09-21/pnl_over_time.svg
+          if git diff --cached --quiet; then
+            echo "PnL views unchanged."
+            exit 0
+          fi
+          git commit -m "Publish Direct Action PnL over time"
+          git push origin HEAD:main
