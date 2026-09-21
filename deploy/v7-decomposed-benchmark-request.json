@@ -1,0 +1,17 @@
+{
+  "schema": "polymarket_v7_decomposed_benchmark_ssm_request_v1",
+  "version": 1,
+  "request_id": "decomposed-horse-race-20260921T1950CEST",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_research_sha": "ff9a4fcd5987d8fd50dbfb441547dea7c8ebf42e",
+  "minimum_wall_ns": 1789921800000000000,
+  "folds": 3,
+  "latency_ms": 50,
+  "capital_budget": 10000,
+  "output_directory": "docs/research/decomposed-horse-race-2026-09-21",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}
