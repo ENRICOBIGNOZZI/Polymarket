@@ -17,7 +17,7 @@
       "targetBlank": false
     },
     {
-      "title": "Latency",
+      "title": "Crypto Latency",
       "type": "link",
       "url": "/d/polymarket-v7-latency",
       "includeVars": true,
@@ -1001,10 +1001,11 @@
     "polymarket",
     "v7",
     "paper",
-    "pure-arb"
+    "pure-arb",
+    "crypto"
   ],
   "timezone": "browser",
-  "title": "Polymarket V7 — Pure Arbitrage PAPER",
+  "title": "Polymarket V7 Crypto — Pure Arbitrage PAPER",
   "uid": "polymarket-v7-pure-arb",
   "version": 1,
   "templating": {
