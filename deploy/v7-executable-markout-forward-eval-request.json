@@ -1,0 +1,11 @@
+{
+  "schema": "polymarket_v7_executable_markout_forward_eval_request_v1",
+  "version": 1,
+  "request_id": "markout-forward-eval-20260921T1259CEST",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_parent_sha": "2863c5b0264dd230d3f72e2d659a57c112e0cb07",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false
+}
