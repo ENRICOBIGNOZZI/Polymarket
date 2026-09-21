@@ -2160,7 +2160,7 @@ def test_marginal_edge_sizing_does_not_explode_from_fixed_cash_intercept_at_low_
 
     model = FixedInterceptModel()
     policy = EdgeSizingPolicy(context_count=30)
-    cheap = row("m12000", signal=2.0, exit_bid=.10, depth=10000.0, ask=.01, minimum=5.0)
+    cheap = row("m12000", signal=2.0, exit_bid=.10, depth=10000.0, ask=.02, minimum=5.0)
     rich = row("m12001", signal=2.0, exit_bid=.60, depth=10000.0, ask=.50, minimum=5.0)
     cheap_pick = model.select_action_edge_sized(
         cheap, latency_ms=50, available_capital=100.0,
