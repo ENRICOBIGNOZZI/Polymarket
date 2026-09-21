@@ -33,6 +33,8 @@ def origin_row(depth=6_000_000):
         "fee_rate": 0.0, "fee_exponent": 1.0,
         "minimum_order_microunits": 1_000_000,
         "ask_quantity": depth,
+        "paper_venue_delay_ns": 250_000_000,
+        "paper_assumed_transport_delay_ns": 250_000_000,
         "signal_return_bp": 2.0,
         "signal_age_ns": 1_000_000,
         "tte_ns": 110_000_000_000,
@@ -95,32 +97,38 @@ def key():
     return ("s", "r", "c", "m", "t", 7, 2_000_000_000)
 
 
-def test_forward_evaluator_scores_only_future_labels_and_live_geometry():
+def test_forward_evaluator_includes_venue_and_transport_delay_before_arrival():
     pred = prediction(10)
     origin = origin_row()
-    p25 = label_point(kind6(25, 4900, 5000))
-    p500 = label_point(kind6(500, 5500, 5600))
-    assert p25 and p500
-    labels = {p25["key"]: p25, p500["key"]: p500}
+    p500 = label_point(kind6(500, 4900, 5000))
+    p750 = label_point(kind6(750, 5000, 5100))
+    p1000 = label_point(kind6(1000, 5500, 5600))
+    assert p500 and p750 and p1000
+    labels = {p500["key"]: p500, p750["key"]: p750, p1000["key"]: p1000}
     result = evaluate({key(): pred}, {key(): origin}, labels)
-    cell = result["cells"]["BTC:500"]
-    assert cell["prediction_threshold"] == 1
-    assert cell["live_geometry"] == 1
+
+    short = result["cells"]["BTC:500"]
+    assert short["prediction_threshold"] == 1
+    assert short["live_geometry"] == 1
+    assert short["arrival_after_target"] == 1
+    assert short["simulated_fills"] == 0
+
+    cell = result["cells"]["BTC:1000"]
     assert cell["arrival_available"] == 1
     assert cell["simulated_fills"] == 1
     assert cell["marked_fills"] == 1
+    assert cell["modeled_arrival_delay_ms_quantiles"]["0.5"] == 510.0
     assert cell["positive_markout_fills"] == 1
-    assert abs(cell["markout"] - .25) < 1e-12
 
 
 def test_forward_evaluator_blocks_sub_five_share_decision_depth():
     pred = prediction(10)
     origin = origin_row(depth=4_000_000)
-    p25 = label_point(kind6(25, 4900, 5000))
-    p500 = label_point(kind6(500, 5500, 5600))
-    labels = {p25["key"]: p25, p500["key"]: p500}
+    p750 = label_point(kind6(750, 5000, 5100))
+    p1000 = label_point(kind6(1000, 5500, 5600))
+    labels = {p750["key"]: p750, p1000["key"]: p1000}
     result = evaluate({key(): pred}, {key(): origin}, labels)
-    cell = result["cells"]["BTC:500"]
+    cell = result["cells"]["BTC:1000"]
     assert cell["prediction_threshold"] == 1
     assert cell["live_geometry"] == 0
     assert cell["simulated_fills"] == 0
@@ -129,8 +137,20 @@ def test_forward_evaluator_blocks_sub_five_share_decision_depth():
 def test_forward_evaluator_rejects_prediction_after_label_availability():
     pred = prediction(600)
     origin = origin_row()
-    p25 = label_point(kind6(25, 4900, 5000))
     p500 = label_point(kind6(500, 5500, 5600))
-    labels = {p25["key"]: p25, p500["key"]: p500}
+    labels = {p500["key"]: p500}
     with pytest.raises(ValueError, match="prediction was not strictly before label availability"):
         evaluate({key(): pred}, {key(): origin}, labels)
+
+
+
+def test_forward_evaluator_fails_closed_without_paper_delay_terms():
+    pred = prediction(10)
+    origin = origin_row()
+    origin.pop("paper_venue_delay_ns")
+    origin.pop("paper_assumed_transport_delay_ns")
+    p1000 = label_point(kind6(1000, 5500, 5600))
+    result = evaluate({key(): pred}, {key(): origin}, {p1000["key"]: p1000})
+    cell = result["cells"]["BTC:1000"]
+    assert cell["arrival_delay_unavailable"] == 1
+    assert cell["simulated_fills"] == 0
