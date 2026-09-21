@@ -42,7 +42,7 @@ jobs:
             'schema','version','request_id','instance_id','operation',
             'collection_root','paper_only','authenticated_execution',
             'real_order_submission','real_capital_at_risk',
-            'execution_authority','model_independent',
+            'execution_authority','model_independent','expected_collector_sha',
           }
           assert set(value)==required
           assert value['schema']=='polymarket_v7_collection_plane_request_v1'
@@ -57,12 +57,18 @@ jobs:
           assert value['real_capital_at_risk'] is False
           assert value['execution_authority']=='ZERO_AUTHORITY_DATA_COLLECTION'
           assert value['model_independent'] is True
+          assert re.fullmatch(r'[0-9a-f]{40}',value['expected_collector_sha'])
           PY
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
             test "$changed" = "$request"
           fi
+          collector_sha="$(python3 -c 'import json; print(json.load(open("deploy/v7-collection-plane-request.json"))["expected_collector_sha"])')"
+          git fetch --no-tags origin main
+          git cat-file -e "$collector_sha^{commit}"
+          git merge-base --is-ancestor "$collector_sha" origin/main
           echo "request=$request" >> "$GITHUB_OUTPUT"
+          echo "collector_sha=$collector_sha" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
@@ -78,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           instance="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["instance_id"])')"
-          python3 ops/v7_collection_plane_ssm.py             --expected-sha "$GITHUB_SHA"             --instance-id "$instance"             --region eu-west-2             --output collection-plane-receipt.json
+          python3 ops/v7_collection_plane_ssm.py             --expected-sha "${{ steps.request.outputs.collector_sha }}"             --instance-id "$instance"             --region eu-west-2             --output collection-plane-receipt.json
 
       - name: Validate independent data growth and model isolation
         shell: bash
