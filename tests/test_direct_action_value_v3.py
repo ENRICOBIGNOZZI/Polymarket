@@ -2,8 +2,11 @@ import math
 
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
+    FrictionPolicy,
     candidate_sizes,
+    realized_action_economics,
     realized_action_value,
+    residual_policy_friction,
 )
 
 
@@ -141,3 +144,81 @@ def test_model_receipt_explicitly_disclaims_mean_covariance_and_l2_impact():
     assert receipt["mean_covariance_estimation"] is False
     assert receipt["capacity_scope"] == "L1_ONLY_NO_COUNTERFACTUAL_IMPACT_BEYOND_VISIBLE_DEPTH"
     assert receipt["calibration_state"] == "MARKET_BLOCK_TEMPORAL_CALIBRATION"
+
+
+
+def test_execution_friction_decomposition_reconciles_without_double_counting():
+    r = row("m400", exit_bid=.55, depth=20.0)
+    economics, state = realized_action_economics(
+        r, size=10.0, horizon_ms=500, latency_ms=50)
+    assert state == "OBSERVED_FULL_FILL"
+    assert economics["frictions_embedded_in_cash_pnl"] is True
+    # mid0=.495, future mid=.555, so ideal alpha=.60. Entry and exit
+    # half-spreads are .05 each. Fees and latency drift are zero.
+    assert math.isclose(economics["ideal_midpoint_alpha"], .60, abs_tol=1e-12)
+    assert math.isclose(economics["decision_half_spread_cost"], .05, abs_tol=1e-12)
+    assert math.isclose(economics["exit_half_spread_cost"], .05, abs_tol=1e-12)
+    assert math.isclose(economics["latency_price_drift_cost"], 0.0, abs_tol=1e-12)
+    reconstructed = (
+        economics["ideal_midpoint_alpha"]
+        - economics["decision_half_spread_cost"]
+        - economics["latency_price_drift_cost"]
+        - economics["exit_half_spread_cost"]
+        - economics["total_fees"]
+    )
+    assert math.isclose(reconstructed, economics["cash_pnl"], abs_tol=1e-12)
+
+
+def test_residual_policy_friction_penalizes_capital_and_existing_concentration():
+    r = row("m401")
+    action = {"notional": 50.0, "exit_horizon_ms": 500}
+    policy = FrictionPolicy(
+        capital_charge_bps_per_second=10.0,
+        asset_concentration_lambda=.01,
+        common_factor_concentration_lambda=.02,
+        uncertainty_aversion=1.0,
+    )
+    flat = residual_policy_friction(
+        action, r, portfolio_state={}, capital_budget=1000.0,
+        friction_policy=policy)
+    concentrated = residual_policy_friction(
+        action, r,
+        portfolio_state={
+            "asset_signed_notional": {"BTC": 200.0},
+            "common_factor_signed_notional": 400.0,
+        },
+        capital_budget=1000.0,
+        friction_policy=policy)
+    assert flat["capital_lock_penalty"] > 0
+    assert concentrated["asset_concentration_penalty"] > flat["asset_concentration_penalty"]
+    assert (
+        concentrated["common_factor_concentration_penalty"]
+        > flat["common_factor_concentration_penalty"]
+    )
+    assert concentrated["total_residual_friction"] > flat["total_residual_friction"]
+
+
+def test_model_receipt_lists_execution_frictions_inside_target_and_residuals_outside():
+    rows = [
+        row("m" + str(index + 500), signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44)
+        for index in range(90)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(1.0, 5.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(
+            capital_charge_bps_per_second=1.0,
+            asset_concentration_lambda=.001,
+            common_factor_concentration_lambda=.002,
+        ),
+    ).fit(rows)
+    receipt = model.training_receipt
+    embedded = set(receipt["execution_frictions_in_training_target"])
+    assert "entry_taker_fee" in embedded
+    assert "exit_taker_fee" in embedded
+    assert "fill_and_no_fill" in embedded
+    assert "post_signal_latency_price_drift_via_arrival_book" in embedded
+    assert receipt["residual_policy_frictions"]["capital_charge_bps_per_second"] == 1.0
+    assert receipt["mean_covariance_estimation"] is False
