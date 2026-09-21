@@ -13,6 +13,7 @@ namespace {
 }
 
 [[nodiscard]] AdapterTimeInForce tif_for(const ExecutionPlan& plan) noexcept {
+    if (plan.intent.strategy_id == StrategyId::CryptoLatencyArb) return AdapterTimeInForce::Fok;
     if (plan.policy == ExecutionPolicyId::AggressiveTaker) return AdapterTimeInForce::Fak;
     return AdapterTimeInForce::Gtc;
 }
