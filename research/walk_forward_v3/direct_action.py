@@ -2571,18 +2571,11 @@ class DirectActionValueModel:
         the final resized action itself to retain positive conservative utility.
         """
         policy = sizing_policy.validated()
-        baseline, state = self.score_actions(
-            row,
-            latency_ms=latency_ms,
-            available_capital=available_capital,
-            live_geometry=live_geometry,
-            portfolio_state=portfolio_state,
-            capital_budget=capital_budget,
-        )
-        if not baseline:
+
+        def no_trade(reason):
             return {
                 "action": "NO_TRADE",
-                "reason": state,
+                "reason": reason,
                 "latency_ms": int(latency_ms),
                 "calibrated_lower_value": 0.0,
                 "predicted_total_net_pnl": 0.0,
@@ -2591,8 +2584,54 @@ class DirectActionValueModel:
                 "sizing_mode": "EDGE_CONTEXT_BUDGET",
             }
 
+        if not self.fitted:
+            raise RuntimeError("direct action model not fitted")
+        latency_ms = int(latency_ms)
+        if latency_ms not in self.train_latencies_ms:
+            return no_trade("LATENCY_OUTSIDE_TRAINING_SUPPORT")
+        if not _valid_state(row):
+            return no_trade("STATE_OUTSIDE_RESEARCH_SUPPORT")
+        signal_age_ms = max(
+            0.0, float(row.get("signal_age_ns") or 0) / 1e6)
+        effective_action_age_ms = signal_age_ms + float(latency_ms)
+        if (
+            self.maximum_effective_action_age_ms is not None
+            and effective_action_age_ms
+            > self.maximum_effective_action_age_ms + 1e-12
+        ):
+            return no_trade("EFFECTIVE_ACTION_AGE_EXCEEDED")
+        regime_support = int(
+            getattr(self, "regime_action_target_counts", {}).get(
+                regime_support_key(row, latency_ms), 0))
+        if (
+            self.minimum_regime_action_targets > 0
+            and regime_support < self.minimum_regime_action_targets
+        ):
+            return no_trade("INSUFFICIENT_REGIME_SUPPORT")
+        sides = decision_action_sides(row)
+        if live_geometry and not (
+            LIVE_MINIMUM_TTE_NS <= int(row["tte_ns"]) <= LIVE_MAXIMUM_TTE_NS
+            and any(
+                decision_side_state(row, side) is not None
+                and float(decision_side_state(row, side)["ask"])
+                <= self.entry_cap + 1e-12
+                for side in sides
+            )
+        ):
+            return no_trade("OUTSIDE_LIVE_GEOMETRY")
+
         candidates = []
-        for side in decision_action_sides(row):
+        supported_sides = 0
+        for side in sides:
+            side_support = int(
+                getattr(self, "side_regime_action_target_counts", {}).get(
+                    side_regime_support_key(row, latency_ms, side), 0))
+            if (
+                self.minimum_side_regime_action_targets > 0
+                and side_support < self.minimum_side_regime_action_targets
+            ):
+                continue
+            supported_sides += 1
             lower, upper = self._quantity_bounds(row, available_capital, side)
             if upper + 1e-12 < lower or upper <= 0:
                 continue
@@ -2680,16 +2719,9 @@ class DirectActionValueModel:
                 candidates.append(final)
 
         if not candidates:
-            return {
-                "action": "NO_TRADE",
-                "reason": "NO_POSITIVE_MARGINAL_EDGE_AFTER_RESIZING",
-                "latency_ms": int(latency_ms),
-                "calibrated_lower_value": 0.0,
-                "predicted_total_net_pnl": 0.0,
-                "policy_utility": 0.0,
-                "policy_loss": 0.0,
-                "sizing_mode": "EDGE_CONTEXT_BUDGET",
-            }
+            if sides and supported_sides == 0:
+                return no_trade("INSUFFICIENT_SIDE_REGIME_SUPPORT")
+            return no_trade("NO_POSITIVE_MARGINAL_EDGE_AFTER_RESIZING")
         candidates.sort(
             key=lambda value: (
                 value["policy_utility"],
