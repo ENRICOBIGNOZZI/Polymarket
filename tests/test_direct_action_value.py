@@ -2206,3 +2206,61 @@ def test_trade_frequency_opportunity_audit_quantifies_heuristic_attrition_withou
     assert audit["filter_classification"]["entry_price_cap"].startswith("LEGACY")
     assert audit["shock_identity"]["markets_with_multiple_independent_shocks"] == 1
     assert audit["shock_identity"]["independent_shock_count"] == 3
+
+
+
+def test_merge_direct_action_summaries_aggregates_attrition_and_sizing_diagnostics():
+    left = summarize_direct_action([
+        {
+            "action": "TRADE", "realized_pnl": 0.1, "policy_utility": 0.05,
+            "size": 5.0, "notional": 1.0, "asset": "BTC", "side": "YES",
+            "exit_horizon_ms": 500, "sizing_mode": "EDGE_CONTEXT_BUDGET",
+            "entry_policy": "ONE_ENTRY_PER_SHOCK",
+            "calibration_multiplier_used": 2.0,
+            "admission_edge_per_dollar": 0.01,
+            "admission_lower_value": 0.02,
+            "admission_return_on_notional": 0.02,
+            "raw_marginal_edge_per_dollar": 0.03,
+            "marginal_edge_per_dollar": 0.015,
+            "context_capital_fraction": 0.25,
+            "desired_notional_before_constraints": 10.0,
+            "desired_notional_after_constraints": 8.0,
+            "available_capital_before": 100.0,
+            "capital_utilization_before": 0.01,
+            "replay_max_active_positions": 1,
+            "replay_max_gross_notional": 1.0,
+        },
+        {
+            "action": "NO_TRADE", "reason": "OUTSIDE_LIVE_GEOMETRY",
+            "entry_policy": "ONE_ENTRY_PER_SHOCK",
+            "realized_pnl": 0.0,
+            "replay_max_active_positions": 1,
+            "replay_max_gross_notional": 1.0,
+        },
+    ])
+    right = summarize_direct_action([
+        {
+            "action": "NO_TRADE", "reason": "OUTSIDE_LIVE_GEOMETRY",
+            "entry_policy": "ONE_ENTRY_PER_SHOCK",
+            "realized_pnl": 0.0,
+            "replay_max_active_positions": 0,
+            "replay_max_gross_notional": 0.0,
+        },
+        {
+            "action": "NO_TRADE", "reason": "SHOCK_ALREADY_TRADED",
+            "entry_policy": "ONE_ENTRY_PER_SHOCK",
+            "realized_pnl": 0.0,
+            "replay_max_active_positions": 0,
+            "replay_max_gross_notional": 0.0,
+        },
+    ])
+    merged = merge_direct_action_summaries([left, right])
+    assert merged["opportunities"] == 4
+    assert merged["selected_trades"] == 1
+    assert merged["no_trade_reasons"] == {
+        "OUTSIDE_LIVE_GEOMETRY": 2,
+        "SHOCK_ALREADY_TRADED": 1,
+    }
+    assert merged["sizing_mode_counts"] == {"EDGE_CONTEXT_BUDGET": 1}
+    assert merged["entry_policy_counts"] == {"ONE_ENTRY_PER_SHOCK": 4}
+    assert merged["selected_raw_marginal_edge_per_dollar_distribution"]["folds"][0]["count"] == 1

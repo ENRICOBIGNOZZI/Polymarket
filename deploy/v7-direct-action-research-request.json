@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_direct_action_research_ssm_request_v1",
   "version": 1,
-  "request_id": "direct-action-trade-frequency-sizing-20260921T1815CEST",
+  "request_id": "direct-action-trade-frequency-sizing-v2-20260921T1830CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "minimum_wall_ns": 1789921800000000000,
   "folds": 3,
