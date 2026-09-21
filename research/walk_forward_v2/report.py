@@ -81,6 +81,7 @@ def public_economics(economics):
         "pm_edge_distribution": economics.get("pm_edge_distribution", {}),
         "asset_selection_diagnostics": economics.get("asset_selection_diagnostics", {}),
         "live_parity_policy_diagnostics": economics.get("live_parity_policy_diagnostics", {}),
+        "common_signal_support_diagnostics": economics.get("common_signal_support_diagnostics", {}),
         "models": {
             name: {
                 "metrics": value.get("metrics", {}),
