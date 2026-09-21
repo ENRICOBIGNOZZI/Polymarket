@@ -93,7 +93,8 @@ python3 src/scripts/v7_maker_fillability_report.py \
 
 for action in JOIN IMPROVE1 FADE1; do
   python3 src/scripts/v7_maker_fill_conditioned_toxicity.py \
-    --maker-evidence {run_root} \
+    --maker-evidence {run_root}/ledger \
+    --maker-evidence {run_root}/micro_maker \
     --output "output/toxicity_$action.json" \
     --markout-horizon 250ms \
     --placement-action "$action" \
