@@ -20,7 +20,7 @@ from v7_direct_action_research_ssm import remote_context, upload, extract
 
 SHA=re.compile(r"^[0-9a-f]{40}$")
 INSTANCE=re.compile(r"^i-[0-9a-f]+$")
-CHUNK=9000
+CHUNK=14000
 SOURCE_PATHS=(
     "research/walk_forward_v3/__init__.py",
     "research/walk_forward_v3/native_2h_alpha_library.py",
@@ -88,7 +88,8 @@ POLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS=5,10,25,50,100,250 \
 PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.walk_forward_v3.native_2h_alpha_library \
   --root {ctx['run_root']} \
   --output-dir {remote}/output \
-  --minimum-wall-ns {a.minimum_wall_ns}
+  --minimum-wall-ns {a.minimum_wall_ns} \
+  --skip-figures
 python3 - {remote}/output <<'PY'
 import csv,gzip,json,sys
 from pathlib import Path
@@ -106,7 +107,8 @@ assert (root/'22_native_alpha_equity_paths.csv.gz').is_file()
 manifest=json.load(open(root/'native_alpha_equity_gallery/gallery_manifest.json'))
 assert manifest['alpha_count']>=20
 assert manifest['cells_per_alpha']==60
-assert manifest['figure_count']>=manifest['alpha_count']*7
+assert manifest['generation_deferred'] is True
+assert manifest['figure_count']==0
 print('NATIVE_ALPHA_EQUITY_READY')
 PY
 tar -C {remote}/output -czf {remote}/results.tgz .
