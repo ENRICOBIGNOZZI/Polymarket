@@ -1,0 +1,9 @@
+{
+  "schema": "polymarket_v7_branch_cleanup_request_v1",
+  "apply": true,
+  "preserve_open_prs": true,
+  "prefixes": [
+    "codex/",
+    "research/"
+  ]
+}
