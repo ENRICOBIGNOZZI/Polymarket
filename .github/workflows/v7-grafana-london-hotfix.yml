@@ -105,25 +105,40 @@ jobs:
           curl -fsS http://127.0.0.1:3000/api/health
 
           python3 - <<'PY'
-          import sqlite3,time
+          import json,sqlite3,time
           db='/var/lib/grafana/grafana.db'
           deadline=time.time()+30
           while time.time()<deadline:
               con=sqlite3.connect(f'file:{db}?mode=ro',uri=True)
-              cols={r[1] for r in con.execute('pragma table_info(dashboard)')}
-              if {'id','uid','title','folder_id'}.issubset(cols):
-                  folder=con.execute("select id,title from dashboard where uid=?",('afyms0c1xjabkf',)).fetchone()
-                  dash=con.execute("select title,folder_id from dashboard where uid=?",('polymarket-v7-pure-arb',)).fetchone()
-                  con.close()
-                  if folder and dash and dash[1]==folder[0]:
-                      print('GRAFANA_FOLDER_OK='+folder[1])
-                      print('GRAFANA_PURE_ARB_OK='+dash[0])
-                      break
-              else:
-                  con.close()
+              cols=[r[1] for r in con.execute('pragma table_info(resource)')]
+              idx={name:i for i,name in enumerate(cols)}
+              rows=con.execute('select * from resource where name in (?,?)',('afyms0c1xjabkf','polymarket-v7-pure-arb')).fetchall()
+              folder_ok=False; dash_ok=False; dash_title=''
+              for row in rows:
+                  name=str(row[idx['name']])
+                  group=str(row[idx['group']])
+                  folder=str(row[idx['folder']] or '')
+                  value=row[idx['value']]
+                  doc={}
+                  if isinstance(value,(bytes,bytearray)):
+                      try: doc=json.loads(value)
+                      except Exception: doc={}
+                  meta=doc.get('metadata') or {}
+                  ann=meta.get('annotations') or {}
+                  spec=doc.get('spec') or {}
+                  if name=='afyms0c1xjabkf' and group=='folder.grafana.app' and spec.get('title')=='Polymarket London':
+                      folder_ok=True
+                  if name=='polymarket-v7-pure-arb' and group=='dashboard.grafana.app':
+                      dash_title=str(spec.get('title') or '')
+                      dash_ok=(folder=='afyms0c1xjabkf' and ann.get('grafana.app/folder')=='afyms0c1xjabkf')
+              con.close()
+              if folder_ok and dash_ok:
+                  print('GRAFANA_FOLDER_OK=Polymarket London')
+                  print('GRAFANA_PURE_ARB_OK='+dash_title)
+                  break
               time.sleep(1)
           else:
-              raise SystemExit('pure-arb dashboard not observed in requested Grafana folder')
+              raise SystemExit('pure-arb dashboard not observed in requested Grafana unified folder')
           PY
 
           ROOT="$(systemctl show "$UNIT" -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
