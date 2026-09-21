@@ -10,25 +10,25 @@
 
 ## Identity
 
-- Starting SHA: da149e283c9e1bf4a5babfd03a3fa99af3877794
-- Data SHA: cdacd427485cd79a0323930898c61dff39655d7c9aabb73417be59bb1206a36c
+- Starting SHA: 8aade0b5cf335ed75883e35d5f42f17898c0112f
+- Data SHA: 1914fe94d688dc5787adf1660cf2a15f669204b6cc4f0eacb13eee65ee2f432b
 - Input state: READY
-- Decisions: 339148
-- Markets: 1738
-- Short-horizon pairs: 67556
-- OOS predictions: 247551
+- Decisions: 383641
+- Markets: 1856
+- Short-horizon pairs: 74839
+- OOS predictions: 289064
 - Full-window midpoint models ready: 7
 - Full-window executable-markout models ready: 7
 
 ## 500ms reference executable-markout economics
 
-- Simulated orders: 28
-- Fills: 11
-- Marked fills: 8
-- Positive marked fills: 3
-- Net executable markout: 0.28099999999999936
-- Markout/fill: 0.03512499999999992
-- Fill rate: 0.39285714285714285
+- Simulated orders: 39
+- Fills: 20
+- Marked fills: 13
+- Positive marked fills: 5
+- Net executable markout: 0.12879899999999875
+- Markout/fill: 0.009907615384615289
+- Fill rate: 0.5128205128205128
 
 The report never converts unavailable books, labels, forecasts, or fills into zero.
 
