@@ -307,6 +307,41 @@ def main(argv=None):
         "grid_csv":"equity_gallery/pnl_grid_all_models.csv",
     },indent=2,sort_keys=True)+"\n",encoding="utf-8")
 
+    # Native deterministic alpha library gallery, if present.
+    native_alpha_path=root/"20_native_alpha_library.json"
+    native_gallery_files=[]
+    if native_alpha_path.is_file():
+        native=json.loads(native_alpha_path.read_text(encoding="utf-8"))
+        native_root=root/"native_alpha_equity_gallery"
+        native_root.mkdir(parents=True,exist_ok=True)
+        for alpha_name,alpha in sorted((native.get("alphas") or {}).items()):
+            event_map=alpha.get("events") or {}
+            safe=safe_name(alpha_name)
+            alpha_dir=native_root/safe
+            alpha_dir.mkdir(parents=True,exist_ok=True)
+            name=f"native_alpha_equity_gallery/{safe}/00_all_60_cells.png"
+            plot_equity_group(
+                root,event_map,
+                [f"{l}::{h}" for l in LATENCIES for h in EXITS],
+                f"{alpha_name}: all 60 equity lines",name)
+            native_gallery_files.append(name)
+            for latency in LATENCIES:
+                name=f"native_alpha_equity_gallery/{safe}/latency_{latency}ms_all_exits.png"
+                plot_equity_group(
+                    root,event_map,
+                    [f"{latency}::{h}" for h in EXITS],
+                    f"{alpha_name}: entry {latency}ms",name)
+                native_gallery_files.append(name)
+        (native_root/"gallery_manifest.json").write_text(json.dumps({
+            "schema":"polymarket_v7_native_2h_alpha_gallery_v1",
+            "alpha_count":len(native.get("alphas") or {}),
+            "cells_per_alpha":len(LATENCIES)*len(EXITS),
+            "figures_per_alpha":1+len(LATENCIES),
+            "figure_count":len(native_gallery_files),
+            "figures":native_gallery_files,
+            "grid_csv":"21_native_alpha_grid.csv",
+        },indent=2,sort_keys=True)+"\n",encoding="utf-8")
+
     manifest={
         "schema":"polymarket_v7_multi_alpha_2h_figures_v1",
         "best_enriched_family":rich_family,"baseline_cell":bkey,"rich_cell":rkey,
@@ -318,6 +353,13 @@ def main(argv=None):
         ],
         "equity_gallery":"equity_gallery/gallery_manifest.json",
         "pnl_grid_csv":"equity_gallery/pnl_grid_all_models.csv",
+        "native_alpha_gallery":(
+            "native_alpha_equity_gallery/gallery_manifest.json"
+            if native_gallery_files else None
+        ),
+        "native_alpha_grid_csv":(
+            "21_native_alpha_grid.csv" if native_gallery_files else None
+        ),
     }
     (root/"figures_manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     return 0
