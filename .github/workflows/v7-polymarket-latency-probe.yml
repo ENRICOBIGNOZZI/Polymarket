@@ -1,0 +1,89 @@
+name: V7 London Polymarket latency probe
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-polymarket-latency-probe-request.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-polymarket-latency-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Require explicit PAPER latency request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-polymarket-latency-probe-request.json
+          test -s "$request"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-latency-probe
+          aws-region: eu-west-2
+
+      - name: Run read-only London latency profiler
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: python3 ops/v7_polymarket_latency_probe_ssm.py "$REQUEST"
+
+      - name: Require non-authoritative latency receipt
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          req=json.loads(Path(sys.argv[1]).read_text())
+          p=Path(req['output_directory'])/'latency.json'
+          r=json.loads(p.read_text())
+          assert r['paper_only'] is True
+          assert r['authenticated_execution'] is False
+          assert r['real_order_submission'] is False
+          assert r['real_capital_at_risk'] is False
+          assert r['order_path_latency_measured'] is False
+          assert r['network_probe_only'] is True
+          assert set(r['network'])=={'clob_rest','clob_market_ws'}
+          print(json.dumps({
+            'order_path_latency_measured':r['order_path_latency_measured'],
+            'clob_rest':r['network']['clob_rest'],
+            'clob_market_ws':r['network']['clob_market_ws'],
+            'recent_native':r['recent_native'],
+          },sort_keys=True))
+          PY
+
+      - name: Publish immutable latency receipt
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish London Polymarket latency receipt"
+          git push origin HEAD:main
