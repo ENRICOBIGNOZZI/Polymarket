@@ -1093,7 +1093,6 @@ class DirectActionValueModel:
                 "censored_selected_markets": 0,
                 "observed_fraction": 0.0,
                 "score_markets": 0,
-                "score_values": [],
                 "blocks": [],
                 "failed_blocks": [],
                 "calibration_level": self.calibration_level,
@@ -1197,7 +1196,6 @@ class DirectActionValueModel:
             "censored_selected_markets": censored,
             "observed_fraction": observed_fraction,
             "score_markets": len(all_scores),
-            "score_values": all_scores,
             "blocks": receipts,
             "failed_blocks": failed,
             "predicted_lower_cash_mean": (
@@ -1353,7 +1351,11 @@ class DirectActionValueModel:
         self.calibration_multiplier = 1.5
         self.selection_optimism_penalty = 0.0
         self.selection_calibration = {
-            "state": "INSUFFICIENT_POST_ARGMAX_CALIBRATION",
+            "state": (
+                "DISABLED"
+                if self.selection_calibration_mode == "OFF"
+                else "INSUFFICIENT_PREQUENTIAL_SELECTION_CALIBRATION"
+            ),
             "penalty": 0.0,
             "selected_markets": 0,
             "observed_selected_markets": 0,
@@ -1411,8 +1413,7 @@ class DirectActionValueModel:
                     factory(mean_fit_markets, target_states),
                     lambda action: action["target"])
 
-            # Action-level split conformal uses only the first half of the
-            # untouched chronological tail.
+            # Action-level split conformal uses the full untouched final 20%.
             block_scores = {}
             for action in factory(calibration_markets)():
                 predicted = deployment_mean.predict(action)
