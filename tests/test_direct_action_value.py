@@ -1,9 +1,10 @@
 import math
 
+from research.walk_forward_v2.core import Ridge
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
     FrictionPolicy,
-    bounded_training_states,
+    StreamingRidge,
     candidate_sizes,
     realized_action_economics,
     realized_action_value,
@@ -144,7 +145,7 @@ def test_model_receipt_explicitly_disclaims_mean_covariance_and_l2_impact():
     receipt = model.training_receipt
     assert receipt["mean_covariance_estimation"] is False
     assert receipt["capacity_scope"] == "L1_ONLY_NO_COUNTERFACTUAL_IMPACT_BEYOND_VISIBLE_DEPTH"
-    assert receipt["calibration_state"] == "MARKET_BLOCK_TEMPORAL_CALIBRATION"
+    assert receipt["calibration_state"] == "TEMPORAL_MARKET_BLOCK_CONFORMAL"
 
 
 
@@ -226,24 +227,57 @@ def test_model_receipt_lists_execution_frictions_inside_target_and_residuals_out
 
 
 
-def test_training_state_cap_preserves_market_breadth_deterministically():
+def test_streaming_ridge_matches_materialized_ridge_exactly_on_small_problem():
+    rows = []
+    for index in range(60):
+        features = {"a": float(index % 7)}
+        if index % 4:
+            features["b"] = float((index * 3) % 11)
+        rows.append({
+            "features": features,
+            "target": 1.5 + .7 * features["a"] - .2 * features.get("b", 5.0),
+        })
+    names = ("a", "b")
+    materialized = Ridge(names, ridge=3.0).fit(
+        rows, lambda r: r["target"])
+    streaming = StreamingRidge(
+        names, ridge=3.0, batch_size=7).fit_factory(
+            lambda: iter(rows), lambda r: r["target"])
+    for name in names:
+        assert math.isclose(
+            materialized.center[name], streaming.center[name],
+            rel_tol=1e-12, abs_tol=1e-12)
+        assert math.isclose(
+            materialized.scale[name], streaming.scale[name],
+            rel_tol=1e-12, abs_tol=1e-12)
+    for left, right in zip(materialized.beta, streaming.beta):
+        assert math.isclose(
+            float(left), float(right), rel_tol=1e-9, abs_tol=1e-9)
+    for item in rows:
+        assert math.isclose(
+            materialized.predict(item), streaming.predict(item),
+            rel_tol=1e-9, abs_tol=1e-9)
+
+
+def test_direct_action_uses_all_training_states_with_p_squared_memory():
     rows = [
-        row("m" + str(index + 700), signal=1.0 + (index % 3))
+        row("m" + str(index + 700), signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44)
         for index in range(120)
     ]
-    first = bounded_training_states(rows, 30)
-    second = bounded_training_states(list(reversed(rows)), 30)
-    assert len(first) == 30
-    assert [r["decision_id"] for r in first] == [r["decision_id"] for r in second]
-    assert len({r["market_id"] for r in first}) == 30
-
     model = DirectActionValueModel(
         size_grid=(1.0, 5.0),
         action_horizons_ms=(500,),
         train_latencies_ms=(50,),
-        max_training_states=30,
+        streaming_batch_size=11,
     ).fit(rows)
     receipt = model.training_receipt
     assert receipt["training_states_total"] == 120
-    assert receipt["training_states_used"] == 30
-    assert receipt["training_markets_used"] == 30
+    assert receipt["training_states_used"] == 120
+    assert receipt["training_state_cap"] is None
+    assert receipt["action_targets"] >= 120
+    assert receipt["matrix_strategy"] == (
+        "ONE_PASS_SUFFICIENT_STATISTICS_THEN_P_X_P_NORMAL_EQUATIONS")
+    assert receipt["gram_matrix_bytes"] == (
+        receipt["design_dimension"] ** 2 * 8)
+    assert receipt["gram_matrix_bytes"] < 1_000_000
