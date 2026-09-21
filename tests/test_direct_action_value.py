@@ -1549,3 +1549,74 @@ def test_effective_age_bucket_summary_separates_observed_and_censored():
     assert result["50_100"]["censored_selected_trades"] == 1
     assert result["100_250"]["observed_selected_trades"] == 1
     assert math.isclose(result["100_250"]["total_observed_net_pnl"], -.1)
+
+
+
+def test_bilateral_side_support_never_borrows_selected_side_targets():
+    rows = []
+    for index in range(40):
+        item = bilateral_row("m" + str(index + 12000), no_depth=10.0)
+        item["targets"]["500"]["pair"] = {
+            "state": "PRICES_ONLY",
+            "yes": {"bid": .55, "ask": .56,
+                    "bid_quantity": None, "ask_quantity": None},
+            "no": {"bid": .44, "ask": .45,
+                   "bid_quantity": None, "ask_quantity": None},
+        }
+        item["targets"]["500"]["arrival_bid"] = .55
+        item["targets"]["500"]["arrival_ask"] = .56
+        item["targets"]["500"]["arrival_bid_quantity"] = 20.0
+        item["targets"]["500"]["arrival_quantity"] = 20.0
+        rows.append(item)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_side_regime_action_targets=5,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+
+    receipt = model.training_receipt
+    assert receipt["bilateral_side_support_semantics"] == (
+        "YES_AND_NO_REQUIRE_THEIR_OWN_CAUSAL_ACTION_TARGET_SUPPORT")
+    assert receipt["minimum_side_regime_action_targets"] == 5
+
+    probe = bilateral_row("m12999", no_depth=10.0)
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    assert {entry["side"] for entry in scored} == {"YES"}
+    assert all(
+        entry["side_regime_action_target_support"] >= 5
+        for entry in scored
+    )
+
+
+def test_all_bilateral_sides_fail_closed_when_side_support_is_zero():
+    rows = [
+        row(
+            "m" + str(index + 13000),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(40)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_side_regime_action_targets=1,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+
+    probe = bilateral_row("m13999", no_depth=10.0)
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert scored == []
+    assert state == "INSUFFICIENT_SIDE_REGIME_SUPPORT"
+    selected = model.select_action(probe, latency_ms=50)
+    assert selected["action"] == "NO_TRADE"
+    assert selected["reason"] == "INSUFFICIENT_SIDE_REGIME_SUPPORT"
