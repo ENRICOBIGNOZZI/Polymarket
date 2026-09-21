@@ -300,11 +300,14 @@ def book_targets(decisions, books, tolerance_ns=TARGET_TOLERANCE_NS):
     by_key = defaultdict(list)
     for book in books:
         by_key[(book["market_id"], book["token_id"])].append(book)
-    for sequence in by_key.values():
+    times_by_key = {}
+    for key, sequence in by_key.items():
         sequence.sort(key=lambda r: (r["time_ns"], r["sequence"]))
+        times_by_key[key] = [book["time_ns"] for book in sequence]
     for record in decisions:
-        sequence = by_key.get((record["market_id"], record["token_id"]), [])
-        times = [book["time_ns"] for book in sequence]
+        key = (record["market_id"], record["token_id"])
+        sequence = by_key.get(key, [])
+        times = times_by_key.get(key, [])
         targets = {}
         for horizon in HORIZONS_MS:
             target = record["decision_ns"] + horizon * 1_000_000
@@ -331,6 +334,7 @@ def book_targets(decisions, books, tolerance_ns=TARGET_TOLERANCE_NS):
             }
         record["targets"] = targets
         record["timeline"] = sequence
+        record["timeline_times"] = times
 
 
 def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=None):
@@ -466,21 +470,25 @@ def folds(records, *, desired_folds=3, embargo_ns=2_000_000_000):
 
 
 class Ridge:
-    """Small deterministic ridge model; preprocessing is fitted only on train."""
+    """Small deterministic ridge model; preprocessing is fitted only on train.
+
+    Linear algebra is vectorized because the real London evidence contains
+    hundreds of thousands of rows. This is mathematically identical to the
+    previous normal-equation implementation but avoids Python O(n*p^2) loops.
+    """
     def __init__(self, names, ridge=4.0):
         self.names, self.ridge = tuple(names), ridge
 
     def fit(self, rows, target):
+        import numpy as np
         values = {name: [r["features"].get(name) for r in rows if finite(r["features"].get(name))] for name in self.names}
         self.center = {name: (sum(v) / len(v) if v else 0.0) for name, v in values.items()}
         self.scale = {name: max(1e-9, (max(v) - min(v)) / 2) if v else 1.0 for name, v in values.items()}
-        X = [self.row(row) for row in rows]
-        y = [float(target(row)) for row in rows]
-        width = len(X[0]) if X else 0
-        matrix = [[sum(row[i] * row[j] for row in X) + (self.ridge if i == j and i else 0) for j in range(width)]
-                  for i in range(width)]
-        vector = [sum(row[i] * outcome for row, outcome in zip(X, y)) for i in range(width)]
-        self.beta = solve(matrix, vector)
+        X = self.matrix(rows)
+        y = np.asarray([float(target(row)) for row in rows], dtype=float)
+        penalty = np.eye(X.shape[1], dtype=float) * self.ridge
+        penalty[0, 0] = 0.0
+        self.beta = np.linalg.solve(X.T @ X + penalty, X.T @ y)
         return self
 
     def row(self, record):
@@ -491,8 +499,17 @@ class Ridge:
         values.extend(float(not finite(record["features"].get(name))) for name in self.names)
         return values
 
+    def matrix(self, records):
+        import numpy as np
+        return np.asarray([self.row(record) for record in records], dtype=float)
+
     def predict(self, record):
-        return sum(a * b for a, b in zip(self.beta, self.row(record)))
+        return float(sum(a * b for a, b in zip(self.beta, self.row(record))))
+
+    def predict_many(self, records):
+        if not records:
+            return []
+        return [float(value) for value in self.matrix(records) @ self.beta]
 
 
 def solve(matrix, vector):
@@ -564,7 +581,7 @@ def repricing_predictors(train, test):
             details[str(horizon)] = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
             continue
         model = Ridge(names, ridge=8.0).fit(eligible, lambda row: row["targets"][str(horizon)]["mid_change"])
-        out[str(horizon)] = [model.predict(row) for row in test]
+        out[str(horizon)] = model.predict_many(test)
         details[str(horizon)] = {"state": "READY", "rows": len(eligible), "feature_names": names,
                                  "target": "future_observed_pm_midpoint_change"}
     return out, details
@@ -609,7 +626,9 @@ def fee_per_share(row, price):
 def arrival(row, latency_ms):
     timeline = row.get("timeline") or []
     target = row["decision_ns"] + int(latency_ms) * 1_000_000
-    times = [entry["time_ns"] for entry in timeline]
+    times = row.get("timeline_times")
+    if times is None:
+        times = [entry["time_ns"] for entry in timeline]
     index = bisect_left(times, target)
     if index == len(timeline):
         return None, "UNAVAILABLE_NO_POST_LATENCY_BOOK"

@@ -143,3 +143,29 @@ def test_combined_policy_uses_settlement_value_but_requires_positive_repricing()
     assert combined_positive["filled"] > 0
 
 # End HISTORICAL_WALK_FORWARD_V2 regression gate.
+
+
+def test_ridge_predict_many_matches_scalar_predictions():
+    train = [record("a"), record("b"), record("c")]
+    for index, row in enumerate(train):
+        row["features"]["x"] = float(index)
+        row["label"] = index % 2
+    model = Ridge(["x"], ridge=1.0).fit(train, lambda row: row["label"])
+    scalar = [model.predict(row) for row in train]
+    vector = model.predict_many(train)
+    assert len(vector) == len(scalar)
+    assert all(math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-12)
+               for a, b in zip(scalar, vector))
+
+
+def test_book_targets_cache_sorted_timeline_times_for_replay():
+    row = record()
+    decision = row["decision_ns"]
+    books = [
+        book(row, decision + 100_000_000, ask=.51),
+        book(row, decision + 25_000_000, ask=.50),
+        book(row, decision + 250_000_000, ask=.52),
+    ]
+    book_targets([row], books)
+    assert row["timeline_times"] == sorted(row["timeline_times"])
+    assert row["timeline_times"] == [entry["time_ns"] for entry in row["timeline"]]
