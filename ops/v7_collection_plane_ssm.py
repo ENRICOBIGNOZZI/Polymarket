@@ -148,6 +148,9 @@ render_unit "$TARGET/ops/systemd/polymarket-v7-collection-retention.timer.in"   
 
 systemctl daemon-reload
 systemctl enable "$COLLECTION_UNIT" "$RETENTION_TIMER" >/dev/null
+# A prior fail-closed launch may have exhausted StartLimitBurst. Reset only the
+# independent collection unit's failed/start-limit state; never touch PAPER.
+systemctl reset-failed "$COLLECTION_UNIT" >/dev/null 2>&1 || true
 systemctl restart "$COLLECTION_UNIT"
 systemctl start "$RETENTION_TIMER"
 
