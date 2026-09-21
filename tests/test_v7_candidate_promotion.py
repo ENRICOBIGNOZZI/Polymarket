@@ -28,5 +28,22 @@ def test_manual_artifacts_validate_and_daily_cycle_never_pushes():
     build=(ROOT/'research/build_runtime_artifacts.sh').read_text(); push=(ROOT/'research/push_runtime_artifacts.sh').read_text(); cycle=(ROOT/'research/run_research_cycle.sh').read_text()
     assert build.index('validate_candidate.py') < build.index('runtime_artifact_manifest.py')
     assert 'candidate_validation.json' in push and "state')=='PROMOTABLE'" in push
+    assert 'v7-model-runtime-approval.json' in push
+    assert "approval.get('approved') is True" in push
+    assert "approval.get('target_model_sha')==target" in push
+    assert "approval['bundle_id']==manifest.get('bundle_id')" in push
+    assert "backtest_report_sha256" in push
     assert 'research.learning.daily' in cycle
     assert 'push_runtime_artifacts.sh' not in cycle
+
+
+def test_runtime_model_approval_defaults_fail_closed():
+    approval=json.loads((ROOT/'deploy/v7-model-runtime-approval.json').read_text())
+    assert approval['schema']=='polymarket_v7_model_runtime_approval_v1'
+    assert approval['approved'] is False
+    assert approval['explicit_user_approval_required'] is True
+    assert approval['review_backtest_before_approval'] is True
+    assert approval['automatic_promotion'] is False
+    assert approval['target_model_sha'] is None
+    assert approval['bundle_id'] is None
+    assert approval['backtest_report_sha256'] is None
