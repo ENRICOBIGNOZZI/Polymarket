@@ -130,7 +130,7 @@ def test_model_receipt_explicitly_disclaims_mean_covariance_and_l2_impact():
     rows = [
         row("m" + str(index + 200), signal=2.0 if index % 2 == 0 else -2.0,
             exit_bid=.56 if index % 2 == 0 else .44)
-        for index in range(18)
+        for index in range(90)
     ]
     model = DirectActionValueModel(
         size_grid=(1.0, 5.0),
