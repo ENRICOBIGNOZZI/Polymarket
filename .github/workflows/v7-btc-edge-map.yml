@@ -1,0 +1,118 @@
+name: V7 BTC edge map
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-btc-edge-map-request.json
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-btc-edge-map
+  cancel-in-progress: true
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate BTC research request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-btc-edge-map-request.json
+          python3 - "$request" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v['schema']=='polymarket_v7_btc_edge_map_request_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',v['instance_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['expected_research_sha'])
+          assert v['minimum_wall_ns']==1790007780000000000
+          assert v['output_directory']=='docs/research/btc-edge-map-fast-2026-09-21'
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['real_capital_at_risk'] is False
+          assert v['automatic_promotion'] is False
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          expected="$(python3 -c 'import json; print(json.load(open("'"$request"'"))["expected_research_sha"])')"
+          test "$expected" = "$(git rev-parse HEAD^1)"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-btc-edge-map
+          aws-region: eu-west-2
+
+      - name: Run BTC frequency and size map
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          instance="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["instance_id"])')"
+          sha="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["expected_research_sha"])')"
+          wall="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["minimum_wall_ns"])')"
+          out="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          python3 ops/v7_btc_edge_map_ssm.py --instance-id "$instance" --expected-sha "$sha" --minimum-wall-ns "$wall" --output-dir "$out"
+
+      - name: Print strongest consistent cells
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          req=json.load(open(sys.argv[1]))
+          v=json.load(open(Path(req['output_directory'])/'btc_edge_map.json'))
+          assert v['state']=='READY'
+          print(json.dumps({
+              'discovery_rows':v['splits']['DISCOVERY']['decision_rows'],
+              'validation_rows':v['splits']['VALIDATION']['decision_rows'],
+              'consistent_positive_cells':v['consistent_positive_cells'][:50],
+              'index':v.get('compact_window_index'),
+          },sort_keys=True))
+          PY
+
+      - name: Publish BTC edge map
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish BTC fast edge map"
+          if ! git push origin HEAD:main; then
+            git fetch origin main
+            git rebase origin/main
+            git push origin HEAD:main
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-btc-edge-map-${{ github.run_id }}
+          path: docs/research/btc-edge-map-fast-2026-09-21/btc_edge_map.json
+          retention-days: 30
