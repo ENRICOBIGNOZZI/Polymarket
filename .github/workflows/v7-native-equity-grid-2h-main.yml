@@ -1,0 +1,145 @@
+name: V7 native 2H equity grid research
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-native-equity-grid-2h-request.json]
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-native-equity-grid-2h
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      RESEARCH_BRANCH: multi-alpha-equity-gallery-20260921
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate trusted-main research request
+        id: req
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-native-equity-grid-2h-request.json
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          python3 - "$request" "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert set(v)=={
+            'schema','version','request_id','instance_id','expected_research_sha',
+            'minimum_wall_ns','output_directory','paper_only','authenticated_execution',
+            'real_order_submission','real_capital_at_risk','automatic_promotion'
+          }
+          assert v['schema']=='polymarket_v7_native_equity_grid_2h_request_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',v['instance_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['expected_research_sha'])
+          assert isinstance(v['minimum_wall_ns'],int) and v['minimum_wall_ns']>0
+          assert v['output_directory']=='docs/research/native-equity-grid-2h-2026-09-21'
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['real_capital_at_risk'] is False
+          assert v['automatic_promotion'] is False
+          with open(sys.argv[2],'a',encoding='utf-8') as out:
+              out.write(f"instance_id={v['instance_id']}\n")
+              out.write(f"source_sha={v['expected_research_sha']}\n")
+              out.write(f"minimum_wall_ns={v['minimum_wall_ns']}\n")
+              out.write(f"output_directory={v['output_directory']}\n")
+          PY
+
+      - name: Fetch exact frozen research source
+        env:
+          SOURCE_SHA: ${{ steps.req.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$RESEARCH_BRANCH" --depth=200
+          branch_sha="$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$branch_sha"
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Install research dependencies
+        run: python3 -m pip install --disable-pip-version-check -q -r research/requirements-learning.txt
+
+      - name: Compile research source
+        run: |
+          python3 -m py_compile             research/walk_forward_v3/native_equity_grid_2h.py             ops/v7_native_equity_grid_2h_ssm.py
+
+      - name: Configure AWS credentials through trusted main OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-native-equity-2h
+          aws-region: eu-west-2
+
+      - name: Run read-only native equity research
+        env:
+          INSTANCE_ID: ${{ steps.req.outputs.instance_id }}
+          SOURCE_SHA: ${{ steps.req.outputs.source_sha }}
+          MINIMUM_WALL_NS: ${{ steps.req.outputs.minimum_wall_ns }}
+          OUTPUT_DIRECTORY: ${{ steps.req.outputs.output_directory }}
+        run: |
+          set -euo pipefail
+          python3 ops/v7_native_equity_grid_2h_ssm.py             --instance-id "$INSTANCE_ID"             --expected-sha "$SOURCE_SHA"             --minimum-wall-ns "$MINIMUM_WALL_NS"             --output-dir "$OUTPUT_DIRECTORY"
+
+      - name: Validate equity package
+        env:
+          OUTPUT_DIRECTORY: ${{ steps.req.outputs.output_directory }}
+        run: |
+          python3 - "$OUTPUT_DIRECTORY" <<'PY'
+          import csv,json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          manifest=json.load(open(root/'manifest.json'))
+          summary=json.load(open(root/'summary.json'))
+          gallery=json.load(open(root/'equity_gallery/manifest.json'))
+          assert manifest['paper_only'] is True
+          assert manifest['authenticated_execution'] is False
+          assert manifest['real_order_submission'] is False
+          assert manifest['selection']['profitability_used_for_selection'] is False
+          assert manifest['evidence_source']=='NATIVE_KIND6_CAUSAL_REPRICING'
+          assert len(summary['strategies'])==11
+          assert gallery['total_equity_curves']==660
+          rows=list(csv.DictReader(open(root/'pnl_grid.csv',newline='')))
+          assert len(rows)==660
+          print(json.dumps({'window':[
+              manifest['window_start_ns'],manifest['window_end_ns']],
+              'rows':manifest['rows'],'strategies':summary['strategies'],
+              'equity_curves':gallery['total_equity_curves']},sort_keys=True))
+          PY
+
+      - name: Publish only to isolated research branch
+        env:
+          OUTPUT_DIRECTORY: ${{ steps.req.outputs.output_directory }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$OUTPUT_DIRECTORY"
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish native 2H equity grid research"
+          git push origin HEAD:"$RESEARCH_BRANCH"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-native-equity-2h-${{ github.run_id }}
+          path: docs/research/native-equity-grid-2h-2026-09-21
+          retention-days: 30
