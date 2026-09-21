@@ -258,7 +258,7 @@ def analyze(root,minimum_wall_ns):
     if data.get("input_state")!="READY":
         return {"schema":SCHEMA,**SAFETY,"state":data.get("input_state")}
     rows=[r for r in data["decisions"] if _valid_state(r) and str(r.get("asset"))=="BTC"]
-    sessions,tape_diag=stream_sessions(Path(root),rows)
+    sessions,tape_diag=stream_sessions(Path(root).resolve().parent,rows)
     discovery,validation=market_halves(rows)
     output={"schema":SCHEMA,**SAFETY,"state":"READY","asset":"BTC",
             "latencies_ms":list(LATENCIES),"exit_horizons_ms":list(EXITS),
