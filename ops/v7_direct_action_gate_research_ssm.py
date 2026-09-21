@@ -51,7 +51,7 @@ def load_request(path: Path) -> dict:
         raise ValueError("invalid outer folds")
     if not isinstance(value["inner_folds"],int) or not 2<=value["inner_folds"]<=4:
         raise ValueError("invalid inner folds")
-    if value["latency_ms"] not in (25,50,100,250):
+    if value["latency_ms"] not in (5,10,25,50,100,250):
         raise ValueError("invalid latency")
     if not isinstance(value["capital_budget"],(int,float)) or isinstance(value["capital_budget"],bool):
         raise ValueError("invalid capital budget")
@@ -92,7 +92,7 @@ mkdir -p src output
 tar -xzf source.tgz -C src
 python3 -m venv venv
 venv/bin/pip install --disable-pip-version-check --quiet -r src/research/requirements-learning.txt
-PYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.run_gate_frontier \
+POLYMARKET_RESEARCH_HORIZONS_MS=50,100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000 \\\nPOLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS=5,10,25,50,100,250 \\\nPYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.run_gate_frontier \
   --input-root {run_root} \
   --output {remote}/output/gate_frontier.json \
   --minimum-wall-ns {request['minimum_wall_ns']} \
