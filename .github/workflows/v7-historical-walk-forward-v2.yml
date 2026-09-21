@@ -147,7 +147,15 @@ jobs:
           fi
           git commit -m "Publish nightly London V2 research and champion receipt"
           if ! git push origin HEAD:main; then
-            branch="research/historical-walk-forward-v2-results-${GITHUB_RUN_ID}"
-            git push origin "HEAD:refs/heads/${branch}"
-            gh pr create --base main --head "$branch" --title "research: publish London walk-forward V2 results" --body "Automated PAPER-only London historical walk-forward V2 results. Generated from exact main SHA ${GITHUB_SHA}; no runtime or execution authority changes."
+            echo "main advanced during research; rebasing generated research commit"
+            git fetch origin main
+            if git rebase origin/main && git push origin HEAD:main; then
+              echo "Published after clean rebase."
+            else
+              git rebase --abort || true
+              branch="research/historical-walk-forward-v2-results-${GITHUB_RUN_ID}"
+              git push origin "HEAD:refs/heads/${branch}"
+              echo "Published fallback branch ${branch}; manual merge required."
+              exit 1
+            fi
           fi
