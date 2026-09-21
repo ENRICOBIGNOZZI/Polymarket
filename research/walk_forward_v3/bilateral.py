@@ -13,6 +13,7 @@ from research.walk_forward_v2.core import (
     HORIZONS_MS,
     json_lines,
     native_wall_ns,
+    native_pair_l1,
     valid_native,
 )
 
@@ -20,53 +21,7 @@ SCHEMA = "polymarket_direct_action_bilateral_l1_v1"
 
 
 def paired_l1_state(row):
-    if row.get("repricing_pair_valid") is not True:
-        return {"state": "UNAVAILABLE"}
-    try:
-        yes_bid = int(row["yes_bid_e4"]) / 10000
-        yes_ask = int(row["yes_ask_e4"]) / 10000
-        no_bid = int(row["no_bid_e4"]) / 10000
-        no_ask = int(row["no_ask_e4"]) / 10000
-    except (KeyError, TypeError, ValueError, OverflowError):
-        return {"state": "UNAVAILABLE"}
-    if not (0 < yes_bid < yes_ask < 1 and 0 < no_bid < no_ask < 1):
-        return {"state": "UNAVAILABLE"}
-
-    raw_quantities = {}
-    complete = True
-    for key in (
-        "yes_bid_quantity", "yes_ask_quantity",
-        "no_bid_quantity", "no_ask_quantity",
-    ):
-        value = row.get(key)
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            raw_quantities[key] = None
-            complete = False
-        else:
-            raw_quantities[key] = value / 1_000_000
-
-    ready = (
-        complete
-        and raw_quantities["yes_bid_quantity"] > 0
-        and raw_quantities["yes_ask_quantity"] > 0
-        and raw_quantities["no_bid_quantity"] > 0
-        and raw_quantities["no_ask_quantity"] > 0
-    )
-    return {
-        "state": "BILATERAL_EXECUTABLE_READY" if ready else "PRICES_ONLY",
-        "yes": {
-            "bid": yes_bid,
-            "ask": yes_ask,
-            "bid_quantity": raw_quantities["yes_bid_quantity"],
-            "ask_quantity": raw_quantities["yes_ask_quantity"],
-        },
-        "no": {
-            "bid": no_bid,
-            "ask": no_ask,
-            "bid_quantity": raw_quantities["no_bid_quantity"],
-            "ask_quantity": raw_quantities["no_ask_quantity"],
-        },
-    }
+    return native_pair_l1(row)
 
 
 def _origin_key(row):
