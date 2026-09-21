@@ -1,4 +1,5 @@
-# EXECUTABLE_MARKOUT_FORWARD_SHADOW explicit causal-learning gate.\nimport hashlib
+# EXECUTABLE_MARKOUT_FORWARD_SHADOW explicit causal-learning gate.
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -8,6 +9,7 @@ from scripts.v7_executable_markout_forward_shadow import (
     decision,
     load_artifact,
     predict,
+    Tailer,
 )
 
 
@@ -95,3 +97,58 @@ def test_shadow_rejects_authority_or_unconfirmed_rows():
     row = native()
     row["confirmed_non_opposing"] = False
     assert decision(row) is None
+
+
+
+def test_forward_shadow_bootstrap_starts_at_existing_eof(tmp_path: Path):
+    run_root = tmp_path / "run"
+    native_root = run_root / "research" / "native_observations" / "r"
+    native_root.mkdir(parents=True)
+    tape = native_root / "m.jsonl"
+    existing = json.dumps(native(), sort_keys=True) + "\n"
+    tape.write_text(existing, encoding="utf-8")
+
+    artifact_path = tmp_path / "artifact.json"
+    artifact_raw = json.dumps(artifact(), sort_keys=True, separators=(",", ":"))
+    artifact_path.write_text(artifact_raw, encoding="utf-8")
+    artifact_sha = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+
+    control = run_root / "control"
+    control.mkdir()
+    (control / "native_engine_manager_status.json").write_text(json.dumps({
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "run_id": "r",
+    }), encoding="utf-8")
+
+    args = argparse.Namespace(
+        run_root=run_root,
+        artifact=artifact_path,
+        artifact_sha256=artifact_sha,
+        source_code_sha="0" * 40,
+        output=tmp_path / "out.jsonl",
+        status=tmp_path / "status.json",
+        poll_ms=10,
+        maximum_inference_age_ms=100,
+        duration_seconds=0,
+    )
+    tailer = Tailer(args)
+    try:
+        tailer.bootstrap_existing_files()
+        assert tailer.offsets[str(tape)] == len(existing.encode())
+        assert tailer.scored == 0
+
+        fresh = native()
+        fresh["signal_version"] = 8
+        fresh["decision_monotonic_ns"] += 1_000_000
+        fresh["decision_wall_ns"] = time.time_ns()
+        fresh["trigger_monotonic_ns"] = fresh["decision_monotonic_ns"] - 1_000_000
+        fresh["receive_monotonic_ns"] = fresh["decision_monotonic_ns"] - 500_000
+        with tape.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(fresh, sort_keys=True) + "\n")
+        tailer.process_file(tape)
+        assert tailer.scored == 1
+        assert tailer.timely == 1
+    finally:
+        tailer.output.close()
