@@ -20,11 +20,9 @@ from dataclasses import dataclass
 import argparse
 import math
 from pathlib import Path
-from statistics import median
 
 from research.walk_forward_v2.core import (
     SAFETY,
-    Ridge,
     arrival,
     atomic_json,
     build_dataset,
@@ -308,6 +306,210 @@ def residual_policy_friction(action, row, *, portfolio_state=None,
     }
 
 
+class StreamingRidge:
+    """Exact ridge normal equations from bounded-memory sufficient statistics.
+
+    This matches the train-only preprocessing contract used by the existing
+    Ridge model: finite-value mean centering, half-range scaling, center
+    imputation for missing values, plus one missingness indicator per feature.
+
+    No N x p design matrix is materialized.  One pass over a re-iterable action
+    factory is enough to compute the standardized Gram matrix exactly.
+    """
+
+    def __init__(self, names, *, ridge=8.0, batch_size=4096):
+        self.names = tuple(names)
+        self.ridge = float(ridge)
+        self.batch_size = int(batch_size)
+        if not self.names or not finite(self.ridge) or self.ridge <= 0:
+            raise ValueError("valid streaming ridge specification required")
+        if self.batch_size <= 0:
+            raise ValueError("positive streaming ridge batch size required")
+
+    def fit_factory(self, factory, target):
+        import numpy as np
+
+        p = len(self.names)
+        sum_x = np.zeros(p, dtype=np.float64)
+        count = np.zeros(p, dtype=np.float64)
+        minimum = np.full(p, np.inf, dtype=np.float64)
+        maximum = np.full(p, -np.inf, dtype=np.float64)
+        xx = np.zeros((p, p), dtype=np.float64)
+        xm = np.zeros((p, p), dtype=np.float64)
+        mm = np.zeros((p, p), dtype=np.float64)
+        xy = np.zeros(p, dtype=np.float64)
+        my = np.zeros(p, dtype=np.float64)
+        sum_y = 0.0
+        sum_y2 = 0.0
+        n = 0
+
+        # Compensated accumulation across BLAS blocks.  The expensive work is
+        # dense p x p matrix multiplication; memory stays O(batch*p + p^2).
+        xx_c = np.zeros_like(xx)
+        xm_c = np.zeros_like(xm)
+        mm_c = np.zeros_like(mm)
+        xy_c = np.zeros_like(xy)
+        my_c = np.zeros_like(my)
+        sum_x_c = np.zeros_like(sum_x)
+        count_c = np.zeros_like(count)
+
+        def kahan_add(total, compensation, increment):
+            y = increment - compensation
+            updated = total + y
+            compensation[...] = (updated - total) - y
+            total[...] = updated
+
+        def consume(rows):
+            nonlocal sum_y, sum_y2, n
+            if not rows:
+                return
+            m = len(rows)
+            raw = np.zeros((m, p), dtype=np.float64)
+            mask = np.zeros((m, p), dtype=np.float64)
+            y = np.empty(m, dtype=np.float64)
+            for i, row in enumerate(rows):
+                features = row["features"]
+                for j, name in enumerate(self.names):
+                    value = features.get(name)
+                    if finite(value):
+                        raw[i, j] = float(value)
+                        mask[i, j] = 1.0
+                value = target(row)
+                if not finite(value):
+                    raise ValueError("nonfinite streaming ridge target")
+                y[i] = float(value)
+
+            block_sum = raw.sum(axis=0)
+            block_count = mask.sum(axis=0)
+            kahan_add(sum_x, sum_x_c, block_sum)
+            kahan_add(count, count_c, block_count)
+            kahan_add(xx, xx_c, raw.T @ raw)
+            kahan_add(xm, xm_c, raw.T @ mask)
+            kahan_add(mm, mm_c, mask.T @ mask)
+            kahan_add(xy, xy_c, raw.T @ y)
+            kahan_add(my, my_c, mask.T @ y)
+
+            observed = mask.astype(bool)
+            block_min = np.where(observed, raw, np.inf).min(axis=0)
+            block_max = np.where(observed, raw, -np.inf).max(axis=0)
+            minimum[:] = np.minimum(minimum, block_min)
+            maximum[:] = np.maximum(maximum, block_max)
+            sum_y += float(y.sum())
+            sum_y2 += float(y @ y)
+            n += m
+
+        batch = []
+        for row in factory():
+            batch.append(row)
+            if len(batch) >= self.batch_size:
+                consume(batch)
+                batch.clear()
+        consume(batch)
+        if n == 0:
+            raise ValueError("streaming ridge received zero rows")
+
+        center = np.divide(
+            sum_x, count, out=np.zeros_like(sum_x), where=count > 0)
+        scale = np.ones(p, dtype=np.float64)
+        observed_features = count > 0
+        scale[observed_features] = np.maximum(
+            1e-9,
+            (maximum[observed_features] - minimum[observed_features]) / 2.0,
+        )
+
+        # z_j = m_j (x_j-c_j)/s_j, d_j = 1-m_j.
+        centered_xx = (
+            xx
+            - xm * center[None, :]
+            - xm.T * center[:, None]
+            + mm * center[:, None] * center[None, :]
+        )
+        zz = centered_xx / (scale[:, None] * scale[None, :])
+        zz = (zz + zz.T) * 0.5
+
+        zd_numerator = (
+            sum_x[:, None] - xm
+            - center[:, None] * (count[:, None] - mm)
+        )
+        zd = zd_numerator / scale[:, None]
+        dd = (
+            float(n)
+            - count[:, None]
+            - count[None, :]
+            + mm
+        )
+
+        intercept_z = (sum_x - center * count) / scale
+        intercept_d = float(n) - count
+
+        dimension = 1 + 2 * p
+        gram = np.zeros((dimension, dimension), dtype=np.float64)
+        gram[0, 0] = float(n)
+        gram[0, 1:1+p] = intercept_z
+        gram[1:1+p, 0] = intercept_z
+        gram[0, 1+p:] = intercept_d
+        gram[1+p:, 0] = intercept_d
+        gram[1:1+p, 1:1+p] = zz
+        gram[1:1+p, 1+p:] = zd
+        gram[1+p:, 1:1+p] = zd.T
+        gram[1+p:, 1+p:] = dd
+        gram = (gram + gram.T) * 0.5
+
+        rhs = np.empty(dimension, dtype=np.float64)
+        rhs[0] = sum_y
+        rhs[1:1+p] = (xy - center * my) / scale
+        rhs[1+p:] = sum_y - my
+
+        penalty = np.eye(dimension, dtype=np.float64) * self.ridge
+        penalty[0, 0] = 0.0
+        regularized = gram + penalty
+        try:
+            beta = np.linalg.solve(regularized, rhs)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError("streaming ridge normal equations singular") from exc
+
+        self.center = {name: float(center[j]) for j, name in enumerate(self.names)}
+        self.scale = {name: float(scale[j]) for j, name in enumerate(self.names)}
+        self.beta = beta
+        self.rows = int(n)
+        self.design_dimension = int(dimension)
+        self.gram_bytes = int(gram.nbytes)
+        self.maximum_batch_bytes = int(
+            self.batch_size * p * 2 * np.dtype(np.float64).itemsize)
+        self.target_mean = float(sum_y / n)
+        variance = max(0.0, float(sum_y2 / n) - self.target_mean ** 2)
+        self.target_std = float(math.sqrt(variance))
+        self.condition_number = float(np.linalg.cond(regularized))
+        return self
+
+    def row(self, record):
+        values = [1.0]
+        features = record["features"]
+        for name in self.names:
+            value = features.get(name)
+            if finite(value):
+                values.append(
+                    (float(value) - self.center[name]) / self.scale[name])
+            else:
+                values.append(0.0)
+        values.extend(
+            0.0 if finite(features.get(name)) else 1.0
+            for name in self.names)
+        return values
+
+    def predict(self, record):
+        return float(sum(a * b for a, b in zip(self.beta, self.row(record))))
+
+    def predict_many(self, records):
+        if not records:
+            return []
+        import numpy as np
+        matrix = np.asarray([self.row(record) for record in records], dtype=float)
+        return [float(value) for value in matrix @ self.beta]
+
+
+
+
 class DirectActionValueModel:
     """Direct Q(S, q, h | latency) learner with market-block calibration."""
 
@@ -321,7 +523,8 @@ class DirectActionValueModel:
         hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
         ridge=8.0,
         calibration_level=0.90,
-        max_sizes_per_state=5,
+        max_sizes_per_state=3,
+        streaming_batch_size=4096,
         friction_policy=DEFAULT_FRICTION_POLICY,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
@@ -332,6 +535,9 @@ class DirectActionValueModel:
         self.ridge = float(ridge)
         self.calibration_level = float(calibration_level)
         self.max_sizes_per_state = int(max_sizes_per_state)
+        self.streaming_batch_size = int(streaming_batch_size)
+        if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
+            raise ValueError("positive direct-action capacity limits required")
         self.friction_policy = friction_policy.validated()
         self.fitted = False
 
@@ -443,12 +649,14 @@ class DirectActionValueModel:
             "latency_ms": int(latency_ms),
         }
 
-    def _expand_training_actions(self, rows):
-        actions = []
-        states = Counter()
+    def _iter_training_actions(self, rows, *, markets=None, state_counter=None):
+        market_filter = set(markets) if markets is not None else None
         for row in rows:
+            if market_filter is not None and str(row["market_id"]) not in market_filter:
+                continue
             if not _valid_state(row):
-                states["STATE_OUTSIDE_RESEARCH_SUPPORT"] += 1
+                if state_counter is not None:
+                    state_counter["STATE_OUTSIDE_RESEARCH_SUPPORT"] += 1
                 continue
             sizes = candidate_sizes(
                 row, size_grid=self.size_grid,
@@ -456,7 +664,8 @@ class DirectActionValueModel:
                 max_sizes=self.max_sizes_per_state,
             )
             if not sizes:
-                states["NO_FEASIBLE_SIZE"] += 1
+                if state_counter is not None:
+                    state_counter["NO_FEASIBLE_SIZE"] += 1
                 continue
             for latency in self.train_latencies_ms:
                 for horizon in self.action_horizons_ms:
@@ -468,42 +677,50 @@ class DirectActionValueModel:
                             entry_cap=self.entry_cap,
                             hard_order_notional=self.hard_order_notional,
                         )
-                        states[state] += 1
+                        if state_counter is not None:
+                            state_counter[state] += 1
                         if target is None:
                             continue
                         action = self._action_record(
                             row, size=size, horizon_ms=horizon, latency_ms=latency)
                         action["target"] = float(target)
                         action["target_state"] = state
-                        actions.append(action)
-        return actions, states
+                        yield action
+
 
     @staticmethod
-    def _market_order(actions):
+    def _market_order(rows):
         first = {}
-        for row in actions:
-            market = row["market_id"]
-            first[market] = min(first.get(market, row["decision_ns"]), row["decision_ns"])
+        for row in rows:
+            if not _valid_state(row):
+                continue
+            market = str(row["market_id"])
+            first[market] = min(
+                first.get(market, int(row["decision_ns"])),
+                int(row["decision_ns"]))
         return sorted(first, key=lambda market: (first[market], market))
+
 
     def fit(self, rows):
         rows = list(rows)
         if not rows:
             raise ValueError("direct action training rows required")
         self._configure_levels(rows)
-        actions, target_states = self._expand_training_actions(rows)
-        if len(actions) < 64:
-            raise ValueError("insufficient observed direct-action targets")
+        markets = self._market_order(rows)
+        if not markets:
+            raise ValueError("no admissible direct-action training markets")
 
-        markets = self._market_order(actions)
-        final_mean = Ridge(self.model_feature_names, ridge=self.ridge).fit(
-            actions, lambda row: row["target"])
+        def factory(market_subset=None, counter=None):
+            return lambda: self._iter_training_actions(
+                rows, markets=market_subset, state_counter=counter)
 
         self.uncertainty_floor = 1e-6
-        self.calibration_multiplier = 1.0
+        self.calibration_multiplier = 1.5
         self.scale_model = None
-        calibration_state = "IN_SAMPLE_FALLBACK"
+        calibration_state = "INSUFFICIENT_MARKET_BLOCKS"
 
+        # Temporal market blocks are defined before any outcome-dependent fit.
+        fit_markets = scale_markets = calibration_markets = set()
         if len(markets) >= 15:
             fit_end = max(1, int(len(markets) * 0.60))
             scale_end = max(fit_end + 1, int(len(markets) * 0.80))
@@ -511,56 +728,66 @@ class DirectActionValueModel:
             fit_markets = set(markets[:fit_end])
             scale_markets = set(markets[fit_end:scale_end])
             calibration_markets = set(markets[scale_end:])
-            fit_rows = [row for row in actions if row["market_id"] in fit_markets]
-            scale_rows = [row for row in actions if row["market_id"] in scale_markets]
-            calibration_rows = [
-                row for row in actions if row["market_id"] in calibration_markets]
-            if fit_rows and scale_rows and calibration_rows:
-                provisional = Ridge(self.model_feature_names, ridge=self.ridge).fit(
-                    fit_rows, lambda row: row["target"])
-                scale_training = []
-                scale_errors = []
-                for row, predicted in zip(scale_rows, provisional.predict_many(scale_rows)):
-                    clone = dict(row)
-                    clone["features"] = dict(row["features"])
-                    clone["abs_error"] = abs(float(row["target"]) - float(predicted))
-                    scale_training.append(clone)
-                    scale_errors.append(clone["abs_error"])
-                self.uncertainty_floor = max(
-                    1e-6, float(median(scale_errors)) * 0.10 if scale_errors else 1e-6)
-                if len(scale_training) >= 32:
-                    self.scale_model = Ridge(
-                        self.model_feature_names, ridge=self.ridge).fit(
-                            scale_training, lambda row: row["abs_error"])
-                    ratios = []
-                    calibration_predictions = provisional.predict_many(calibration_rows)
-                    scale_predictions = self.scale_model.predict_many(calibration_rows)
-                    for row, predicted, scale in zip(
-                            calibration_rows, calibration_predictions, scale_predictions):
-                        denom = max(self.uncertainty_floor, float(scale))
-                        ratios.append(abs(float(row["target"]) - float(predicted)) / denom)
-                    calibrated = _quantile(ratios, self.calibration_level)
-                    if calibrated is not None and finite(calibrated):
-                        self.calibration_multiplier = max(1.0, float(calibrated))
-                    calibration_state = "MARKET_BLOCK_TEMPORAL_CALIBRATION"
+
+        if fit_markets and scale_markets and calibration_markets:
+            provisional = StreamingRidge(
+                self.model_feature_names, ridge=self.ridge,
+                batch_size=self.streaming_batch_size).fit_factory(
+                    factory(fit_markets), lambda action: action["target"])
+
+            self.scale_model = StreamingRidge(
+                self.model_feature_names, ridge=self.ridge,
+                batch_size=self.streaming_batch_size).fit_factory(
+                    factory(scale_markets),
+                    lambda action: abs(
+                        float(action["target"]) - provisional.predict(action)),
+                )
+            # Residual target mean is a stable, bounded-memory scale floor.
+            self.uncertainty_floor = max(
+                1e-6, 0.10 * self.scale_model.target_mean)
+
+            # Conformal calibration is market-blocked: one worst normalized
+            # residual per market, so millions of within-market action variants
+            # do not masquerade as independent calibration observations.
+            block_scores = {}
+            for action in factory(calibration_markets)():
+                predicted = provisional.predict(action)
+                scale = max(
+                    self.uncertainty_floor,
+                    self.scale_model.predict(action))
+                score = abs(float(action["target"]) - predicted) / scale
+                market = str(action["market_id"])
+                block_scores[market] = max(
+                    float(score), block_scores.get(market, 0.0))
+            calibrated = _quantile(
+                list(block_scores.values()), self.calibration_level)
+            if calibrated is not None and finite(calibrated):
+                self.calibration_multiplier = max(1.0, float(calibrated))
+                calibration_state = "TEMPORAL_MARKET_BLOCK_CONFORMAL"
+
+        target_states = Counter()
+        final_mean = StreamingRidge(
+            self.model_feature_names, ridge=self.ridge,
+            batch_size=self.streaming_batch_size).fit_factory(
+                factory(None, target_states),
+                lambda action: action["target"])
 
         if self.scale_model is None:
-            predictions = final_mean.predict_many(actions)
-            errors = [abs(float(row["target"]) - pred)
-                      for row, pred in zip(actions, predictions)]
-            self.uncertainty_floor = max(
-                1e-6, float(median(errors)) if errors else 1e-6)
-            # No formal coverage claim under fallback.
-            self.calibration_multiplier = 1.5
+            # Small-sample fallback is intentionally conservative and not a
+            # coverage claim.  Real London runs have many market blocks.
+            self.uncertainty_floor = max(1e-6, final_mean.target_std)
 
         self.mean_model = final_mean
         self.training_receipt = {
             "schema": SCHEMA + "_training_v1",
             **SAFETY,
             "state": "READY",
-            "training_states": len(rows),
-            "training_markets": len({str(row["market_id"]) for row in rows}),
-            "action_targets": len(actions),
+            "training_states_total": len(rows),
+            "training_states_used": len(rows),
+            "training_markets_total": len({str(row["market_id"]) for row in rows}),
+            "training_markets_used": len(markets),
+            "training_state_cap": None,
+            "action_targets": final_mean.rows,
             "target_state_counts": dict(target_states),
             "size_grid": list(self.size_grid),
             "action_horizons_ms": list(self.action_horizons_ms),
@@ -570,7 +797,13 @@ class DirectActionValueModel:
             "opposite_side_counterfactual": "UNAVAILABLE_UNTIL_BOTH_SIDES_ARE_CAPTURED_CAUSALLY",
             "entry_cap": self.entry_cap,
             "hard_order_notional": self.hard_order_notional,
-            "model": "RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
+            "model": "STREAMING_RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
+            "matrix_strategy": "ONE_PASS_SUFFICIENT_STATISTICS_THEN_P_X_P_NORMAL_EQUATIONS",
+            "design_dimension": final_mean.design_dimension,
+            "gram_matrix_bytes": final_mean.gram_bytes,
+            "maximum_streaming_batch_bytes": final_mean.maximum_batch_bytes,
+            "regularized_gram_condition_number": final_mean.condition_number,
+            "streaming_batch_size": self.streaming_batch_size,
             "policy_objective": "PREDICTED_EXECUTABLE_CASH_PNL_MINUS_UNCERTAINTY_MINUS_RESIDUAL_PORTFOLIO_FRICTIONS",
             "policy_loss": "NEGATIVE_POLICY_UTILITY_WITH_NO_TRADE_BASELINE_ZERO",
             "execution_frictions_in_training_target": [
@@ -590,7 +823,7 @@ class DirectActionValueModel:
                 "uncertainty_aversion": self.friction_policy.uncertainty_aversion,
             },
             "ridge": self.ridge,
-            "uncertainty": "ABSOLUTE_RESIDUAL_SCALE_WITH_TEMPORAL_MARKET_BLOCK_CALIBRATION",
+            "uncertainty": "STREAMING_ABSOLUTE_RESIDUAL_SCALE_WITH_TEMPORAL_MARKET_BLOCK_CONFORMAL",
             "calibration_level": self.calibration_level,
             "calibration_multiplier": self.calibration_multiplier,
             "uncertainty_floor": self.uncertainty_floor,
@@ -908,9 +1141,13 @@ def main(argv=None):
     parser.add_argument("--latency-ms", type=int, default=50)
     parser.add_argument("--capital-budget", type=float, default=10_000.0)
     parser.add_argument("--folds", type=int, default=3)
+    parser.add_argument("--minimum-wall-ns", type=int, default=None)
     args = parser.parse_args(argv)
 
-    data = build_dataset(args.root)
+    data = build_dataset(
+        args.root,
+        **({"minimum_wall_ns": args.minimum_wall_ns}
+           if args.minimum_wall_ns is not None else {}))
     if data.get("input_state") != "READY":
         result = {
             "schema": SCHEMA + "_walk_forward_v1",
