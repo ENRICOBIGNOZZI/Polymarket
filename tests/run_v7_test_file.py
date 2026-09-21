@@ -8,6 +8,16 @@ from pathlib import Path
 import subprocess
 import sys
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _test_environment():
+    environment = os.environ.copy()
+    existing = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
+    environment.pop("PYTHONOPTIMIZE", None)
+    return environment
+
 
 def main() -> int:
     if len(sys.argv) != 2:
@@ -20,13 +30,12 @@ def main() -> int:
                  and node.name.startswith("test_")]
     if functions:
         # No ambient plugins or optimized-away Python assertions in CI.
-        environment = os.environ.copy()
+        environment = _test_environment()
         environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-        environment.pop("PYTHONOPTIMIZE", None)
         environment.pop("PYTEST_ADDOPTS", None)
         return subprocess.run(
             [sys.executable, "-m", "pytest", "-q", str(path)],
-            env=environment, check=False,
+            env=environment, cwd=ROOT, check=False,
         ).returncode
     has_entrypoint = any(isinstance(node, ast.If)
                          and "__name__" in ast.unparse(node.test)
@@ -36,10 +45,9 @@ def main() -> int:
     if not has_entrypoint and not has_assertions:
         print(f"NO_EXECUTABLE_TESTS: {path}", file=sys.stderr)
         return 5
-    environment = os.environ.copy()
-    environment.pop("PYTHONOPTIMIZE", None)
+    environment = _test_environment()
     return subprocess.run([sys.executable, str(path)], env=environment,
-                          check=False).returncode
+                          cwd=ROOT, check=False).returncode
 
 
 if __name__ == "__main__":

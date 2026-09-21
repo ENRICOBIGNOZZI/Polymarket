@@ -64,7 +64,8 @@ class LondonOffloadCopyTests(unittest.TestCase):
 
     def test_offload_receipt_never_certifies_open_unsegmented_partial_or_symlinked_tapes(self):
         script = SCRIPT.read_text()
-        code = script.split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        receipt_section = script[script.index("receipt_tmp="):]
+        code = receipt_section.split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); current = root / 'current'; (root / 'receipts').mkdir()
             raw = current / 'external_fair/raw'; raw.mkdir(parents=True)
