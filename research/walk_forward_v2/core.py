@@ -1220,31 +1220,23 @@ def _base_funnel_for_skipped(row):
     return funnel
 
 
-def _aggregate_group(groups, key, outcome):
-    group = groups.setdefault(str(key), {
-        "opportunities": 0, "fills": 0, "marked_fills": 0,
-        "positive_markout_fills": 0, "markout_pnl": 0.0,
-    })
-    group["opportunities"] += 1
-    if outcome is None or outcome.get("filled", 0) <= 0:
-        return
-    group["fills"] += 1
-    if outcome.get("markout") is not None:
-        group["marked_fills"] += 1
-        group["positive_markout_fills"] += int(outcome["markout"] > 0)
-        group["markout_pnl"] += float(outcome["markout"])
-
-
-def _finalize_groups(groups):
+def _stream_group_summary(opportunities, fill_outcomes, field):
     result = {}
-    for key, value in groups.items():
-        item = dict(value)
-        if item["marked_fills"]:
-            item["markout_per_fill"] = item["markout_pnl"] / item["marked_fills"]
-        else:
-            item["markout_pnl"] = None
-            item["markout_per_fill"] = None
-        result[key] = item
+    keys = sorted(opportunities)
+    for key in keys:
+        cell = [row for row in fill_outcomes if str(row.get(field)) == key]
+        marked = [row for row in cell if row.get("markout") is not None]
+        result[key] = {
+            "opportunities": int(opportunities[key]),
+            "fills": len(cell),
+            "marked_fills": len(marked),
+            "positive_markout_fills": sum(row["markout"] > 0 for row in marked),
+            "markout_pnl": sum(row["markout"] for row in marked) if marked else None,
+            "markout_per_fill": (
+                sum(row["markout"] for row in marked) / len(marked)
+                if marked else None
+            ),
+        }
     return result
 
 
@@ -1265,10 +1257,9 @@ def replay_policy_summary(evaluations, selector, *, latency_ms, valuation_mode,
     reserved = 0.0
     funnel_counts = Counter()
     status_counts = Counter()
-    by_asset, by_horizon = {}, {}
-    fills = partial_fills = censored = known = marked = positive_marked = 0
-    net_sum = observed_net_sum = markout_sum = markout_before_fee_sum = 0.0
-    entry_fee_sum = exit_fee_sum = roundtrip_fee_sum = fees_sum = turnover_sum = 0.0
+    asset_opportunities, horizon_opportunities = Counter(), Counter()
+    fill_outcomes = []
+    censored = 0
 
     for event in sequence:
         row = event["row"]
@@ -1281,8 +1272,8 @@ def replay_policy_summary(evaluations, selector, *, latency_ms, valuation_mode,
             for stage, value in base.items():
                 funnel_counts[stage] += int(bool(value))
             status_counts["NO_SIGNAL"] += 1
-            _aggregate_group(by_asset, row["asset"], None)
-            _aggregate_group(by_horizon, row["horizon"], None)
+            asset_opportunities[str(row["asset"])] += 1
+            horizon_opportunities[str(row["horizon"])] += 1
             continue
 
         available = row["market_id"] not in used_markets
@@ -1302,52 +1293,42 @@ def replay_policy_summary(evaluations, selector, *, latency_ms, valuation_mode,
         status_counts[outcome["status"]] += 1
         if outcome["status"].startswith("UNAVAILABLE"):
             censored += 1
+        asset_opportunities[str(row["asset"])] += 1
+        horizon_opportunities[str(row["horizon"])] += 1
         if outcome.get("filled", 0) > 0:
-            fills += 1
-            partial_fills += int(outcome["status"] == "PARTIAL_FILL")
-            fees_sum += float(outcome.get("fees", 0) or 0)
-            turnover_sum += float(outcome.get("turnover", 0) or 0)
-            if outcome.get("pnl") is not None:
-                known += 1
-                net_sum += float(outcome["pnl"])
-                observed_net_sum += float(outcome["pnl"])
-            if outcome.get("markout") is not None:
-                marked += 1
-                positive_marked += int(outcome["markout"] > 0)
-                markout_sum += float(outcome["markout"])
-                markout_before_fee_sum += float(outcome.get("markout_before_fee", 0) or 0)
-                entry_fee_sum += float(outcome.get("markout_entry_fee", 0) or 0)
-                exit_fee_sum += float(outcome.get("markout_exit_fee", 0) or 0)
-                roundtrip_fee_sum += float(outcome.get("markout_roundtrip_fees", 0) or 0)
-        _aggregate_group(by_asset, row["asset"], outcome)
-        _aggregate_group(by_horizon, row["horizon"], outcome)
+            outcome["asset"] = row["asset"]
+            outcome["horizon"] = row["horizon"]
+            fill_outcomes.append(outcome)
 
     simulated = funnel_counts["simulated_order"]
+    fills = fill_outcomes
+    known = [row for row in fills if row.get("pnl") is not None]
+    marked = [row for row in fills if row.get("markout") is not None]
     return {
         "opportunities": len(sequence),
         "simulated_orders": simulated,
-        "fills": fills,
-        "partial_fills": partial_fills,
+        "fills": len(fills),
+        "partial_fills": sum(row["status"] == "PARTIAL_FILL" for row in fills),
         "censored_execution": censored,
-        "fill_rate": fills / simulated if simulated else None,
-        "settled_fills": known,
-        "net_pnl": net_sum if known == fills else None,
-        "observed_net_pnl": observed_net_sum if known else None,
-        "marked_fills": marked,
-        "positive_markout_fills": positive_marked,
-        "markout_before_fee": markout_before_fee_sum if marked else None,
-        "markout_roundtrip_fees": roundtrip_fee_sum if marked else None,
-        "markout_entry_fees": entry_fee_sum if marked else None,
-        "markout_exit_fees": exit_fee_sum if marked else None,
-        "markout_pnl": markout_sum if marked else None,
-        "markout_per_fill": markout_sum / marked if marked else None,
-        "fees": fees_sum,
-        "turnover": turnover_sum,
-        "pnl_per_fill": observed_net_sum / known if known else None,
+        "fill_rate": len(fills) / simulated if simulated else None,
+        "settled_fills": len(known),
+        "net_pnl": sum(row["pnl"] for row in known) if len(known) == len(fills) else None,
+        "observed_net_pnl": sum(row["pnl"] for row in known) if known else None,
+        "marked_fills": len(marked),
+        "positive_markout_fills": sum(row["markout"] > 0 for row in marked),
+        "markout_before_fee": sum(row.get("markout_before_fee", 0) for row in marked) if marked else None,
+        "markout_roundtrip_fees": sum(row.get("markout_roundtrip_fees", 0) for row in marked) if marked else None,
+        "markout_entry_fees": sum(row.get("markout_entry_fee", 0) for row in marked) if marked else None,
+        "markout_exit_fees": sum(row.get("markout_exit_fee", 0) for row in marked) if marked else None,
+        "markout_pnl": sum(row["markout"] for row in marked) if marked else None,
+        "markout_per_fill": sum(row["markout"] for row in marked) / len(marked) if marked else None,
+        "fees": sum(row.get("fees", 0) for row in fills),
+        "turnover": sum(row.get("turnover", 0) for row in fills),
+        "pnl_per_fill": sum(row["pnl"] for row in known) / len(known) if known else None,
         "funnel": {stage: int(funnel_counts[stage]) for stage in FUNNEL_STAGES},
         "status_counts": dict(status_counts),
-        "by_asset": _finalize_groups(by_asset),
-        "by_contract_horizon": _finalize_groups(by_horizon),
+        "by_asset": _stream_group_summary(asset_opportunities, fills, "asset"),
+        "by_contract_horizon": _stream_group_summary(horizon_opportunities, fills, "horizon"),
     }
 
 
