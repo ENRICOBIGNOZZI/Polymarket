@@ -23,7 +23,7 @@ from scripts.v7_executable_markout_forward_shadow import (
 
 SCHEMA = "polymarket_v7_executable_markout_forward_evaluation_v1"
 HORIZONS = (500, 1000, 2000)
-ARRIVALS = (25, 50)
+ARRIVALS = (25, 50, 250, 500, 750)
 PAPER = {
     "paper_only": True,
     "authenticated_execution": False,
@@ -193,13 +193,36 @@ def load_native(paths: list[Path], predictions: dict[tuple[Any, ...], dict[str, 
     return origins, labels
 
 
-def choose_arrival(prediction: dict[str, Any], labels: dict[tuple[Any, ...], dict[str, Any]],
-                   key: tuple[Any, ...]) -> tuple[int | None, dict[str, Any] | None]:
-    age_ms = float(prediction.get("inference_age_ns") or 0) / 1_000_000
+def modeled_arrival_delay_ms(prediction: dict[str, Any], origin: dict[str, Any]) -> float | None:
+    """Decision-to-modeled-match delay for the current PAPER contract.
+
+    The shadow inference age is additive to the venue lifecycle delay and the
+    configured transport assumption because the hypothetical order cannot be
+    submitted before scoring completes.
+    """
+    try:
+        age_ms = float(prediction.get("inference_age_ns") or 0) / 1_000_000
+        venue = origin.get("paper_venue_delay_ns")
+        transport = origin.get("paper_assumed_transport_delay_ns")
+        if not isinstance(venue, int) or venue < 0:
+            return None
+        if not isinstance(transport, int) or transport < 0:
+            return None
+        return age_ms + (venue + transport) / 1_000_000
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def choose_arrival(prediction: dict[str, Any], origin: dict[str, Any],
+                   labels: dict[tuple[Any, ...], dict[str, Any]],
+                   key: tuple[Any, ...]) -> tuple[float | None, int | None, dict[str, Any] | None]:
+    delay_ms = modeled_arrival_delay_ms(prediction, origin)
+    if delay_ms is None:
+        return None, None, None
     for horizon in ARRIVALS:
-        if age_ms <= horizon:
-            return horizon, labels.get((*key, horizon))
-    return None, None
+        if delay_ms <= horizon:
+            return delay_ms, horizon, labels.get((*key, horizon))
+    return delay_ms, None, None
 
 
 def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
@@ -210,7 +233,8 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
         "prediction_threshold": 0, "live_geometry": 0,
         "arrival_available": 0, "simulated_fills": 0, "marked_fills": 0,
         "positive_markout_fills": 0, "markout": 0.0,
-        "prediction_errors": [], "inference_age_ms": [], "fill_sizes": [],
+        "prediction_errors": [], "inference_age_ms": [], "modeled_arrival_delay_ms": [],
+        "fill_sizes": [], "arrival_after_target": 0, "arrival_delay_unavailable": 0,
     })
     for key, pred in sorted(predictions.items(), key=lambda item: int(item[1]["scored_wall_ns"])):
         asset = str(pred.get("asset") or "UNKNOWN")
@@ -257,8 +281,15 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
             ):
                 continue
             cell["live_geometry"] += 1
-            arrival_horizon, arrival = choose_arrival(pred, labels, key)
-            if arrival is None or arrival_horizon is None:
+            modeled_delay_ms, arrival_horizon, arrival = choose_arrival(pred, origin, labels, key)
+            if modeled_delay_ms is None:
+                cell["arrival_delay_unavailable"] += 1
+                continue
+            cell["modeled_arrival_delay_ms"].append(modeled_delay_ms)
+            if modeled_delay_ms >= horizon:
+                cell["arrival_after_target"] += 1
+                continue
+            if arrival is None or arrival_horizon is None or arrival_horizon >= horizon:
                 continue
             if int(pred["scored_wall_ns"]) >= int(arrival["information_ns"]):
                 # An arrival snapshot already known before scoring cannot be a
@@ -290,10 +321,12 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
     for (asset, horizon), cell in sorted(cells.items()):
         errors = cell.pop("prediction_errors")
         ages = cell.pop("inference_age_ms")
+        modeled_delays = cell.pop("modeled_arrival_delay_ms")
         sizes = cell.pop("fill_sizes")
         cell["mae"] = sum(abs(x) for x in errors) / len(errors) if errors else None
         cell["bias"] = sum(errors) / len(errors) if errors else None
         cell["inference_age_ms_quantiles"] = quantiles(ages)
+        cell["modeled_arrival_delay_ms_quantiles"] = quantiles(modeled_delays)
         cell["fill_size_quantiles"] = quantiles(sizes)
         cell["markout_per_marked_fill"] = (
             cell["markout"] / cell["marked_fills"] if cell["marked_fills"] else None
@@ -307,7 +340,7 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
         "live_geometry": {
             "tte_seconds": [105, 120], "maximum_entry_price": .75,
             "target_shares": 5.0, "require_full_visible_decision_depth": True,
-            "arrival_rule": "first native 25ms or 50ms label not earlier than inference age",
+            "arrival_rule": "inference_age + paper_venue_delay + paper_transport_delay; first native as-of label at or after modeled arrival, strictly before markout horizon",
             "limit_rule": "min(0.75, decision_ask + 2*tick)",
         },
         "prediction_count": len(predictions),
