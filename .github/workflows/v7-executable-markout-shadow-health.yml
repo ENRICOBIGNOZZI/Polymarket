@@ -1,0 +1,57 @@
+name: V7 executable markout shadow health
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-executable-markout-shadow-health-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  health:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      REQUEST: deploy/v7-executable-markout-shadow-health-request.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate read-only request
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$REQUEST"
+          parent="${{ github.event.before }}"
+          python3 - "$REQUEST" "$parent" <<'PY'
+          import json,re,sys
+          from pathlib import Path
+          value=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          assert value['schema']=='polymarket_v7_executable_markout_shadow_health_request_v1'
+          assert value['version']==1
+          assert value['expected_parent_sha']==sys.argv[2]
+          assert value['paper_only'] is True
+          assert value['authenticated_execution'] is False
+          assert value['real_order_submission'] is False
+          assert value['real_capital_at_risk'] is False
+          assert re.fullmatch(r'i-[0-9a-f]+',value['instance_id'])
+          PY
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-markout-shadow-health
+          aws-region: eu-west-2
+
+      - name: Read shadow health via SSM
+        run: python3 ops/v7_executable_markout_shadow_health_ssm.py --request "$REQUEST"
