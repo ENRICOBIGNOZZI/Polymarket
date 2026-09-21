@@ -35,7 +35,7 @@ jobs:
           assert v['version']==1
           assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
           assert re.fullmatch(r'i-[0-9a-f]+',v['instance_id'])
-          pat=r'/tmp/polymarket-decomposed-benchmark-[0-9a-f]{12}'
+          pat=r'/tmp/(?:polymarket-decomposed-benchmark|polymarket-simple-edge)-[0-9a-f]{12}'
           assert re.fullmatch(pat,v['stale_prefix'])
           assert re.fullmatch(pat,v['active_prefix'])
           assert v['stale_prefix']!=v['active_prefix']
