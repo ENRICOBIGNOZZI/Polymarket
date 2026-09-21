@@ -24,7 +24,12 @@ def test_retained_historical_math_has_no_execution_class_or_cli():
 
 def test_fast_path_consumes_pod_context_without_slow_io():
     source = (ROOT / "src/v7_crypto_settlement_engine.cpp").read_text()
-    loop = source[source.index("while (monotonic_now_ns() < deadline)"):source.index("// Market rollover")]
+    match = re.search(
+        r"while\s*\([^\n]*monotonic_now_ns\(\)\s*<\s*deadline[^\n]*\)\s*\{",
+        source,
+    )
+    assert match is not None
+    loop = source[match.start():source.index("// Market rollover", match.start())]
     assert "slow_feed.consume(slow_cache" in loop
     for forbidden in ("std::ifstream", "json::parse", "read_json(", "publish_contexts("):
         assert forbidden not in loop
