@@ -1,0 +1,11 @@
+{
+  "schema": "polymarket_v7_executable_markout_shadow_health_request_v1",
+  "version": 1,
+  "request_id": "markout-shadow-health-20260921T1252CEST",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_parent_sha": "01f3476a0363d9d8756580c13788475d2bac11e0",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false
+}
