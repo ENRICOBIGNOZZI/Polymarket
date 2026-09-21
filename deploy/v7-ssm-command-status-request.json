@@ -1,5 +1,1 @@
-{
-    "schema": "polymarket_v7_ssm_command_status_request_v1",
-    "command_id": "6f2ff22b-0e0e-4cbd-996a-19d4de284cbd",
-    "expected_sha": "c7c4de15df26805f51b78733dcf755854ffc87e3"
-}
+{"expected_sha":"c7c4de15df26805f51b78733dcf755854ffc87e3","command_id":"6f2ff22b-0e0e-4cbd-996a-19d4de284cbd","schema":"polymarket_v7_ssm_command_status_request_v1"}
