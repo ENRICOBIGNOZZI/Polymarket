@@ -313,7 +313,7 @@ v7_register_child "$!"
 # crypto asset×horizon context. The universe collector atomically maintains the
 # exact 30-market / 60-token zero-authority selection and this observer reloads
 # at rollover. Model fitting and retrospective shadows remain off London.
-v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA"   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only   --output-dir "$RUN_ROOT/research/repricing_book"   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES"   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
+v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA"   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only   --output-dir "$RUN_ROOT/research/repricing_book"   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" --pure-arb-paper   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 # Zero-authority PM book evidence is diagnostically important but reconstructible.
 # It must not stop the native execution owner if it rolls or exits during market refresh.
 v7_register_optional_child "$!"
