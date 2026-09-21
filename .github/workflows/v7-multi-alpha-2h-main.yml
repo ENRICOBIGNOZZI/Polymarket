@@ -55,7 +55,26 @@ jobs:
           PY
           changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
           test "$changed" = "$request"
-          cp "$request" /tmp/v7-multi-alpha-2h-request.json
+          python3 - "$request" /tmp/v7-multi-alpha-2h-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          out={
+              'schema':'polymarket_v7_multi_alpha_2h_request_v1',
+              'version':1,
+              'request_id':v['request_id'],
+              'instance_id':v['instance_id'],
+              'expected_research_sha':v['expected_research_sha'],
+              'baseline_code_sha':v['baseline_code_sha'],
+              'minimum_wall_ns':v['minimum_wall_ns'],
+              'output_directory':v['output_directory'],
+              'paper_only':True,
+              'authenticated_execution':False,
+              'real_order_submission':False,
+              'real_capital_at_risk':False,
+              'automatic_promotion':False,
+          }
+          json.dump(out,open(sys.argv[2],'w'),indent=2,sort_keys=True)
+          PY
           source_sha="$(python3 -c 'import json;print(json.load(open("'"$request"'"))["expected_research_sha"])')"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
