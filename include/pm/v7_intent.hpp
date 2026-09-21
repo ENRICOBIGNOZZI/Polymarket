@@ -15,6 +15,7 @@ enum class StrategyId : std::uint16_t {
     HardArbitrage = 4,
     CryptoSettlementFair = 5,
     CryptoInformedTaker = 6,
+    CryptoLatencyArb = 7,
 };
 
 enum class IntentType : std::uint8_t {
