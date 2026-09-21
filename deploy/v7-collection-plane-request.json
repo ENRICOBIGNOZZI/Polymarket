@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_collection_plane_request_v1",
   "version": 1,
-  "request_id": "independent-collection-20260921T1937CEST",
+  "request_id": "independent-collection-20260921T1945CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "operation": "INSTALL_OR_REFRESH_COLLECTION_ONLY",
   "collection_root": "/mnt/polymarket-data/polymarket_v7_collection",
@@ -10,5 +10,6 @@
   "real_order_submission": false,
   "real_capital_at_risk": false,
   "execution_authority": "ZERO_AUTHORITY_DATA_COLLECTION",
-  "model_independent": true
+  "model_independent": true,
+  "expected_collector_sha": "a829eeef2fa03ed6053279d150ca2c89e94585de"
 }
