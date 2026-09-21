@@ -14,6 +14,7 @@ import gzip
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import random
 
@@ -26,8 +27,28 @@ SAFETY = {
     "real_capital_at_risk": False,
 }
 SCHEMA = "historical_walk_forward_v2"
-HORIZONS_MS = (25, 50, 100, 250, 500, 1000, 2000)
-EXECUTION_LATENCIES_MS = (0, 10, 25, 50, 100, 250, 500)
+
+def _milliseconds_grid_from_env(name, default):
+    raw = os.environ.get(name)
+    if not raw:
+        return tuple(default)
+    values = tuple(sorted({
+        int(piece.strip())
+        for piece in raw.split(",")
+        if piece.strip()
+    }))
+    if not values or any(value < 0 for value in values):
+        raise ValueError(f"{name} must contain nonnegative integer milliseconds")
+    return values
+
+HORIZONS_MS = _milliseconds_grid_from_env(
+    "POLYMARKET_RESEARCH_HORIZONS_MS",
+    (25, 50, 100, 250, 500, 1000, 2000),
+)
+EXECUTION_LATENCIES_MS = _milliseconds_grid_from_env(
+    "POLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS",
+    (0, 10, 25, 50, 100, 250, 500),
+)
 TARGET_TOLERANCE_NS = 50_000_000
 DEFAULT_EPOCH_NS = 1_789_921_800_000_000_000  # 2026-09-20 16:30:00 UTC
 REASON_NAMES = {
