@@ -1,0 +1,14 @@
+{
+  "schema": "polymarket_v7_btc_edge_map_request_v1",
+  "version": 1,
+  "request_id": "btc-edge-map-warm-index-20260921T2134CEST",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_research_sha": "2d4c82e4f21989130129e2495b0f75fcd065b4f3",
+  "minimum_wall_ns": 1790007780000000000,
+  "output_directory": "docs/research/btc-edge-map-fast-2026-09-21",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}
