@@ -323,47 +323,52 @@ def native_repricing_point(row):
         return None
 
 
-def attach_native_repricing(decisions, labels):
+def _native_repricing_index(decisions):
     by_key = {}
     for record in decisions:
         record["targets"] = {}
         record["arrivals"] = {}
         key = decision_repricing_key(record)
         if key is not None:
+            prior = by_key.get(key)
+            if prior is not None and prior["decision_id"] != record["decision_id"]:
+                raise ValueError("CONFLICTING_NATIVE_REPRICING_ORIGIN_IDENTITY")
             by_key[key] = record
+    return by_key
 
-    matched = conflicts = 0
-    for (key, horizon), point in sorted(labels.items(), key=lambda item: (item[0][0], item[0][1])):
-        record = by_key.get(key)
-        if record is None:
-            continue
-        if point["epoch"] != record["epoch"]:
-            continue
-        hkey = str(horizon)
-        prior = record["targets"].get(hkey)
-        if prior is not None:
-            conflicts += 1
-            continue
-        mid0 = (record["bid"] + record["ask"]) / 2
-        mid1 = (point["bid"] + point["ask"]) / 2
-        record["targets"][hkey] = {
-            "state": "OBSERVED",
-            "source": point["source"],
-            "observed_time_ns": point["observed_time_ns"],
-            "mid_change": mid1 - mid0,
-            "ask_change": point["ask"] - record["ask"],
-            "bid_change": point["bid"] - record["bid"],
-            "arrival_ask": point["ask"], "arrival_bid": point["bid"],
-            "arrival_quantity": point["quantity"],
+
+def _attach_native_repricing_point(record, horizon, point):
+    if point["epoch"] != record["epoch"]:
+        return "EPOCH_MISMATCH"
+    hkey = str(horizon)
+    prior = record["targets"].get(hkey)
+    mid0 = (record["bid"] + record["ask"]) / 2
+    mid1 = (point["bid"] + point["ask"]) / 2
+    value = {
+        "state": "OBSERVED",
+        "source": point["source"],
+        "observed_time_ns": point["observed_time_ns"],
+        "mid_change": mid1 - mid0,
+        "ask_change": point["ask"] - record["ask"],
+        "bid_change": point["bid"] - record["bid"],
+        "arrival_ask": point["ask"], "arrival_bid": point["bid"],
+        "arrival_quantity": point["quantity"],
+    }
+    if prior is not None:
+        if prior != value:
+            raise ValueError("CONFLICTING_NATIVE_REPRICING_TARGET")
+        return "DUPLICATE_IDENTICAL"
+    record["targets"][hkey] = value
+    if horizon in EXECUTION_LATENCIES_MS:
+        record["arrivals"][hkey] = {
+            "time_ns": point["observed_time_ns"],
+            "bid": point["bid"], "ask": point["ask"],
+            "quantity": point["quantity"], "epoch": point["epoch"],
         }
-        if horizon in EXECUTION_LATENCIES_MS:
-            record["arrivals"][hkey] = {
-                "time_ns": point["observed_time_ns"],
-                "bid": point["bid"], "ask": point["ask"],
-                "quantity": point["quantity"], "epoch": point["epoch"],
-            }
-        matched += 1
+    return "MATCHED"
 
+
+def _finalize_native_repricing(decisions, *, native_label_rows, matched, duplicate, epoch_mismatch):
     short_pairs = arrival_pairs = 0
     for record in decisions:
         for horizon in HORIZONS_MS:
@@ -375,12 +380,66 @@ def attach_native_repricing(decisions, labels):
         arrival_pairs += len(record["arrivals"])
     return {
         "source": "NATIVE_KIND6_CAUSAL_ASOF_HORIZON",
-        "native_label_rows": len(labels),
+        "native_label_rows": native_label_rows,
         "matched_target_rows": matched,
-        "conflicting_target_rows": conflicts,
+        "duplicate_identical_target_rows": duplicate,
+        "epoch_mismatch_rows": epoch_mismatch,
         "short_horizon_observed_pairs": short_pairs,
         "arrival_observed_pairs": arrival_pairs,
     }
+
+
+def attach_native_repricing(decisions, labels):
+    """In-memory helper retained for deterministic unit tests."""
+    by_key = _native_repricing_index(decisions)
+    matched = duplicate = epoch_mismatch = 0
+    for (key, horizon), point in sorted(labels.items(), key=lambda item: (item[0][0], item[0][1])):
+        record = by_key.get(key)
+        if record is None:
+            continue
+        status = _attach_native_repricing_point(record, horizon, point)
+        if status == "MATCHED":
+            matched += 1
+        elif status == "DUPLICATE_IDENTICAL":
+            duplicate += 1
+        elif status == "EPOCH_MISMATCH":
+            epoch_mismatch += 1
+    return _finalize_native_repricing(
+        decisions, native_label_rows=len(labels), matched=matched,
+        duplicate=duplicate, epoch_mismatch=epoch_mismatch)
+
+
+def attach_native_repricing_stream(decisions, paths):
+    """Second compact pass: attach each kind=6 label and discard it immediately."""
+    by_key = _native_repricing_index(decisions)
+    native_label_rows = matched = duplicate = epoch_mismatch = invalid = unmatched = 0
+    for path in paths:
+        for row in json_lines(path):
+            if row is None or row.get("schema") != "polymarket_v7_native_observation_v1" or row.get("kind") != 6:
+                continue
+            native_label_rows += 1
+            point = native_repricing_point(row)
+            if point is None:
+                invalid += 1
+                continue
+            key, horizon, value = point
+            record = by_key.get(key)
+            if record is None:
+                unmatched += 1
+                continue
+            status = _attach_native_repricing_point(record, horizon, value)
+            if status == "MATCHED":
+                matched += 1
+            elif status == "DUPLICATE_IDENTICAL":
+                duplicate += 1
+            elif status == "EPOCH_MISMATCH":
+                epoch_mismatch += 1
+    result = _finalize_native_repricing(
+        decisions, native_label_rows=native_label_rows, matched=matched,
+        duplicate=duplicate, epoch_mismatch=epoch_mismatch)
+    result["invalid_or_censored_label_rows"] = invalid
+    result["unmatched_label_rows"] = unmatched
+    return result
 
 
 def settlement_index(roots):
@@ -603,7 +662,6 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
     compact = sorted(list((hft_root / "compact").glob("*.jsonl*"))
                      + list((hft_root / "compact_closed").glob("*.jsonl*")))
     seen_sources, seen_decisions = set(), set()
-    native_labels = {}
 
     for path in compact:
         if path.is_symlink() or not path.is_file():
@@ -622,16 +680,6 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
                 continue
             kind = row.get("kind")
             if kind == 6:
-                point = native_repricing_point(row)
-                if point is None:
-                    result["exclusions"]["INVALID_OR_CENSORED_NATIVE_REPRICING_LABEL"] += 1
-                    continue
-                key, horizon, value = point
-                identity = (key, horizon)
-                prior = native_labels.get(identity)
-                if prior is not None and prior != value:
-                    raise ValueError("CONFLICTING_NATIVE_REPRICING_LABEL")
-                native_labels[identity] = value
                 continue
             if kind != 2:
                 continue
@@ -651,7 +699,7 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
     result["decisions"].sort(key=lambda r: (r["decision_ns"], r["decision_id"]))
     attach_labels(result["decisions"], label_roots)
     if result["decisions"]:
-        result["book_evidence"] = attach_native_repricing(result["decisions"], native_labels)
+        result["book_evidence"] = attach_native_repricing_stream(result["decisions"], compact)
 
     result["exclusions"] = dict(result["exclusions"])
     if not hft_root.is_dir():
