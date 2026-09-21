@@ -201,6 +201,7 @@ class Tailer:
         self.active_run_id = ""
         self.output = args.output.open("a", encoding="utf-8", buffering=1)
         self._restore_seen()
+        self._bootstrapped = False
 
     def _restore_seen(self) -> None:
         if not self.args.output.exists():
@@ -235,6 +236,17 @@ class Tailer:
         self.active_run_id = run_id
         root = self.args.run_root / "research/native_observations" / run_id
         return sorted(root.glob("*.jsonl")) if root.is_dir() else []
+
+    def bootstrap_existing_files(self) -> None:
+        """Forward-only start: existing native bytes predate this shadow launch."""
+        if self._bootstrapped:
+            return
+        for path in self.files():
+            try:
+                self.offsets[str(path)] = path.stat().st_size
+            except OSError:
+                continue
+        self._bootstrapped = True
 
     def process_file(self, path: Path) -> None:
         key = str(path)
@@ -336,6 +348,7 @@ class Tailer:
         started = time.monotonic()
         next_status = 0.0
         try:
+            self.bootstrap_existing_files()
             while True:
                 for path in self.files():
                     self.process_file(path)
