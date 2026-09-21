@@ -1970,6 +1970,7 @@ def test_edge_sized_challenger_respects_depth_capital_and_hard_order_cap():
         action_horizons_ms=(500,),
         train_latencies_ms=(50,),
         hard_order_notional=20.0,
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
         conditional_calibration=True,
         conditional_calibration_min_markets=2,
     ).fit(rows)
