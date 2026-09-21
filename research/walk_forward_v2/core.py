@@ -1036,7 +1036,7 @@ def arrival(row, latency_ms):
 
 def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, entry_cap=.75, shares=5.0,
                execution_reserve=.005, ideal="REALISTIC", valuation_mode="SETTLEMENT",
-               market_available=True, capital_available=True):
+               markout_horizon_ms=250, market_available=True, capital_available=True):
     """Same L1 taker economics for every candidate; unavailable is never a nonfill."""
     funnel = {stage: False for stage in FUNNEL_STAGES}
     funnel["native_decision_rows"] = True
@@ -1053,22 +1053,34 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         return outcome
     funnel["forecast_available"] = True
     midpoint = (row["bid"] + row["ask"]) / 2
+    decision_price = midpoint if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else row["ask"]
+    fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, decision_price)
     if valuation_mode == "REPRICING":
         if repricing is None:
             return outcome
         expected = min(.9999, max(.0001, midpoint + repricing))
+        gross = expected - decision_price
+        after_fee = gross - fee
+        predicted_positive = repricing > 0
+    elif valuation_mode == "EXECUTABLE_MARKOUT":
+        # prediction is already future executable bid - causal ask - taker fee.
+        after_fee = float(prediction)
+        gross = after_fee + fee
+        predicted_positive = after_fee > 0
     elif valuation_mode == "SETTLEMENT_WITH_REPRICING_CONFIRMATION":
         if repricing is None:
             return outcome
         expected = prediction
+        gross = expected - decision_price
+        after_fee = gross - fee
+        predicted_positive = repricing > 0
     else:
         expected = prediction
-    decision_price = midpoint if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else row["ask"]
-    fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, decision_price)
-    gross = expected - decision_price
-    after_fee = gross - fee
+        gross = expected - decision_price
+        after_fee = gross - fee
+        predicted_positive = True
     after_reserve = after_fee - execution_reserve
-    funnel["predicted_repricing_positive"] = repricing is None or repricing > 0
+    funnel["predicted_repricing_positive"] = predicted_positive
     funnel["gross_edge_positive"] = gross > 0
     funnel["spread_adjusted_edge_positive"] = gross > 0
     funnel["fee_adjusted_edge_positive"] = after_fee > 0
@@ -1109,9 +1121,10 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
     execution_price = (book["bid"] + book["ask"]) / 2 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else book["ask"]
     cost_fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, execution_price) * filled
     turnover = filled * execution_price
-    target = row.get("targets", {}).get("250", {})
+    target = row.get("targets", {}).get(str(int(markout_horizon_ms)), {})
     if target.get("state") == "OBSERVED":
-        outcome["markout"] = filled * target["arrival_bid"] - turnover - cost_fee
+        outcome["markout_before_fee"] = filled * target["arrival_bid"] - turnover
+        outcome["markout"] = outcome["markout_before_fee"] - cost_fee
         funnel["positive_markout"] = outcome["markout"] > 0
     if row["label"] is not None:
         outcome["pnl"] = filled * row["label"] - turnover - cost_fee
@@ -1126,7 +1139,7 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
 def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
                   edge_threshold=.005, entry_cap=.75, shares=5.0,
                   execution_reserve=.005, ideal="REALISTIC",
-                  capital_budget=1000.0):
+                  markout_horizon_ms=250, capital_budget=1000.0):
     """Sequential one-entry-per-market PAPER replay with bounded capital reservation.
 
     A market is consumed when an order is actually simulated, matching the
@@ -1146,8 +1159,8 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
             row, prediction, repricing, latency_ms=latency_ms,
             edge_threshold=edge_threshold, entry_cap=entry_cap, shares=shares,
             execution_reserve=execution_reserve, ideal=ideal,
-            valuation_mode=valuation_mode, market_available=available,
-            capital_available=capital_available,
+            valuation_mode=valuation_mode, markout_horizon_ms=markout_horizon_ms,
+            market_available=available, capital_available=capital_available,
         )
         outcome["market_id"], outcome["asset"], outcome["horizon"] = (
             row["market_id"], row["asset"], row["horizon"])
@@ -1159,9 +1172,27 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
     return outcomes
 
 
+def _group_markout(outcomes, field):
+    groups = {}
+    for value in sorted({row.get(field) for row in outcomes if row.get(field) is not None}):
+        cell = [row for row in outcomes if row.get(field) == value]
+        fills = [row for row in cell if row.get("filled", 0) > 0]
+        marked = [row for row in fills if row.get("markout") is not None]
+        groups[str(value)] = {
+            "opportunities": len(cell),
+            "fills": len(fills),
+            "marked_fills": len(marked),
+            "positive_markout_fills": sum(row["markout"] > 0 for row in marked),
+            "markout_pnl": sum(row["markout"] for row in marked) if marked else None,
+            "markout_per_fill": sum(row["markout"] for row in marked) / len(marked) if marked else None,
+        }
+    return groups
+
+
 def summarize(outcomes):
     fills = [row for row in outcomes if row["filled"] > 0]
     known = [row for row in fills if row["pnl"] is not None]
+    marked = [row for row in fills if row.get("markout") is not None]
     censored = [row for row in outcomes if row["status"].startswith("UNAVAILABLE")]
     funnel = {stage: sum(bool(row["funnel"][stage]) for row in outcomes) for stage in FUNNEL_STAGES}
     return {
@@ -1170,10 +1201,16 @@ def summarize(outcomes):
         "censored_execution": len(censored), "fill_rate": len(fills) / funnel["simulated_order"] if funnel["simulated_order"] else None,
         "settled_fills": len(known), "net_pnl": sum(row["pnl"] for row in known) if len(known) == len(fills) else None,
         "observed_net_pnl": sum(row["pnl"] for row in known) if known else None,
-        "markout_pnl": sum(row["markout"] for row in fills if row["markout"] is not None) if any(row["markout"] is not None for row in fills) else None,
+        "marked_fills": len(marked),
+        "positive_markout_fills": sum(row["markout"] > 0 for row in marked),
+        "markout_before_fee": sum(row.get("markout_before_fee", 0) for row in marked) if marked else None,
+        "markout_pnl": sum(row["markout"] for row in marked) if marked else None,
+        "markout_per_fill": sum(row["markout"] for row in marked) / len(marked) if marked else None,
         "fees": sum(row.get("fees", 0) for row in fills), "turnover": sum(row.get("turnover", 0) for row in fills),
         "pnl_per_fill": sum(row["pnl"] for row in known) / len(known) if known else None,
         "funnel": funnel, "status_counts": dict(Counter(row["status"] for row in outcomes)),
+        "by_asset": _group_markout(outcomes, "asset"),
+        "by_contract_horizon": _group_markout(outcomes, "horizon"),
     }
 
 
