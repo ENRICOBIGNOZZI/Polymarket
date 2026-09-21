@@ -438,6 +438,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"identity_provenance", event.kind == 4 ? json::value("EXACT_RUNTIME_ARTIFACT_V1") : json::value(nullptr)},
             {"run_id", config.run_id}, {"server_id", config.server_id},
             {"market_id", config.market_id}, {"token_id", token(event.instrument_handle)},
+            {"yes_token_id", config.yes_token_id}, {"no_token_id", config.no_token_id},
             {"asset", config.asset}, {"horizon", config.horizon},
             {"capture_id", capture_id}, {"connection_epoch", event.connection_epoch},
             {"capture_mode", config.observation_capture_mode},
