@@ -828,6 +828,28 @@ def _polylog_level_crossings(coefficients, level, lower, upper):
 
 
 
+def effective_age_bucket(signal_age_ms, latency_ms):
+    age = max(0.0, float(signal_age_ms)) + float(latency_ms)
+    if age <= 50.0:
+        return "le50"
+    if age <= 100.0:
+        return "50_100"
+    if age <= 250.0:
+        return "100_250"
+    return "gt250"
+
+
+def regime_support_key(row, latency_ms):
+    return "::".join((
+        str(row.get("asset") or "UNKNOWN"),
+        str(row.get("horizon") or "UNKNOWN"),
+        effective_age_bucket(
+            float(row.get("signal_age_ns") or 0) / 1e6,
+            int(latency_ms),
+        ),
+    ))
+
+
 class DirectActionValueModel:
     """Direct Q(S, q, h | latency) learner with market-block calibration."""
 
@@ -847,6 +869,7 @@ class DirectActionValueModel:
         selection_calibration_mode="PREQUENTIAL",
         prequential_calibration_blocks=2,
         maximum_effective_action_age_ms=None,
+        minimum_regime_action_targets=0,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -864,6 +887,8 @@ class DirectActionValueModel:
             if maximum_effective_action_age_ms is None
             else float(maximum_effective_action_age_ms)
         )
+        self.minimum_regime_action_targets = int(
+            minimum_regime_action_targets)
         if (
             self.maximum_effective_action_age_ms is not None
             and (
@@ -873,6 +898,8 @@ class DirectActionValueModel:
         ):
             raise ValueError(
                 "positive finite maximum effective action age required")
+        if self.minimum_regime_action_targets < 0:
+            raise ValueError("nonnegative regime support threshold required")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -906,6 +933,7 @@ class DirectActionValueModel:
         self.base_names = self._base_feature_names(rows)
         self.assets = tuple(sorted({str(row.get("asset") or "UNKNOWN") for row in rows}))
         self.contract_horizons = tuple(sorted({str(row.get("horizon") or "UNKNOWN") for row in rows}))
+        self.age_buckets = ("le50", "50_100", "100_250", "gt250")
         names = [
             "state.ask", "state.bid", "state.spread", "state.depth",
             "state.minimum", "state.tte_s", "state.signal_age_ms",
@@ -927,6 +955,27 @@ class DirectActionValueModel:
         names.extend("x." + name for name in self.base_names)
         names.extend("asset::" + asset for asset in self.assets)
         names.extend("contract::" + horizon for horizon in self.contract_horizons)
+        names.extend(
+            "asset_contract::" + asset + "::" + horizon
+            for asset in self.assets
+            for horizon in self.contract_horizons
+        )
+        names.extend(
+            "asset_contract_signal::" + asset + "::" + horizon
+            for asset in self.assets
+            for horizon in self.contract_horizons
+        )
+        names.extend(
+            "asset_contract_size::" + asset + "::" + horizon
+            for asset in self.assets
+            for horizon in self.contract_horizons
+        )
+        names.extend(
+            "asset_contract_age::" + asset + "::" + horizon + "::" + bucket
+            for asset in self.assets
+            for horizon in self.contract_horizons
+            for bucket in self.age_buckets
+        )
         names.extend("exit::" + str(h) for h in self.action_horizons_ms)
         names.extend("latency::" + str(v) for v in self.train_latencies_ms)
         self.model_feature_names = tuple(names)
@@ -1002,10 +1051,33 @@ class DirectActionValueModel:
                 features["x." + name] = float(value)
         asset = str(row.get("asset") or "UNKNOWN")
         contract = str(row.get("horizon") or "UNKNOWN")
+        bucket = effective_age_bucket(signal_age_ms, latency_ms)
         for value in self.assets:
             features["asset::" + value] = 1.0 if value == asset else 0.0
         for value in self.contract_horizons:
             features["contract::" + value] = 1.0 if value == contract else 0.0
+        for asset_value in self.assets:
+            for horizon_value in self.contract_horizons:
+                active = (
+                    1.0
+                    if asset_value == asset and horizon_value == contract
+                    else 0.0
+                )
+                prefix = (
+                    asset_value + "::" + horizon_value)
+                features["asset_contract::" + prefix] = active
+                features["asset_contract_signal::" + prefix] = (
+                    signal * active)
+                features["asset_contract_size::" + prefix] = (
+                    float(size) * active)
+                for bucket_value in self.age_buckets:
+                    features[
+                        "asset_contract_age::"
+                        + prefix + "::" + bucket_value
+                    ] = (
+                        1.0
+                        if active and bucket_value == bucket else 0.0
+                    )
         for value in self.action_horizons_ms:
             features["exit::" + str(value)] = 1.0 if value == int(horizon_ms) else 0.0
         for value in self.train_latencies_ms:
@@ -1022,7 +1094,9 @@ class DirectActionValueModel:
             "latency_ms": int(latency_ms),
         }
 
-    def _iter_training_actions(self, rows, *, markets=None, state_counter=None):
+    def _iter_training_actions(
+        self, rows, *, markets=None, state_counter=None, regime_counter=None,
+    ):
         market_filter = set(markets) if markets is not None else None
         for row in rows:
             if market_filter is not None and str(row["market_id"]) not in market_filter:
@@ -1075,6 +1149,10 @@ class DirectActionValueModel:
                             action["target_state"] = state
                             if state_counter is not None:
                                 state_counter["ACTION_SIDE_" + side] += 1
+                            if regime_counter is not None:
+                                regime_counter[
+                                    regime_support_key(row, latency)
+                                ] += 1
                             yield action
 
 
@@ -1106,6 +1184,7 @@ class DirectActionValueModel:
             selection_calibration_mode="OFF",
             prequential_calibration_blocks=self.prequential_calibration_blocks,
             maximum_effective_action_age_ms=self.maximum_effective_action_age_ms,
+            minimum_regime_action_targets=self.minimum_regime_action_targets,
         )
 
     def _prequential_selected_policy_calibration(
@@ -1379,9 +1458,15 @@ class DirectActionValueModel:
         if not markets:
             raise ValueError("no admissible direct-action training markets")
 
-        def factory(market_subset=None, counter=None):
+        def factory(
+            market_subset=None, counter=None, regime_counter=None,
+        ):
             return lambda: self._iter_training_actions(
-                rows, markets=market_subset, state_counter=counter)
+                rows,
+                markets=market_subset,
+                state_counter=counter,
+                regime_counter=regime_counter,
+            )
 
         self.uncertainty_floor = 1e-6
         self.calibration_multiplier = 1.5
@@ -1426,6 +1511,7 @@ class DirectActionValueModel:
             mean_fit_sequence = list(markets[:scale_end])
 
         target_states = Counter()
+        regime_action_targets = Counter()
         if fit_markets and scale_markets and calibration_markets:
             provisional = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
@@ -1446,7 +1532,11 @@ class DirectActionValueModel:
             deployment_mean = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
                 batch_size=self.streaming_batch_size).fit_factory(
-                    factory(mean_fit_markets, target_states),
+                    factory(
+                        mean_fit_markets,
+                        target_states,
+                        regime_action_targets,
+                    ),
                     lambda action: action["target"])
 
             # Action-level split conformal uses the full untouched final 20%.
@@ -1483,7 +1573,7 @@ class DirectActionValueModel:
             deployment_mean = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
                 batch_size=self.streaming_batch_size).fit_factory(
-                    factory(None, target_states),
+                    factory(None, target_states, regime_action_targets),
                     lambda action: action["target"])
 
         if self.scale_model is None:
@@ -1491,6 +1581,7 @@ class DirectActionValueModel:
                 1e-6, deployment_mean.target_std)
 
         self.mean_model = deployment_mean
+        self.regime_action_target_counts = dict(regime_action_targets)
         training_states_used = sum(
             1 for row in rows if str(row["market_id"]) in mean_fit_markets)
         self.training_receipt = {
@@ -1516,6 +1607,13 @@ class DirectActionValueModel:
                 None if self.maximum_effective_action_age_ms is None
                 else float(self.maximum_effective_action_age_ms)
             ),
+            "partial_pooling": (
+                "GLOBAL_BASE_PLUS_RIDGE_SHRUNK_ASSET_CONTRACT_AGE_DEVIATIONS"
+            ),
+            "minimum_regime_action_targets": (
+                self.minimum_regime_action_targets),
+            "regime_action_target_counts": dict(
+                sorted(self.regime_action_target_counts.items())),
             "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
             "opposite_side_counterfactual": "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_AND_EXIT_EVIDENCE",
             "entry_cap": self.entry_cap,
@@ -1661,6 +1759,12 @@ class DirectActionValueModel:
                 model, "interaction.size_effective_age")
             * effective_action_age_ms
         )
+        asset = str(row.get("asset") or "UNKNOWN")
+        contract = str(row.get("horizon") or "UNKNOWN")
+        linear += self._raw_feature_coefficient(
+            model,
+            "asset_contract_size::" + asset + "::" + contract,
+        )
         linear += (
             self._raw_feature_coefficient(
                 model, "interaction.size_signal_alignment")
@@ -1717,6 +1821,10 @@ class DirectActionValueModel:
                 max(0.0, float(row.get("signal_age_ns") or 0) / 1e6)
                 + float(latency_ms)
             ),
+            "regime_support_key": regime_support_key(row, latency_ms),
+            "regime_action_target_support": int(
+                getattr(self, "regime_action_target_counts", {}).get(
+                    regime_support_key(row, latency_ms), 0)),
             "notional": float(notional),
         }
         residual = residual_policy_friction(
@@ -1881,6 +1989,15 @@ class DirectActionValueModel:
             > self.maximum_effective_action_age_ms + 1e-12
         ):
             return [], "EFFECTIVE_ACTION_AGE_EXCEEDED"
+        regime_key = regime_support_key(row, latency_ms)
+        regime_support = int(
+            getattr(self, "regime_action_target_counts", {}).get(
+                regime_key, 0))
+        if (
+            self.minimum_regime_action_targets > 0
+            and regime_support < self.minimum_regime_action_targets
+        ):
+            return [], "INSUFFICIENT_REGIME_SUPPORT"
         if live_geometry and not (
             LIVE_MINIMUM_TTE_NS <= int(row["tte_ns"]) <= LIVE_MAXIMUM_TTE_NS
             and any(
