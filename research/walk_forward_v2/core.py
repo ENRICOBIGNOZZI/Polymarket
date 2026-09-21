@@ -840,6 +840,55 @@ def repricing_predictors(train, test):
     return out, details
 
 
+def fit_full_repricing(records):
+    """Freeze research-only repricing models on the full available historical window.
+
+    These fits are intentionally NOT used for historical OOS evaluation. They
+    are the post-evaluation artifacts intended for the next forward PAPER
+    experiment after an explicit promotion decision.
+    """
+    names = feature_names(records)
+    models = {}
+    for horizon in HORIZONS_MS:
+        key = str(horizon)
+        eligible = [
+            row for row in records
+            if row.get("targets", {}).get(key, {}).get("state") == "OBSERVED"
+            and row.get("features") is not None
+        ]
+        if len(eligible) < 8:
+            models[key] = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
+            continue
+        model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: row["targets"][h]["mid_change"])
+        model.beta = [float(value) for value in model.beta]
+        models[key] = {
+            "state": "READY",
+            "rows": len(eligible),
+            "unique_markets": len({row["market_id"] for row in eligible}),
+            "feature_names": list(names),
+            "ridge": 8.0,
+            "target": "selected_token_pm_midpoint_change_asof_horizon",
+            "training_start_ns": min(row["decision_ns"] for row in eligible),
+            "training_end_ns": max(row["decision_ns"] for row in eligible),
+            "label_information_end_ns": max(
+                int(row["targets"][key]["observed_time_ns"]) for row in eligible),
+            "training_decision_sha256": digest([row["decision_id"] for row in eligible]),
+            "center": {name: float(model.center[name]) for name in names},
+            "scale": {name: float(model.scale[name]) for name in names},
+            "beta": model.beta,
+            "label_sources": dict(Counter(
+                row["targets"][key].get("source", "UNKNOWN") for row in eligible)),
+        }
+    return {
+        "schema": SCHEMA + "_full_window_repricing_models_v1",
+        **SAFETY,
+        "automatic_promotion": False,
+        "evaluation_role": "POST_OOS_FIT_FOR_NEXT_FORWARD_PAPER_ONLY",
+        "models": models,
+    }
+
+
 def walk_forward(records, *, desired_folds=3):
     all_folds, receipt = folds(records, desired_folds=desired_folds)
     evaluations = []
