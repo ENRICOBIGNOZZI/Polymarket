@@ -1,5 +1,6 @@
 # HISTORICAL_WALK_FORWARD_V2 is an explicit causal-research CI gate.
 import copy
+import json
 import math
 import sys
 
