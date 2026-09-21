@@ -1,10 +1,10 @@
 {
   "schema": "polymarket_v7_stale_benchmark_cleanup_request_v1",
   "version": 1,
-  "request_id": "active-benchmark-probe-20260921T2042CEST",
+  "request_id": "stop-full-run-for-fast-diagnostic-20260921T2024CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "stale_prefix": "/tmp/polymarket-decomposed-benchmark-111111111111",
-  "active_prefix": "/tmp/polymarket-decomposed-benchmark-4edfa07abf71",
+  "stale_prefix": "/tmp/polymarket-decomposed-benchmark-4edfa07abf71",
+  "active_prefix": "/tmp/polymarket-decomposed-benchmark-222222222222",
   "paper_only": true,
   "real_order_submission": false,
   "authenticated_execution": false
