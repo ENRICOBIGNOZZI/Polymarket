@@ -1,0 +1,52 @@
+name: V7 executable markout forward shadow London
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-executable-markout-forward-shadow-request.json]
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-executable-markout-forward-shadow
+  cancel-in-progress: false
+
+jobs:
+  launch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      REQUEST: deploy/v7-executable-markout-forward-shadow-request.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: \${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-markout-forward-shadow
+          aws-region: eu-west-2
+
+      - name: Launch zero-authority forward shadow
+        run: python3 ops/v7_executable_markout_forward_shadow_ssm.py "$REQUEST" "$GITHUB_SHA"
+
+      - name: Publish launch receipt
+        run: |
+          set -euo pipefail
+          receipt="$(python3 -c 'import json;print(json.load(open("deploy/v7-executable-markout-forward-shadow-request.json"))["receipt_path"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$receipt"
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Publish executable markout forward shadow launch receipt"
+          git push origin HEAD:main
