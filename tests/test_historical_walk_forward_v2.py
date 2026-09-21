@@ -1,6 +1,7 @@
 # HISTORICAL_WALK_FORWARD_V2 is an explicit causal-research CI gate.
 import copy
 import math
+import sys
 
 from research.walk_forward_v2.core import (
     HORIZONS_MS,
@@ -24,6 +25,11 @@ from research.walk_forward_v2.core import (
     native_repricing_point,
     attach_native_repricing,
     attach_native_repricing_stream,
+)
+from research.walk_forward_v2.promotion import (
+    assess_candidate,
+    expanding_history_gate,
+    main as promotion_main,
 )
 
 
@@ -830,3 +836,228 @@ def test_common_signal_support_uses_same_shock_floor_and_age_cap_for_all_assets(
     assert fast["BTC"]["pooled_passes_required_prediction"] == 1
     assert fast["ETH"]["asset_passes_required_prediction"] == 1
     assert diag["common_shock_floor_bp"] == 1.13
+
+
+def test_promotion_candidate_requires_support_positive_ci_and_latency_robustness():
+    economics = {
+        "live_policy_promotion_candidates": {
+            "pooled_1000ms": {
+                "family": "POOLED",
+                "horizon_ms": 1000,
+                "reference_latency_ms": 50,
+                "metrics": {
+                    "marked_fills": 60, "fills": 70, "fill_rate": .5,
+                    "markout_pnl": 2.0, "markout_per_fill": .04,
+                },
+                "uncertainty": {
+                    "markout_per_fill_interval": [.005, .08],
+                    "markout": {"markets": 30},
+                },
+                "candidate_contract": {},
+            }
+        },
+        "live_parity_horizon_latency": {
+            "1000": {
+                "25": {"state": "READY", "markout_pnl": 2.2, "marked_fills": 61},
+                "50": {"state": "READY", "markout_pnl": 2.0, "marked_fills": 60},
+            }
+        },
+    }
+    result = assess_candidate(economics, "pooled_1000ms")
+    assert result["qualified"] is True
+    assert result["score"] == .005
+
+    economics["live_policy_promotion_candidates"]["pooled_1000ms"]["uncertainty"]["markout_per_fill_interval"][0] = -.001
+    failed = assess_candidate(economics, "pooled_1000ms")
+    assert failed["qualified"] is False
+    assert "MARKET_BLOCK_LOWER_BOUND_NEGATIVE" in failed["failures"]
+
+
+def test_expanding_history_gate_rejects_shrinking_history():
+    manifest = {"minimum_wall_ns": 1_789_921_800_000_000_000}
+    artifact = {
+        "training_window": {
+            "mode": "EXPANDING_ALL_CAUSAL_HISTORY",
+            "decision_rows": 100,
+            "maximum_decision_ns": 200,
+        }
+    }
+    previous = {
+        "configured_minimum_wall_ns": 1_789_921_800_000_000_000,
+        "training_window": {"decision_rows": 101, "maximum_decision_ns": 201},
+    }
+    ok, failures, _ = expanding_history_gate(manifest, artifact, previous)
+    assert ok is False
+    assert "TRAINING_ROWS_DECREASED" in failures
+    assert "TRAINING_END_MOVED_BACKWARD" in failures
+
+
+def test_nightly_promotion_writes_only_paper_research_registry(tmp_path, monkeypatch):
+    report = tmp_path / "report"
+    report.mkdir()
+    safety = {
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+    }
+    economics = {
+        **safety,
+        "live_policy_promotion_candidates": {
+            "pooled_1000ms": {
+                "family": "POOLED", "horizon_ms": 1000,
+                "reference_latency_ms": 50,
+                "metrics": {
+                    "marked_fills": 60, "fills": 70, "fill_rate": .5,
+                    "markout_pnl": 2.0, "markout_per_fill": .04,
+                },
+                "uncertainty": {
+                    "markout_per_fill_interval": [.005, .08],
+                    "markout": {"markets": 30},
+                },
+                "candidate_contract": {"ridge": 8.0},
+            }
+        },
+        "live_parity_horizon_latency": {
+            "1000": {
+                "25": {"state": "READY", "markout_pnl": 2.2, "marked_fills": 61},
+                "50": {"state": "READY", "markout_pnl": 2.0, "marked_fills": 60},
+            }
+        },
+    }
+    manifest = {
+        **safety,
+        "minimum_wall_ns": 1_789_921_800_000_000_000,
+        "data_sha256": "d" * 64,
+    }
+    results = {**safety, "start_sha": "a" * 40}
+    model = {
+        "state": "READY",
+        "target": "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees",
+    }
+    artifact = {
+        **safety,
+        "automatic_promotion": False,
+        "training_window": {
+            "mode": "EXPANDING_ALL_CAUSAL_HISTORY",
+            "minimum_wall_ns": 1_789_921_800_000_000_001,
+            "maximum_decision_ns": 1_789_930_000_000_000_000,
+            "decision_rows": 1000,
+        },
+        "executable_markout_models": {"1000": model},
+        "asset_executable_markout_models": {},
+    }
+    for name, value in (
+        ("economic_metrics.json", economics),
+        ("data_manifest.json", manifest),
+        ("results.json", results),
+        ("full_window_repricing_models.json", artifact),
+    ):
+        (report / name).write_text(json.dumps(value), encoding="utf-8")
+
+    registry = tmp_path / "champion.json"
+    receipt = report / "promotion_receipt.json"
+    monkeypatch.setattr(sys, "argv", [
+        "promotion", "--report-dir", str(report),
+        "--registry", str(registry), "--receipt", str(receipt),
+    ])
+    assert promotion_main() == 0
+    champion = json.loads(registry.read_text())
+    assert champion["candidate_id"] == "pooled_1000ms"
+    assert champion["promotion_scope"] == "PAPER_RESEARCH_CHAMPION_ONLY"
+    assert champion["hot_path_mutation"] is False
+    assert champion["trader_restart_required"] is False
+    assert champion["real_order_submission"] is False
+    assert json.loads(receipt.read_text())["action"] == "PROMOTE"
+
+
+
+def test_existing_champion_is_refit_when_it_remains_best(tmp_path, monkeypatch):
+    report = tmp_path / "report"
+    report.mkdir()
+    safety = {
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+    }
+    economics = {
+        **safety,
+        "live_policy_promotion_candidates": {
+            "pooled_1000ms": {
+                "family": "POOLED", "horizon_ms": 1000,
+                "reference_latency_ms": 50,
+                "metrics": {
+                    "marked_fills": 80, "fills": 90, "fill_rate": .5,
+                    "markout_pnl": 3.0, "markout_per_fill": .05,
+                },
+                "uncertainty": {
+                    "markout_per_fill_interval": [.01, .09],
+                    "markout": {"markets": 40},
+                },
+                "candidate_contract": {"ridge": 8.0},
+            }
+        },
+        "live_parity_horizon_latency": {
+            "1000": {
+                "25": {"state": "READY", "markout_pnl": 3.2, "marked_fills": 81},
+                "50": {"state": "READY", "markout_pnl": 3.0, "marked_fills": 80},
+            }
+        },
+    }
+    manifest = {
+        **safety,
+        "minimum_wall_ns": 1_789_921_800_000_000_000,
+        "data_sha256": "e" * 64,
+    }
+    results = {**safety, "start_sha": "b" * 40}
+    model = {
+        "state": "READY",
+        "target": "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees",
+        "training_end_ns": 300,
+    }
+    artifact = {
+        **safety,
+        "automatic_promotion": False,
+        "training_window": {
+            "mode": "EXPANDING_ALL_CAUSAL_HISTORY",
+            "minimum_wall_ns": 1_789_921_800_000_000_001,
+            "maximum_decision_ns": 300,
+            "decision_rows": 1200,
+        },
+        "executable_markout_models": {"1000": model},
+        "asset_executable_markout_models": {},
+    }
+    for name, value in (
+        ("economic_metrics.json", economics),
+        ("data_manifest.json", manifest),
+        ("results.json", results),
+        ("full_window_repricing_models.json", artifact),
+    ):
+        (report / name).write_text(json.dumps(value), encoding="utf-8")
+
+    registry = tmp_path / "champion.json"
+    registry.write_text(json.dumps({
+        "schema": "polymarket_v7_executable_markout_research_champion_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "candidate_id": "pooled_1000ms",
+        "configured_minimum_wall_ns": 1_789_921_800_000_000_000,
+        "training_window": {"decision_rows": 1000, "maximum_decision_ns": 200},
+    }), encoding="utf-8")
+    receipt = report / "promotion_receipt.json"
+    monkeypatch.setattr(sys, "argv", [
+        "promotion", "--report-dir", str(report),
+        "--registry", str(registry), "--receipt", str(receipt),
+    ])
+    assert promotion_main() == 0
+    value = json.loads(receipt.read_text())
+    assert value["action"] == "REFIT_CHAMPION"
+    assert value["registry_updated"] is True
+    champion = json.loads(registry.read_text())
+    assert champion["candidate_id"] == "pooled_1000ms"
+    assert champion["training_window"]["decision_rows"] == 1200
+    assert champion["training_window"]["maximum_decision_ns"] == 300
+    assert champion["selection_action"] == "REFIT_CHAMPION"
