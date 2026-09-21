@@ -1,0 +1,109 @@
+name: V7 executable markout forward shadow London
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-executable-markout-forward-shadow-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-executable-markout-forward-shadow
+  cancel-in-progress: true
+
+jobs:
+  deploy_shadow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      REQUEST: deploy/v7-executable-markout-forward-shadow-request.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: \${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate zero-authority shadow request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$REQUEST"
+          parent="\${{ github.event.before }}"
+          python3 - "$REQUEST" "$parent" "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          from pathlib import Path
+          value=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          required={
+            'schema','version','request_id','instance_id','expected_parent_sha',
+            'paper_only','authenticated_execution','real_order_submission',
+            'real_capital_at_risk','execution_authority','automatic_promotion',
+            'poll_ms','maximum_inference_age_ms'
+          }
+          assert set(value)==required
+          assert value['schema']=='polymarket_v7_executable_markout_shadow_ssm_request_v1'
+          assert value['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',value['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',value['instance_id'])
+          assert value['expected_parent_sha']==sys.argv[2]
+          assert value['paper_only'] is True
+          assert value['authenticated_execution'] is False
+          assert value['real_order_submission'] is False
+          assert value['real_capital_at_risk'] is False
+          assert value['execution_authority'] is False
+          assert value['automatic_promotion'] is False
+          assert 1 <= int(value['poll_ms']) <= 20
+          assert 10 <= int(value['maximum_inference_age_ms']) <= 100
+          with open(sys.argv[3],'a',encoding='utf-8') as h:
+              h.write(f"source_sha={sys.argv[2]}\n")
+          PY
+          git checkout --detach "$parent"
+          test "$(git rev-parse HEAD)" = "$parent"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: \${{ env.ROLE_ARN }}
+          role-session-name: polymarket-markout-shadow
+          aws-region: eu-west-2
+
+      - name: Install and start forward shadow via SSM
+        shell: bash
+        env:
+          SOURCE_SHA: \${{ steps.request.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python3 ops/v7_executable_markout_shadow_ssm.py \
+            --request "$REQUEST" \
+            --source-sha "$SOURCE_SHA" \
+            --output shadow-deploy-receipt.json
+          python3 - shadow-deploy-receipt.json "$SOURCE_SHA" <<'PY'
+          import json,sys
+          value=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert value['schema']=='polymarket_v7_executable_markout_shadow_ssm_receipt_v1'
+          assert value['source_sha']==sys.argv[2]
+          assert value['paper_only'] is True
+          assert value['authenticated_execution'] is False
+          assert value['real_order_submission'] is False
+          assert value['real_capital_at_risk'] is False
+          assert value['execution_authority'] is False
+          assert value['automatic_promotion'] is False
+          assert value['installed']['paper_pid_unchanged'] is True
+          print(json.dumps(value['installed'],sort_keys=True))
+          PY
+
+      - name: Upload shadow deployment receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-markout-shadow-\${{ github.run_id }}
+          path: shadow-deploy-receipt.json
+          if-no-files-found: warn
+          retention-days: 14
