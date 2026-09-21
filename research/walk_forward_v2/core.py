@@ -1012,6 +1012,8 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
         for asset in assets:
             rows = [event for event in evaluations if str(event["row"].get("asset") or "UNKNOWN") == asset]
             pooled_predictions, asset_predictions = [], []
+            pooled_selected_targets, pooled_orderable_targets = [], []
+            asset_selected_targets, asset_orderable_targets = [], []
             observed_targets, spreads, entry_fees, roundtrip_costs = [], [], [], []
             asks, depths, minimums, fee_rates, fee_exponents = [], [], [], [], []
             signal_returns, signal_ages_ms = [], []
@@ -1094,8 +1096,12 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                     pooled_predictions.append(pooled)
                     if pooled >= required_prediction:
                         pooled_threshold += 1
+                        if target is not None:
+                            pooled_selected_targets.append(float(target))
                         if orderable:
                             pooled_orderable += 1
+                            if target is not None:
+                                pooled_orderable_targets.append(float(target))
 
                 specific = event.get("asset_markout_predictions", {}).get(key)
                 if specific is not None:
@@ -1104,8 +1110,12 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                     asset_predictions.append(specific)
                     if specific >= required_prediction:
                         asset_threshold += 1
+                        if target is not None:
+                            asset_selected_targets.append(float(target))
                         if orderable:
                             asset_orderable += 1
+                            if target is not None:
+                                asset_orderable_targets.append(float(target))
 
             def mean(values):
                 valid = [value for value in values if finite(value)]
@@ -1162,6 +1172,18 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                     "prediction_fractions": fractions(pooled_predictions),
                     "passes_required_prediction": pooled_threshold,
                     "passes_required_prediction_and_orderability": pooled_orderable,
+                    "selected_observed_targets": len(pooled_selected_targets),
+                    "selected_actual_mean_net_markout": mean(pooled_selected_targets),
+                    "selected_actual_positive_fraction": (
+                        sum(v > 0 for v in pooled_selected_targets) / len(pooled_selected_targets)
+                        if pooled_selected_targets else None
+                    ),
+                    "orderable_selected_observed_targets": len(pooled_orderable_targets),
+                    "orderable_selected_actual_mean_net_markout": mean(pooled_orderable_targets),
+                    "orderable_selected_actual_positive_fraction": (
+                        sum(v > 0 for v in pooled_orderable_targets) / len(pooled_orderable_targets)
+                        if pooled_orderable_targets else None
+                    ),
                 },
                 "asset_specific": {
                     "forecast_available": asset_available,
@@ -1169,6 +1191,18 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                     "prediction_fractions": fractions(asset_predictions),
                     "passes_required_prediction": asset_threshold,
                     "passes_required_prediction_and_orderability": asset_orderable,
+                    "selected_observed_targets": len(asset_selected_targets),
+                    "selected_actual_mean_net_markout": mean(asset_selected_targets),
+                    "selected_actual_positive_fraction": (
+                        sum(v > 0 for v in asset_selected_targets) / len(asset_selected_targets)
+                        if asset_selected_targets else None
+                    ),
+                    "orderable_selected_observed_targets": len(asset_orderable_targets),
+                    "orderable_selected_actual_mean_net_markout": mean(asset_orderable_targets),
+                    "orderable_selected_actual_positive_fraction": (
+                        sum(v > 0 for v in asset_orderable_targets) / len(asset_orderable_targets)
+                        if asset_orderable_targets else None
+                    ),
                 },
             }
         result["horizons"][key] = horizon_result
