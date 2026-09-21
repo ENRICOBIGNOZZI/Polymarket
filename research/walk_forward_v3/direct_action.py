@@ -1188,6 +1188,10 @@ def side_regime_support_key(row, latency_ms, side):
     return "::".join((str(side), regime_support_key(row, latency_ms)))
 
 
+def action_cell_support_key(latency_ms, horizon_ms, side):
+    return "::".join((str(int(latency_ms)), str(int(horizon_ms)), str(side)))
+
+
 class DirectActionValueModel:
     """Direct Q(S, q, h | latency) learner with market-block calibration."""
 
@@ -1542,7 +1546,7 @@ class DirectActionValueModel:
 
     def _iter_training_actions(
         self, rows, *, markets=None, state_counter=None, regime_counter=None,
-        side_regime_counter=None,
+        side_regime_counter=None, action_cell_counter=None,
     ):
         market_filter = set(markets) if markets is not None else None
         for row in rows:
@@ -1603,6 +1607,11 @@ class DirectActionValueModel:
                             if side_regime_counter is not None:
                                 side_regime_counter[
                                     side_regime_support_key(row, latency, side)
+                                ] += 1
+                            if action_cell_counter is not None:
+                                action_cell_counter[
+                                    action_cell_support_key(
+                                        latency, horizon, side)
                                 ] += 1
                             yield action
 
@@ -2057,7 +2066,7 @@ class DirectActionValueModel:
 
         def factory(
             market_subset=None, counter=None, regime_counter=None,
-            side_regime_counter=None,
+            side_regime_counter=None, action_cell_counter=None,
         ):
             return lambda: self._iter_training_actions(
                 rows,
@@ -2065,6 +2074,7 @@ class DirectActionValueModel:
                 state_counter=counter,
                 regime_counter=regime_counter,
                 side_regime_counter=side_regime_counter,
+                action_cell_counter=action_cell_counter,
             )
 
         self.uncertainty_floor = 1e-6
@@ -2114,6 +2124,7 @@ class DirectActionValueModel:
         target_states = Counter()
         regime_action_targets = Counter()
         side_regime_action_targets = Counter()
+        action_cell_targets = Counter()
         if fit_markets and scale_markets and calibration_markets:
             provisional = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
@@ -2139,6 +2150,7 @@ class DirectActionValueModel:
                         target_states,
                         regime_action_targets,
                         side_regime_action_targets,
+                        action_cell_targets,
                     ),
                     lambda action: action["target"])
 
@@ -2251,6 +2263,7 @@ class DirectActionValueModel:
         self.regime_action_target_counts = dict(regime_action_targets)
         self.side_regime_action_target_counts = dict(
             side_regime_action_targets)
+        self.action_cell_target_counts = dict(action_cell_targets)
         training_states_used = sum(
             1 for row in rows if str(row["market_id"]) in mean_fit_markets)
         self.training_receipt = {
@@ -2303,6 +2316,11 @@ class DirectActionValueModel:
                 sorted(self.regime_action_target_counts.items())),
             "side_regime_action_target_counts": dict(
                 sorted(self.side_regime_action_target_counts.items())),
+            "action_cell_target_counts": dict(
+                sorted(self.action_cell_target_counts.items())),
+            "action_cell_support_semantics": (
+                "EXACT_LATENCY_EXIT_SIDE_REQUIRES_AT_LEAST_ONE_OBSERVED_TRAINING_TARGET"
+            ),
             "bilateral_side_support_semantics": (
                 "YES_AND_NO_REQUIRE_THEIR_OWN_CAUSAL_ACTION_TARGET_SUPPORT"),
             "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
@@ -2794,6 +2812,11 @@ class DirectActionValueModel:
             for horizon in self.action_horizons_ms:
                 if horizon <= latency_ms:
                     continue
+                cell_support = int(
+                    getattr(self, "action_cell_target_counts", {}).get(
+                        action_cell_support_key(latency_ms, horizon, side), 0))
+                if cell_support <= 0:
+                    continue
                 quantities = self._continuous_quantity_candidates(
                     row, horizon_ms=horizon, latency_ms=latency_ms, side=side,
                     lower=lower, upper=upper,
@@ -2991,6 +3014,11 @@ class DirectActionValueModel:
             ask = float(side_state["ask"])
             for horizon in self.action_horizons_ms:
                 if horizon <= int(latency_ms):
+                    continue
+                cell_support = int(
+                    getattr(self, "action_cell_target_counts", {}).get(
+                        action_cell_support_key(latency_ms, horizon, side), 0))
+                if cell_support <= 0:
                     continue
                 probe = self._score_quantity(
                     row,
