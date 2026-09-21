@@ -37,6 +37,14 @@ jobs:
           set -euo pipefail
           command="$(cat <<'SH'
           set -euo pipefail
+          echo '=== TAILSCALE SELF ==='
+          if command -v tailscale >/dev/null 2>&1; then
+            tailscale status --json | python3 -c 'import json,sys; v=json.load(sys.stdin); s=v.get("Self") or {}; print("DNSName="+str(s.get("DNSName"))); print("HostName="+str(s.get("HostName"))); print("TailscaleIPs="+str(s.get("TailscaleIPs")))'
+            echo '=== TAILSCALE SERVE ==='
+            tailscale serve status 2>&1 || true
+          else
+            echo TAILSCALE_NOT_INSTALLED
+          fi
           echo '=== ROUTES ==='
           for path in             '/d/polymarket-v7-pure-arb'             '/d/polymarket-v7-pure-arb/polymarket-v7-crypto-pure-arbitrage-paper'             '/dashboards/f/afyms0c1xjabkf/polymarket-london'
           do
