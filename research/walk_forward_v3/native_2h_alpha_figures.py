@@ -1,15 +1,20 @@
-"""Render exhaustive native 2H alpha equity galleries.
+"""Render exhaustive native 2H alpha equity galleries from compressed raw paths.
 
-Research-only visualization. Reads 20_native_alpha_library.json and writes
-PNG galleries plus compact CSV summaries. No execution authority.
+Research-only visualization. All PnL was computed on London causal evidence;
+this module only renders the already-computed paths on the GitHub runner.
 """
 from __future__ import annotations
 
 import argparse
+import csv
+import gzip
 import json
+from collections import defaultdict
 from pathlib import Path
 import re
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -21,38 +26,50 @@ def safe(value):
     return re.sub(r"[^A-Za-z0-9_.-]+","_",str(value))
 
 
-def equity(events):
-    total=0.0
-    xs=[];ys=[]
-    for row in sorted(events,key=lambda r:(int(r["decision_ns"]),str(r["decision_id"]))):
-        total+=float(row["cash_pnl"])
-        xs.append(int(row["decision_ns"]))
-        ys.append(total)
-    return xs,ys
+def load_paths(root):
+    out=defaultdict(lambda:defaultdict(list))
+    path=root/"22_native_alpha_equity_paths.csv.gz"
+    with gzip.open(path,"rt",newline="",encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            out[row["alpha"]][row["cell"]].append({
+                "decision_ns":int(row["decision_ns"]),
+                "cumulative_pnl":float(row["cumulative_pnl"]),
+            })
+    for by_cell in out.values():
+        for rows in by_cell.values():
+            rows.sort(key=lambda r:r["decision_ns"])
+    return out
+
+
+def equity(rows):
+    if not rows:return [],[]
+    origin=rows[0]["decision_ns"]
+    return (
+        [(r["decision_ns"]-origin)/60_000_000_000 for r in rows],
+        [r["cumulative_pnl"] for r in rows],
+    )
 
 
 def save(path):
+    path.parent.mkdir(parents=True,exist_ok=True)
     plt.tight_layout()
-    plt.savefig(path,dpi=150,bbox_inches="tight")
+    plt.savefig(path,dpi=115,bbox_inches="tight")
     plt.close()
 
 
-def plot_lines(path,title,event_map,keys):
+def plot_lines(path,title,event_map,keys,legend=True):
     plt.figure(figsize=(11,5.5))
     drawn=False
     for key in keys:
         x,y=equity(event_map.get(key,[]))
-        if not x:
-            continue
-        origin=min(x)
-        xm=[(v-origin)/60_000_000_000 for v in x]
-        plt.plot(xm,y,label=key,linewidth=1.0)
+        if not x:continue
+        plt.plot(x,y,label=key,linewidth=.95)
         drawn=True
     if drawn:
-        plt.axhline(0,linewidth=.8)
+        plt.axhline(0,linewidth=.7)
         plt.xlabel("minutes since first fill")
         plt.ylabel("cumulative PnL")
-        plt.legend(fontsize=6,ncol=3)
+        if legend:plt.legend(fontsize=6,ncol=3)
     else:
         plt.text(.5,.5,"No observed fills",ha="center",va="center",transform=plt.gca().transAxes)
         plt.xticks([]);plt.yticks([])
@@ -86,58 +103,47 @@ def main(argv=None):
     root=a.root
     data=json.loads((root/"20_native_alpha_library.json").read_text(encoding="utf-8"))
     alphas=data.get("alphas") or {}
+    paths=load_paths(root)
     gallery=root/"native_alpha_equity_gallery"
     gallery.mkdir(parents=True,exist_ok=True)
     figures=[]
 
     for alpha_name,alpha in sorted(alphas.items()):
-        d=gallery/safe(alpha_name)
-        d.mkdir(parents=True,exist_ok=True)
-        events=alpha.get("events") or {}
-        cells=alpha.get("cells") or {}
+        event_map=paths.get(alpha_name,{})
+        stem=safe(alpha_name)
 
-        rel=f"native_alpha_equity_gallery/{safe(alpha_name)}/00_all_60_cells.png"
-        plot_lines(root/rel,f"{alpha_name}: all 60 equity lines",events,
-                   [f"{l}::{h}" for l in LATENCIES for h in EXITS])
+        rel=f"native_alpha_equity_gallery/{stem}/00_all_60_cells.png"
+        plot_lines(root/rel,f"{alpha_name}: all 60 equity lines",event_map,
+                   [f"{l}::{h}" for l in LATENCIES for h in EXITS],legend=False)
         figures.append(rel)
 
-        rel=f"native_alpha_equity_gallery/{safe(alpha_name)}/01_pnl_heatmap.png"
-        heatmap(root/rel,f"{alpha_name}: entry × exit PnL",cells)
+        rel=f"native_alpha_equity_gallery/{stem}/01_pnl_heatmap.png"
+        heatmap(root/rel,f"{alpha_name}: entry × exit PnL",alpha.get("cells") or {})
         figures.append(rel)
 
         for latency in LATENCIES:
-            rel=f"native_alpha_equity_gallery/{safe(alpha_name)}/latency_{latency}ms_all_exits.png"
-            plot_lines(root/rel,f"{alpha_name}: entry {latency}ms",events,
-                       [f"{latency}::{h}" for h in EXITS])
+            rel=f"native_alpha_equity_gallery/{stem}/latency_{latency}ms_all_exits.png"
+            plot_lines(root/rel,f"{alpha_name}: entry {latency}ms, all exits",event_map,
+                       [f"{latency}::{h}" for h in EXITS],legend=True)
             figures.append(rel)
 
-        for horizon in EXITS:
-            rel=f"native_alpha_equity_gallery/{safe(alpha_name)}/exit_{horizon}ms_all_latencies.png"
-            plot_lines(root/rel,f"{alpha_name}: exit {horizon}ms",events,
-                       [f"{l}::{horizon}" for l in LATENCIES])
-            figures.append(rel)
-
-    # Cross-alpha comparison at each latency/exit cell.
-    compare=root/"native_alpha_equity_gallery"/"cross_alpha"
-    compare.mkdir(parents=True,exist_ok=True)
+    # At each latency × exit cell, compare every alpha's equity over time.
     for latency in LATENCIES:
         for horizon in EXITS:
             key=f"{latency}::{horizon}"
             rel=f"native_alpha_equity_gallery/cross_alpha/cell_{latency}ms_{horizon}ms.png"
-            plt.figure(figsize=(11,5.5))
+            plt.figure(figsize=(12,6))
             drawn=False
-            for alpha_name,alpha in sorted(alphas.items()):
-                x,y=equity((alpha.get("events") or {}).get(key,[]))
-                if not x: continue
-                origin=min(x)
-                xm=[(v-origin)/60_000_000_000 for v in x]
-                plt.plot(xm,y,label=alpha_name,linewidth=.9)
+            for alpha_name in sorted(alphas):
+                x,y=equity(paths.get(alpha_name,{}).get(key,[]))
+                if not x:continue
+                plt.plot(x,y,label=alpha_name,linewidth=.8)
                 drawn=True
             if drawn:
-                plt.axhline(0,linewidth=.8)
+                plt.axhline(0,linewidth=.7)
                 plt.xlabel("minutes since first fill")
                 plt.ylabel("cumulative PnL")
-                plt.legend(fontsize=5,ncol=3)
+                plt.legend(fontsize=4.8,ncol=4)
             else:
                 plt.text(.5,.5,"No observed fills",ha="center",va="center",transform=plt.gca().transAxes)
                 plt.xticks([]);plt.yticks([])
@@ -146,13 +152,14 @@ def main(argv=None):
             figures.append(rel)
 
     manifest={
-        "schema":"polymarket_v7_native_2h_alpha_gallery_v1",
+        "schema":"polymarket_v7_native_2h_alpha_gallery_v2",
         "research_only":True,
+        "source_paths":"22_native_alpha_equity_paths.csv.gz",
         "alpha_count":len(alphas),
         "cells_per_alpha":len(LATENCIES)*len(EXITS),
         "latencies_ms":list(LATENCIES),
         "exit_horizons_ms":list(EXITS),
-        "per_alpha_figures":2+len(LATENCIES)+len(EXITS),
+        "per_alpha_figures":2+len(LATENCIES),
         "cross_alpha_figures":len(LATENCIES)*len(EXITS),
         "figure_count":len(figures),
         "figures":figures,
