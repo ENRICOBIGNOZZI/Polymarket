@@ -75,3 +75,19 @@ def test_horse_race_source_is_research_only_and_has_no_promotion_path():
     assert "A0_BASELINE" in source
     assert "A1_DIRECT_CHALLENGER" in source
     assert "A2_DECOMPOSED" in source
+
+
+def test_frequency_frontier_is_minimum_size_and_research_only():
+    from research.walk_forward_v3.decomposed_benchmark import (
+        FREQUENCY_CONFIDENCE_SCALES,
+        MINIMUM_SIZE_DIAGNOSTIC_POLICY,
+    )
+    assert FREQUENCY_CONFIDENCE_SCALES == (1.0, 0.50, 0.0)
+    assert MINIMUM_SIZE_DIAGNOSTIC_POLICY.desired_notional(
+        0.50, 10_000.0) == 0.0
+    source = (
+        __import__("pathlib").Path(__file__).resolve().parents[1]
+        / "research/walk_forward_v3/decomposed_benchmark.py"
+    ).read_text()
+    assert "VENUE_MINIMUM_ONLY_TO_ISOLATE_ENTRY_FREQUENCY" in source
+    assert "NONE_FAST_DIAGNOSTIC_ONLY" in source
