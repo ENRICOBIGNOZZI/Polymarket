@@ -24,6 +24,7 @@ from research.walk_forward_v2.core import (
     summarize,
     settlement_predictors,
     valid_native,
+    native_pair_l1,
     native_repricing_point,
     attach_native_repricing,
     attach_native_repricing_stream,
@@ -275,6 +276,10 @@ def test_native_kind6_repricing_label_populates_oos_target_and_arrival():
         "book_valid": True,
         "bid_e4": 5000, "ask_e4": 5100, "tick_e4": 100,
         "ask_quantity": 4_000_000,
+        "yes_bid_e4": 5000, "yes_ask_e4": 5100,
+        "no_bid_e4": 4900, "no_ask_e4": 5000,
+        "yes_bid_quantity": 3_000_000, "yes_ask_quantity": 4_000_000,
+        "no_bid_quantity": 5_000_000, "no_ask_quantity": 6_000_000,
     }
     parsed = native_repricing_point(label)
     assert parsed is not None
@@ -286,6 +291,8 @@ def test_native_kind6_repricing_label_populates_oos_target_and_arrival():
     arrival = origin["arrivals"]["100"]
     assert math.isclose(arrival["ask"], .51, abs_tol=1e-12)
     assert arrival["quantity"] == 4.0
+    assert arrival["pair"]["NO"]["ask_quantity"] == 6.0
+    assert origin["targets"]["100"]["pair"]["YES"]["bid_quantity"] == 3.0
 
 
 def test_native_kind6_wrong_identity_never_joins_origin():
@@ -1128,3 +1135,25 @@ def test_capital_notional_quantity_matches_native_integer_formula():
         limit_chase_ticks=0, target_notional_microdollars=83_333_333)
     assert rejected["status"] == "FILTERED"
     assert rejected["funnel"]["sufficient_depth"] is False
+
+
+
+def test_native_pair_l1_requires_complete_bilateral_prices_and_quantities():
+    raw = {
+        "repricing_pair_valid": True,
+        "yes_bid_e4": 4900, "yes_ask_e4": 5000,
+        "no_bid_e4": 5000, "no_ask_e4": 5100,
+        "yes_bid_quantity": 1_000_000, "yes_ask_quantity": 2_000_000,
+        "no_bid_quantity": 3_000_000, "no_ask_quantity": 4_000_000,
+    }
+    pair = native_pair_l1(raw)
+    assert pair["YES"]["ask"] == .50
+    assert pair["NO"]["ask_quantity"] == 4.0
+
+    incomplete = dict(raw)
+    incomplete.pop("no_ask_quantity")
+    assert native_pair_l1(incomplete) is None
+
+    invalid = dict(raw)
+    invalid["no_ask_quantity"] = -1
+    assert native_pair_l1(invalid) is None
