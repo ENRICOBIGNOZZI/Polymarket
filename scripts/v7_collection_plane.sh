@@ -189,7 +189,8 @@ done
 PUBLIC_PROXY="http://127.0.0.1:$PUBLIC_PROXY_PORT"
 export PM_V7_HTTPS_PROXY="$PUBLIC_PROXY" HTTPS_PROXY="$PUBLIC_PROXY" https_proxy="$PUBLIC_PROXY"
 export HTTP_PROXY="$PUBLIC_PROXY" http_proxy="$PUBLIC_PROXY"
-export NO_PROXY="127.0.0.1,localhost" no_proxy="$NO_PROXY"
+export NO_PROXY="127.0.0.1,localhost"
+export no_proxy="$NO_PROXY"
 if [[ -z "${PM_V7_WS_RESOLVE_IPS:-}" ]]; then
   PM_V7_WS_RESOLVE_IPS="$(python3 scripts/v7_public_https_proxy.py --resolve ws-subscriptions-clob.polymarket.com)"
 fi
