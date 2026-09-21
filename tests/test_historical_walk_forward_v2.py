@@ -5,8 +5,10 @@ from research.walk_forward_v2.core import (
     HORIZONS_MS,
     Ridge,
     book_targets,
+    build_dataset,
     folds,
     replay_one,
+    valid_native,
 )
 
 
@@ -96,3 +98,29 @@ def test_replay_uses_visible_depth_and_is_deterministic():
     assert first == second
     assert first["status"] == "PARTIAL_FILL"
     assert first["filled"] == 4.
+
+
+
+def test_runtime_native_schema_does_not_require_duplicated_authority_flags():
+    row = {
+        "schema": "polymarket_v7_native_observation_v1",
+        "paper_only": True,
+        "execution_authority": False,
+    }
+    assert valid_native(row)
+    row["authenticated_execution"] = False
+    row["real_order_submission"] = False
+    assert valid_native(row)
+    row["real_order_submission"] = True
+    assert not valid_native(row)
+
+
+def test_build_dataset_discovers_real_run_root_layout(tmp_path):
+    (tmp_path / "research" / "hft_permanent" / "compact").mkdir(parents=True)
+    (tmp_path / "research" / "hft_permanent" / "compact_closed").mkdir()
+    (tmp_path / "research" / "hft_permanent" / "windows").mkdir()
+    (tmp_path / "research" / "public_settlements").mkdir()
+    data = build_dataset(tmp_path)
+    assert data["hft_root"] == str(tmp_path / "research" / "hft_permanent")
+    assert data["settlement_root"] == str(tmp_path / "research" / "public_settlements")
+    assert data["input_state"] == "NO_ADMISSIBLE_NATIVE_DECISIONS"
