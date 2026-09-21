@@ -972,3 +972,60 @@ def test_bilateral_evidence_summary_never_promotes_prices_only_to_executable():
     assert math.isclose(result["bilateral_ready_decision_fraction"], 1 / 3)
     target = result["target_pair_states_by_horizon_ms"]["500"]
     assert target["BILATERAL_EXECUTABLE_READY"] == 2
+
+
+
+def test_nested_risk_frontier_skips_inner_blocks_with_zero_executable_actions():
+    rows = []
+    for index in range(48):
+        item = row(
+            "m" + str(index + 3000),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        item["information_end_ns"] = item["decision_ns"]
+        item["label"] = None
+        item["label_information_ns"] = None
+        # Earliest markets have valid states but no causal arrival/exit labels,
+        # so an inner fold can be nonempty while yielding zero action targets.
+        if index < 18:
+            item["arrivals"] = {}
+            item["targets"] = {}
+        rows.append(item)
+
+    result = nested_walk_forward_risk_frontier(
+        rows,
+        desired_folds=3,
+        inner_desired_folds=2,
+        policy_grid=[{
+            "policy_id": "baseline",
+            "friction_policy": FrictionPolicy(
+                uncertainty_aversion=1.0,
+                asset_concentration_lambda=0.0,
+                common_factor_concentration_lambda=0.0,
+            ),
+        }],
+        latency_ms=50,
+        capital_budget=1000.0,
+        model_kwargs={
+            "size_grid": (1.0, 5.0),
+            "action_horizons_ms": (500,),
+            "train_latencies_ms": (50,),
+            "streaming_batch_size": 16,
+        },
+    )
+    assert result["state"] == "READY"
+    assert result["folds"]
+    assert any(
+        (fold.get("selection") or {}).get("state")
+        == "INSUFFICIENT_INNER_ACTION_TARGETS_NO_POLICY_SELECTION"
+        for fold in result["folds"]
+    )
+    for fold in result["folds"]:
+        selection = fold.get("selection") or {}
+        if selection.get("state") == "INSUFFICIENT_INNER_ACTION_TARGETS_NO_POLICY_SELECTION":
+            assert selection["policy_id"] is None
+            assert selection["qualified_policy_ids"] == []
+            assert fold["inner_fit_failures"]
+            assert fold["outer_oos"]["state"] == "NOT_EVALUATED_NO_VALIDATION_MODEL"
