@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_decomposed_benchmark_ssm_request_v1",
   "version": 1,
-  "request_id": "decomposed-fast-2h-20260921T2025CEST",
+  "request_id": "decomposed-fast-2h-frequency-frontier-20260921T2043CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "e51d3d251d0bc1fd70d7c6ccbe11d14b088d8dc5",
+  "expected_research_sha": "c12f4961053b65ebb91dab26b0ac29ddb6cf1394",
   "minimum_wall_ns": 1790007780000000000,
   "folds": 2,
   "latency_ms": 50,
