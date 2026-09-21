@@ -35,6 +35,7 @@ from research.walk_forward_v3.direct_action import (
     evaluate_latency_age_surface,
     summarize_effective_age_buckets,
     evaluate_direct_action_policy,
+    load_trade_frequency_challenger_config,
 )
 
 
@@ -1945,6 +1946,7 @@ def test_conditional_calibration_is_chronological_shrunk_and_recorded():
         conditional_calibration=True,
         conditional_calibration_min_markets=2,
         conditional_calibration_shrinkage=5.0,
+        insufficient_selection_calibration_policy="MAX_OBSERVED",
     ).fit(rows)
     receipt = model.training_receipt
     assert receipt["conditional_calibration_enabled"] is True
@@ -1953,6 +1955,8 @@ def test_conditional_calibration_is_chronological_shrunk_and_recorded():
     assert all(value["markets"] >= 2 for value in cells.values())
     assert all(value["multiplier"] >= 1.0 for value in cells.values())
     assert all(0.0 < value["shrinkage_weight"] <= 1.0 for value in cells.values())
+    assert receipt["insufficient_selection_calibration_policy"] == "MAX_OBSERVED"
+    assert receipt["selection_calibration_fallback_penalty"] >= 0.0
 
 
 def test_edge_sized_challenger_respects_depth_capital_and_hard_order_cap():
@@ -2054,3 +2058,16 @@ def test_summary_exposes_trade_frequency_sizing_and_attrition_diagnostics():
     assert summary["no_trade_reasons"] == {"SHOCK_ALREADY_TRADED": 1}
     assert summary["sizing_mode_counts"] == {"EDGE_CONTEXT_BUDGET": 1}
     assert summary["selected_admission_edge_per_dollar_distribution"]["count"] == 1
+
+
+
+def test_serialized_trade_frequency_challenger_is_paper_only_and_explicit():
+    loaded = load_trade_frequency_challenger_config(
+        "config/v7_trade_frequency_sizing_challenger.json")
+    assert loaded["entry_policy"] == "ONE_ENTRY_PER_SHOCK"
+    assert loaded["model_kwargs"]["conditional_calibration"] is True
+    assert loaded["model_kwargs"]["insufficient_selection_calibration_policy"] == "MAX_OBSERVED"
+    policy = loaded["sizing_policy"]
+    assert policy.context_count == 30
+    assert policy.capital_fraction(0.0) == 0.0
+    assert policy.capital_fraction(0.04) == 1.0
