@@ -108,6 +108,7 @@ struct Options {
     std::int32_t tick_size_e4 = 100;
     std::int64_t min_order_microunits = 5'000'000;
     std::int64_t target_quantity_microunits = 20'000'000;
+    std::int64_t target_notional_microdollars = 0;
     std::int32_t maximum_entry_price_e4 = 10'000;
     double minimum_absolute_binance_return_bp = 0.30;
     double minimum_absolute_confirmation_return_bp = 0.0;
@@ -166,6 +167,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--tick-size-e4") out.tick_size_e4 = bounded_integer<std::int32_t>(next(), 1, 5000);
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
         else if (arg == "--target-quantity-microunits") out.target_quantity_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
+        else if (arg == "--target-notional-microdollars") out.target_notional_microdollars = bounded_integer<std::int64_t>(next(), 1, 333'333'333);
         else if (arg == "--maximum-entry-price-e4") out.maximum_entry_price_e4 = bounded_integer<std::int32_t>(next(), 1, 9'999);
         else if (arg == "--minimum-absolute-binance-return-bp") out.minimum_absolute_binance_return_bp = bounded_double(next(), 0.000001, 1000.0);
         else if (arg == "--minimum-absolute-confirmation-return-bp") out.minimum_absolute_confirmation_return_bp = bounded_double(next(), 0.0, 1000.0);
@@ -177,7 +179,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--sleeve-budget-microdollars") out.capital_limits.sleeve_budget_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
         else if (arg == "--max-total-exposure-microdollars") out.capital_limits.max_total_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 10'000'000'000LL);
         else if (arg == "--max-market-exposure-microdollars") out.capital_limits.max_market_exposure_microdollars = bounded_integer<std::int64_t>(next(), 1, 333'333'333);
-        else if (arg == "--max-single-order-microdollars") out.capital_limits.max_single_order_microdollars = bounded_integer<std::int64_t>(next(), 1, 20'000'000);
+        else if (arg == "--max-single-order-microdollars") out.capital_limits.max_single_order_microdollars = bounded_integer<std::int64_t>(next(), 1, 333'333'333);
         else if (arg == "--taker-fee-rate") out.taker_fee_rate = bounded_double(next(), 0.0, 1.0);
         else if (arg == "--taker-fee-exponent") out.taker_fee_exponent = bounded_double(next(), 0.0, 10.0);
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 0, 86'400);
@@ -249,7 +251,8 @@ json::object reason_json(const std::array<std::uint64_t, 32>& counts) {
 int main(int argc, char** argv) {
     try {
         const auto options = parse_options(argc, argv);
-        if (options.target_quantity_microunits < options.min_order_microunits
+        if ((options.target_notional_microdollars <= 0
+                && options.target_quantity_microunits < options.min_order_microunits)
             || options.minimum_tte_ns <= 0
             || options.maximum_tte_ns < options.minimum_tte_ns) {
             throw std::invalid_argument("invalid PAPER sizing or tte policy");
@@ -396,9 +399,12 @@ int main(int argc, char** argv) {
         decision_policy.minimum_tte_ns = options.minimum_tte_ns;
         decision_policy.maximum_tte_ns = options.maximum_tte_ns;
         decision_policy.target_quantity_microunits = options.target_quantity_microunits;
+        decision_policy.target_notional_microdollars = options.target_notional_microdollars;
         decision_policy.maximum_entry_price_e4 = options.maximum_entry_price_e4;
-        decision_policy.probability_ev_enabled =
-            (probability_model.loaded || options.strict_signal_policy) ? 1 : 0;
+        // Signal admission and probability/EV valuation are separate contracts.
+        // A strict causal signal policy must never silently activate an absent
+        // probability artifact.
+        decision_policy.probability_ev_enabled = probability_model.loaded ? 1 : 0;
         NativeCryptoDecisionLane lane(decision_policy);
         CapitalLimits limits = options.capital_limits;
         if (!options.observation_only && (!limits.valid() || options.risk_policy_sha256.size() != 64
