@@ -308,6 +308,63 @@ def residual_policy_friction(action, row, *, portfolio_state=None,
     }
 
 
+def bounded_training_states(rows, maximum):
+    """Deterministic market-balanced cap for direct-action state expansion."""
+    rows = sorted(
+        (row for row in rows if _valid_state(row)),
+        key=lambda row: (row["decision_ns"], row["decision_id"]))
+    maximum = int(maximum)
+    if maximum <= 0:
+        raise ValueError("positive maximum training states required")
+    if len(rows) <= maximum:
+        return rows
+
+    by_market = defaultdict(list)
+    for row in rows:
+        by_market[str(row["market_id"])].append(row)
+    markets = sorted(
+        by_market,
+        key=lambda market: (
+            by_market[market][0]["decision_ns"], market))
+
+    # Preserve market breadth first.  If the cap is smaller than the number of
+    # markets, choose markets evenly through chronological market starts.
+    if len(markets) >= maximum:
+        if maximum == 1:
+            chosen_markets = [markets[len(markets) // 2]]
+        else:
+            chosen_markets = [
+                markets[round(i * (len(markets) - 1) / (maximum - 1))]
+                for i in range(maximum)
+            ]
+        return [by_market[market][len(by_market[market]) // 2]
+                for market in chosen_markets]
+
+    selected = []
+    selected_ids = set()
+    for market in markets:
+        group = by_market[market]
+        row = group[len(group) // 2]
+        selected.append(row)
+        selected_ids.add(row["decision_id"])
+
+    remaining_slots = maximum - len(selected)
+    leftovers = [row for row in rows if row["decision_id"] not in selected_ids]
+    if remaining_slots > 0 and leftovers:
+        if remaining_slots >= len(leftovers):
+            selected.extend(leftovers)
+        elif remaining_slots == 1:
+            selected.append(leftovers[len(leftovers) // 2])
+        else:
+            indices = {
+                round(i * (len(leftovers) - 1) / (remaining_slots - 1))
+                for i in range(remaining_slots)
+            }
+            selected.extend(leftovers[index] for index in sorted(indices))
+    selected.sort(key=lambda row: (row["decision_ns"], row["decision_id"]))
+    return selected[:maximum]
+
+
 class DirectActionValueModel:
     """Direct Q(S, q, h | latency) learner with market-block calibration."""
 
@@ -321,7 +378,8 @@ class DirectActionValueModel:
         hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
         ridge=8.0,
         calibration_level=0.90,
-        max_sizes_per_state=5,
+        max_sizes_per_state=3,
+        max_training_states=30_000,
         friction_policy=DEFAULT_FRICTION_POLICY,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
@@ -332,6 +390,9 @@ class DirectActionValueModel:
         self.ridge = float(ridge)
         self.calibration_level = float(calibration_level)
         self.max_sizes_per_state = int(max_sizes_per_state)
+        self.max_training_states = int(max_training_states)
+        if self.max_sizes_per_state <= 0 or self.max_training_states <= 0:
+            raise ValueError("positive direct-action capacity limits required")
         self.friction_policy = friction_policy.validated()
         self.fitted = False
 
@@ -491,7 +552,8 @@ class DirectActionValueModel:
         if not rows:
             raise ValueError("direct action training rows required")
         self._configure_levels(rows)
-        actions, target_states = self._expand_training_actions(rows)
+        training_rows = bounded_training_states(rows, self.max_training_states)
+        actions, target_states = self._expand_training_actions(training_rows)
         if len(actions) < 64:
             raise ValueError("insufficient observed direct-action targets")
 
@@ -558,8 +620,11 @@ class DirectActionValueModel:
             "schema": SCHEMA + "_training_v1",
             **SAFETY,
             "state": "READY",
-            "training_states": len(rows),
-            "training_markets": len({str(row["market_id"]) for row in rows}),
+            "training_states_total": len(rows),
+            "training_states_used": len(training_rows),
+            "training_markets_total": len({str(row["market_id"]) for row in rows}),
+            "training_markets_used": len({str(row["market_id"]) for row in training_rows}),
+            "training_state_cap": self.max_training_states,
             "action_targets": len(actions),
             "target_state_counts": dict(target_states),
             "size_grid": list(self.size_grid),
@@ -908,9 +973,14 @@ def main(argv=None):
     parser.add_argument("--latency-ms", type=int, default=50)
     parser.add_argument("--capital-budget", type=float, default=10_000.0)
     parser.add_argument("--folds", type=int, default=3)
+    parser.add_argument("--minimum-wall-ns", type=int, default=None)
+    parser.add_argument("--max-training-states", type=int, default=30_000)
     args = parser.parse_args(argv)
 
-    data = build_dataset(args.root)
+    data = build_dataset(
+        args.root,
+        **({"minimum_wall_ns": args.minimum_wall_ns}
+           if args.minimum_wall_ns is not None else {}))
     if data.get("input_state") != "READY":
         result = {
             "schema": SCHEMA + "_walk_forward_v1",
@@ -921,7 +991,8 @@ def main(argv=None):
     else:
         result = walk_forward_direct_action(
             data["decisions"], desired_folds=args.folds,
-            latency_ms=args.latency_ms, capital_budget=args.capital_budget)
+            latency_ms=args.latency_ms, capital_budget=args.capital_budget,
+            model_kwargs={"max_training_states": args.max_training_states})
         result["data_sha256"] = data.get("data_sha256")
     atomic_json(args.output, result)
     return 0 if result.get("state") == "READY" else 2
