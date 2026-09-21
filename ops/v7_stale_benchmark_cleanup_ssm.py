@@ -56,12 +56,26 @@ PY
 rm -rf -- "$STALE"
 after="$(systemctl show "$PAPER" -p MainPID --value)"
 [[ "$before" == "$after" ]]
-echo "STALE_BENCHMARK_CLEANUP={\"stale_prefix\":\"$STALE\",\"active_prefix\":\"$ACTIVE\",\"paper_pid_unchanged\":true}"
+echo "STALE_BENCHMARK_CLEANUP=OK"
 '''
     stdout,stderr=run(REGION,a.instance_id,cmd,120)
-    marker=next((x for x in stdout.splitlines() if x.startswith("STALE_BENCHMARK_CLEANUP=")),None)
+    marker=next((x for x in stdout.splitlines() if x=="STALE_BENCHMARK_CLEANUP=OK"),None)
     if marker is None: raise SystemExit("cleanup marker missing")
-    value=json.loads(marker.split("=",1)[1])
+    killed=0
+    targets=[]
+    for line in stdout.splitlines():
+        if line.startswith("stale_killed="):
+            killed=int(line.split("=",1)[1])
+        elif line.startswith("stale_targets="):
+            raw=line.split("=",1)[1]
+            targets=[int(v) for v in raw.split(",") if v]
+    value={
+        "stale_prefix":a.stale_prefix,
+        "active_prefix":a.active_prefix,
+        "paper_pid_unchanged":True,
+        "stale_targets":targets,
+        "stale_killed":killed,
+    }
     value["stdout_tail"]=stdout[-1000:]
     value["stderr_tail"]=stderr[-1000:]
     a.output.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n")
