@@ -545,3 +545,53 @@ def test_streaming_replay_summary_matches_materialized_outcomes_exactly():
         ordered, selector, latency_ms=100, valuation_mode="EXECUTABLE_MARKOUT",
         markout_horizon_ms=500, assume_sorted=True)
     assert streamed == materialized
+
+
+
+def test_economic_evaluation_retains_only_fill_level_equity_events():
+    rows = []
+    base = 1_789_921_800_000_000_001
+    for index in range(12):
+        row = record("eq" + str(index), decision_ns=base + index * 1_000_000_000)
+        row["label"] = None
+        row["label_information_ns"] = None
+        row["fee_rate"] = 0.0
+        row["targets"] = {}
+        row["arrivals"] = {}
+        for horizon in HORIZONS_MS:
+            key = str(horizon)
+            row["targets"][key] = {
+                "state": "OBSERVED",
+                "arrival_bid": .56,
+                "mid_change": .03,
+                "observed_time_ns": row["decision_ns"] + horizon * 1_000_000,
+            }
+            if horizon in (25, 50, 100, 250, 500):
+                row["arrivals"][key] = {
+                    "time_ns": row["decision_ns"] + horizon * 1_000_000,
+                    "bid": .49, "ask": .50, "quantity": 5.0, "epoch": 7,
+                }
+        rows.append(row)
+
+    evaluations = []
+    for row in rows:
+        evaluations.append({
+            "fold": 1, "cutoff_ns": base, "decision_id": row["decision_id"],
+            "market_id": row["market_id"], "asset": row["asset"],
+            "horizon": row["horizon"], "decision_ns": row["decision_ns"],
+            "row": row,
+            "settlement_predictions": {"pm": .495, "logistic_offset": None, "boosted_offset": None},
+            "repricing_predictions": {str(h): .03 for h in HORIZONS_MS},
+            "markout_predictions": {str(h): .05 for h in HORIZONS_MS},
+        })
+
+    economics = economic_evaluation(evaluations)
+    for name in ("markout_500ms", "markout_1000ms", "markout_2000ms"):
+        events = economics["models"][name]["equity_events"]
+        assert events
+        assert all(event["filled"] > 0 for event in events)
+        assert all(event["markout"] is not None for event in events)
+        assert [event["decision_ns"] for event in events] == sorted(
+            event["decision_ns"] for event in events
+        )
+        assert len(events) <= economics["models"][name]["metrics"]["fills"]
