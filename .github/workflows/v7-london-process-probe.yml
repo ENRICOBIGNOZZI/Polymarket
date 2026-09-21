@@ -46,7 +46,9 @@ jobs:
           echo "=== SERVICE ==="
           systemctl is-active polymarket-v7-paper.service || true
           systemctl show polymarket-v7-paper.service -p ActiveEnterTimestamp -p MainPID -p Environment --no-pager | head -20 || true'
-          params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["90"]},separators=(",",":")))' "$payload")"
+          encoded="$(printf '%s' "$payload" | base64 -w0)"
+          wrapped="printf '%s' '$encoded' | base64 -d | bash"
+          params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["90"]},separators=(",",":")))' "$wrapped")"
           cid=""
           for delay in 2 4 8 12 16; do
             cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$params" --comment "Polymarket V7 read-only process probe" --region "$AWS_REGION" --query 'Command.CommandId' --output text 2>/dev/null || true)"
