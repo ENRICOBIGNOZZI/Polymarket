@@ -1048,6 +1048,118 @@ class DirectActionValueModel:
         return sorted(first, key=lambda market: (first[market], market))
 
 
+    def _calibrate_selected_policy(self, rows, calibration_markets):
+        """Calibrate optimism after the continuous action argmax.
+
+        This holdout is disjoint from mean fitting and from the action-level
+        conformal holdout. One selected action per market is retained.
+        """
+        market_filter = set(calibration_markets)
+        ordered = sorted(
+            (
+                row for row in rows
+                if str(row.get("market_id")) in market_filter
+            ),
+            key=lambda row: (row["decision_ns"], row["decision_id"]),
+        )
+        used_markets = set()
+        scores = {}
+        selected = observed = censored = 0
+        predicted_sum = realized_sum = 0.0
+        prior_penalty = float(getattr(self, "selection_optimism_penalty", 0.0))
+        prior_fitted = bool(self.fitted)
+        self.selection_optimism_penalty = 0.0
+        self.fitted = True
+        try:
+            for row in ordered:
+                market = str(row["market_id"])
+                if market in used_markets:
+                    continue
+                best = None
+                for latency_ms in self.train_latencies_ms:
+                    ranked, _ = self.score_actions(
+                        row,
+                        latency_ms=latency_ms,
+                        available_capital=None,
+                        live_geometry=True,
+                        portfolio_state={},
+                        capital_budget=10_000.0,
+                    )
+                    if not ranked:
+                        continue
+                    candidate = ranked[0]
+                    if candidate["calibrated_lower_value"] <= 0:
+                        continue
+                    if (
+                        best is None
+                        or candidate["calibrated_lower_value"]
+                        > best["calibrated_lower_value"]
+                    ):
+                        best = candidate
+                if best is None:
+                    continue
+
+                # Current policy allows at most one entry per market.
+                used_markets.add(market)
+                selected += 1
+                economics, _ = realized_action_economics(
+                    row,
+                    size=best["size"],
+                    horizon_ms=best["exit_horizon_ms"],
+                    latency_ms=best["latency_ms"],
+                    side=best.get("side"),
+                    entry_cap=self.entry_cap,
+                    hard_order_notional=self.hard_order_notional,
+                )
+                if economics is None:
+                    censored += 1
+                    continue
+
+                observed += 1
+                realized = float(economics["cash_pnl"])
+                predicted_lower = float(best["calibrated_lower_cash_value"])
+                scores[market] = max(0.0, predicted_lower - realized)
+                predicted_sum += predicted_lower
+                realized_sum += realized
+        finally:
+            self.fitted = prior_fitted
+            self.selection_optimism_penalty = prior_penalty
+
+        observed_fraction = observed / selected if selected else 0.0
+        penalty = _quantile(list(scores.values()), self.calibration_level)
+        ready = (
+            penalty is not None
+            and finite(penalty)
+            and observed >= 10
+            and observed_fraction >= 0.50
+        )
+        return {
+            "state": (
+                "TEMPORAL_MARKET_BLOCK_POST_ARGMAX_ONE_SIDED"
+                if ready
+                else "INSUFFICIENT_POST_ARGMAX_CALIBRATION"
+            ),
+            "penalty": float(max(0.0, penalty)) if ready else 0.0,
+            "selected_markets": selected,
+            "observed_selected_markets": observed,
+            "censored_selected_markets": censored,
+            "observed_fraction": observed_fraction,
+            "score_markets": len(scores),
+            "predicted_lower_cash_mean": (
+                predicted_sum / observed if observed else None
+            ),
+            "realized_cash_mean": (
+                realized_sum / observed if observed else None
+            ),
+            "mean_optimism_after_action_conformal": (
+                (predicted_sum - realized_sum) / observed
+                if observed else None
+            ),
+            "calibration_level": self.calibration_level,
+            "minimum_observed_markets": 10,
+            "minimum_observed_fraction": 0.50,
+        }
+
     def fit(self, rows):
         rows = list(rows)
         if not rows:
@@ -1063,15 +1175,32 @@ class DirectActionValueModel:
 
         self.uncertainty_floor = 1e-6
         self.calibration_multiplier = 1.5
+        self.selection_optimism_penalty = 0.0
+        self.selection_calibration = {
+            "state": "INSUFFICIENT_POST_ARGMAX_CALIBRATION",
+            "penalty": 0.0,
+            "selected_markets": 0,
+            "observed_selected_markets": 0,
+            "censored_selected_markets": 0,
+            "observed_fraction": 0.0,
+            "score_markets": 0,
+            "predicted_lower_cash_mean": None,
+            "realized_cash_mean": None,
+            "mean_optimism_after_action_conformal": None,
+            "calibration_level": self.calibration_level,
+            "minimum_observed_markets": 10,
+            "minimum_observed_fraction": 0.50,
+        }
         self.scale_model = None
         calibration_state = "INSUFFICIENT_MARKET_BLOCKS"
         calibration_block_scores = 0
 
-        # Temporal market blocks are fixed before any outcome-dependent fit.
-        # The final deployment mean is frozen BEFORE the calibration block;
-        # otherwise the conformal multiplier would be evaluated on a different
-        # predictor from the one used at decision time.
+        # Chronological split:
+        # 60% mean seed, 20% residual scale, final 20% held out from mean.
+        # The held-out tail is split again: first half calibrates action-level
+        # conformal uncertainty; second half calibrates post-argmax optimism.
         fit_markets = scale_markets = calibration_markets = set()
+        action_calibration_markets = selection_calibration_markets = set()
         mean_fit_markets = set(markets)
         if len(markets) >= 15:
             fit_end = max(1, int(len(markets) * 0.60))
@@ -1079,7 +1208,16 @@ class DirectActionValueModel:
             scale_end = min(scale_end, len(markets) - 1)
             fit_markets = set(markets[:fit_end])
             scale_markets = set(markets[fit_end:scale_end])
-            calibration_markets = set(markets[scale_end:])
+            calibration_sequence = list(markets[scale_end:])
+            calibration_markets = set(calibration_sequence)
+            if len(calibration_sequence) >= 2:
+                split = max(1, len(calibration_sequence) // 2)
+                action_calibration_markets = set(
+                    calibration_sequence[:split])
+                selection_calibration_markets = set(
+                    calibration_sequence[split:])
+            else:
+                action_calibration_markets = set(calibration_sequence)
 
         target_states = Counter()
         if fit_markets and scale_markets and calibration_markets:
@@ -1095,7 +1233,6 @@ class DirectActionValueModel:
                     lambda action: abs(
                         float(action["target"]) - provisional.predict(action)),
                 )
-            # Residual target mean is a stable, bounded-memory scale floor.
             self.uncertainty_floor = max(
                 1e-6, 0.10 * self.scale_model.target_mean)
 
@@ -1106,12 +1243,10 @@ class DirectActionValueModel:
                     factory(mean_fit_markets, target_states),
                     lambda action: action["target"])
 
-            # Split conformal calibration is market-blocked and uses ONLY the
-            # untouched chronological tail. One worst normalized residual per
-            # market prevents within-market action variants from masquerading
-            # as independent calibration observations.
+            # Action-level split conformal uses only the first half of the
+            # untouched chronological tail.
             block_scores = {}
-            for action in factory(calibration_markets)():
+            for action in factory(action_calibration_markets)():
                 predicted = deployment_mean.predict(action)
                 scale = max(
                     self.uncertainty_floor,
@@ -1128,6 +1263,15 @@ class DirectActionValueModel:
                 calibration_state = "TEMPORAL_MARKET_BLOCK_SPLIT_CONFORMAL"
             else:
                 calibration_state = "INSUFFICIENT_CALIBRATION_ACTION_TARGETS"
+
+            # Freeze all fitted objects before evaluating the post-argmax tail.
+            self.mean_model = deployment_mean
+            self.fitted = True
+            if selection_calibration_markets:
+                self.selection_calibration = self._calibrate_selected_policy(
+                    rows, selection_calibration_markets)
+                self.selection_optimism_penalty = float(
+                    self.selection_calibration["penalty"])
         else:
             deployment_mean = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
@@ -1136,8 +1280,6 @@ class DirectActionValueModel:
                     lambda action: action["target"])
 
         if self.scale_model is None:
-            # Small-sample fallback is intentionally conservative and not a
-            # coverage claim.
             self.uncertainty_floor = max(
                 1e-6, deployment_mean.target_std)
 
@@ -1170,7 +1312,7 @@ class DirectActionValueModel:
             "maximum_streaming_batch_bytes": deployment_mean.maximum_batch_bytes,
             "regularized_gram_condition_number": deployment_mean.condition_number,
             "streaming_batch_size": self.streaming_batch_size,
-            "policy_objective": "PREDICTED_EXECUTABLE_CASH_PNL_MINUS_UNCERTAINTY_MINUS_RESIDUAL_PORTFOLIO_FRICTIONS",
+            "policy_objective": "PREDICTED_EXECUTABLE_CASH_PNL_MINUS_ACTION_UNCERTAINTY_MINUS_POST_ARGMAX_OPTIMISM_MINUS_RESIDUAL_PORTFOLIO_FRICTIONS",
             "policy_loss": "NEGATIVE_POLICY_UTILITY_WITH_NO_TRADE_BASELINE_ZERO",
             "execution_frictions_in_training_target": [
                 "decision_spread_via_executable_entry",
@@ -1190,11 +1332,14 @@ class DirectActionValueModel:
                 "uncertainty_aversion": self.friction_policy.uncertainty_aversion,
             },
             "ridge": self.ridge,
-            "uncertainty": "STREAMING_ABSOLUTE_RESIDUAL_SCALE_WITH_TEMPORAL_MARKET_BLOCK_CONFORMAL",
+            "uncertainty": "STREAMING_ABSOLUTE_RESIDUAL_SCALE_WITH_DISJOINT_ACTION_CONFORMAL_AND_POST_ARGMAX_HOLDOUTS",
             "calibration_level": self.calibration_level,
             "calibration_multiplier": self.calibration_multiplier,
             "uncertainty_floor": self.uncertainty_floor,
             "calibration_state": calibration_state,
+            "selection_optimism_penalty": self.selection_optimism_penalty,
+            "selection_calibration": dict(self.selection_calibration),
+            "selection_calibration_state": self.selection_calibration["state"],
             "mean_fit_scope": (
                 "PRE_CALIBRATION_MARKETS_ONLY"
                 if calibration_markets else "ALL_MARKETS_SMALL_SAMPLE_FALLBACK"
@@ -1202,8 +1347,20 @@ class DirectActionValueModel:
             "fit_market_count": len(fit_markets),
             "scale_market_count": len(scale_markets),
             "calibration_market_count": len(calibration_markets),
+            "action_calibration_market_count": len(
+                action_calibration_markets),
+            "selection_calibration_market_count": len(
+                selection_calibration_markets),
             "calibration_block_scores": calibration_block_scores,
-            "calibration_holdout_excluded_from_mean_fit": bool(calibration_markets),
+            "calibration_holdout_excluded_from_mean_fit": bool(
+                calibration_markets),
+            "calibration_holdouts_disjoint": not bool(
+                action_calibration_markets & selection_calibration_markets),
+            "calibration_semantics": (
+                "MEAN_FIT_60_20_PRETAIL;"
+                "ACTION_CONFORMAL_FIRST_HALF_OF_FINAL_20;"
+                "POST_ARGMAX_CALIBRATION_SECOND_HALF_OF_FINAL_20"
+            ),
             "feature_names": list(self.model_feature_names),
             "capacity_scope": "L1_ONLY_NO_COUNTERFACTUAL_IMPACT_BEYOND_VISIBLE_DEPTH",
             "mean_covariance_estimation": False,
@@ -1316,6 +1473,8 @@ class DirectActionValueModel:
             float(self.friction_policy.uncertainty_aversion)
             * self.calibration_multiplier * scale
         )
+        selection_optimism_penalty = float(
+            getattr(self, "selection_optimism_penalty", 0.0))
         base = {
             "action": "TRADE",
             "side": side,
@@ -1328,7 +1487,8 @@ class DirectActionValueModel:
             base, row, portfolio_state=portfolio_state,
             capital_budget=capital_budget,
             friction_policy=self.friction_policy)
-        lower_cash = mean - uncertainty_penalty
+        lower_cash = (
+            mean - uncertainty_penalty - selection_optimism_penalty)
         policy_utility = lower_cash - residual["total_residual_friction"]
         return {
             **base,
@@ -1336,6 +1496,7 @@ class DirectActionValueModel:
             "predicted_total_net_pnl": mean,
             "predicted_abs_error_scale": scale,
             "uncertainty_penalty": float(uncertainty_penalty),
+            "selection_optimism_penalty": float(selection_optimism_penalty),
             "calibrated_lower_cash_value": float(lower_cash),
             "calibrated_lower_value": float(policy_utility),
             "policy_utility": float(policy_utility),
@@ -1753,6 +1914,9 @@ def summarize_direct_action(outcomes):
             float(row.get("total_residual_friction") or 0.0) for row in trades),
         "total_predicted_uncertainty_penalty": sum(
             float(row.get("uncertainty_penalty") or 0.0) for row in trades),
+        "total_predicted_selection_optimism_penalty": sum(
+            float(row.get("selection_optimism_penalty") or 0.0)
+            for row in trades),
         "selected_size_distribution": numeric_distribution(
             row.get("size") for row in trades),
         "selected_notional_distribution": numeric_distribution(
@@ -1785,6 +1949,7 @@ def merge_direct_action_summaries(summaries):
         "positive_observed_trades", "zero_observed_trades",
         "negative_observed_trades", "total_predicted_residual_friction",
         "total_predicted_uncertainty_penalty",
+        "total_predicted_selection_optimism_penalty",
     )
     result = {"schema": SCHEMA + "_summary_v2", **SAFETY}
     for key in additive:
@@ -1792,6 +1957,7 @@ def merge_direct_action_summaries(summaries):
         if key not in (
             "total_predicted_residual_friction",
             "total_predicted_uncertainty_penalty",
+            "total_predicted_selection_optimism_penalty",
         ):
             result[key] = int(result[key])
 
@@ -1894,7 +2060,8 @@ def walk_forward_direct_action(
                         "market_id", "asset", "contract_horizon", "decision_ns",
                         "side", "size", "exit_horizon_ms", "latency_ms", "notional",
                         "policy_utility", "predicted_total_net_cash_pnl",
-                        "uncertainty_penalty", "total_residual_friction",
+                        "uncertainty_penalty", "selection_optimism_penalty",
+                        "total_residual_friction",
                         "realized_pnl", "target_state",
                     )
                 })
