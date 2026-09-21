@@ -299,8 +299,9 @@ def test_native_kind6_repricing_label_populates_oos_target_and_arrival():
     assert arrival["pair"]["yes"]["ask_quantity"] == 4.0
     assert arrival["pair"]["no"]["ask_quantity"] == 6.0
     assert origin["targets"]["100"]["pair"] == arrival["pair"]
-    assert arrival["pair"]["NO"]["ask_quantity"] == 6.0
-    assert origin["targets"]["100"]["pair"]["YES"]["bid_quantity"] == 3.0
+    assert arrival["pair"]["state"] == "BILATERAL_EXECUTABLE_READY"
+    assert arrival["pair"]["no"]["ask_quantity"] == 6.0
+    assert origin["targets"]["100"]["pair"]["yes"]["bid_quantity"] == 3.0
 
 
 def test_native_kind6_wrong_identity_never_joins_origin():
@@ -1155,13 +1156,14 @@ def test_native_pair_l1_requires_complete_bilateral_prices_and_quantities():
         "no_bid_quantity": 3_000_000, "no_ask_quantity": 4_000_000,
     }
     pair = native_pair_l1(raw)
-    assert pair["YES"]["ask"] == .50
-    assert pair["NO"]["ask_quantity"] == 4.0
+    assert pair["state"] == "BILATERAL_EXECUTABLE_READY"
+    assert pair["yes"]["ask"] == .50
+    assert pair["no"]["ask_quantity"] == 4.0
 
     incomplete = dict(raw)
     incomplete.pop("no_ask_quantity")
-    assert native_pair_l1(incomplete) is None
+    assert native_pair_l1(incomplete)["state"] == "PRICES_ONLY"
 
     invalid = dict(raw)
     invalid["no_ask_quantity"] = -1
-    assert native_pair_l1(invalid) is None
+    assert native_pair_l1(invalid)["state"] == "PRICES_ONLY"
