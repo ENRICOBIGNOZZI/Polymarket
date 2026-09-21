@@ -19,6 +19,7 @@ from research.walk_forward_v3.direct_action import (
     FrictionPolicy,
     action_execution_kernel,
     economics_from_execution_kernel,
+    fit_recent_residual_adjustment,
     StreamingRidge,
     candidate_sizes,
     decision_action_sides,
@@ -1292,4 +1293,88 @@ def test_prequential_selection_scores_are_generated_on_later_market_blocks():
         "ROLLING_MARKET_BLOCK_OOS_SCORES;"
         "FINAL_MODEL_MAY_LATER_REFIT_ON_HISTORICAL_SCORE_BLOCKS;"
         "NOT_A_FINAL_MODEL_CONFORMAL_COVERAGE_CLAIM"
+    )
+
+
+
+def test_recent_residual_adjustment_reuses_base_geometry_and_reduces_recent_error():
+    rows = []
+    for index in range(40):
+        x = float(index) / 10.0
+        rows.append({
+            "features": {"a": x},
+            "base_target": 1.0 + x,
+            "recent_target": 1.0 + 3.0 * x,
+        })
+
+    base = StreamingRidge(
+        ("a",), ridge=1.0, batch_size=8).fit_factory(
+            lambda: iter(rows), lambda item: item["base_target"])
+    before = sum(
+        abs(base.predict(item) - item["recent_target"]) for item in rows
+    ) / len(rows)
+
+    adjusted, receipt = fit_recent_residual_adjustment(
+        base,
+        lambda: iter(rows),
+        lambda item: item["recent_target"],
+        ridge=1.0,
+        batch_size=7,
+    )
+    after = sum(
+        abs(adjusted.predict(item) - item["recent_target"]) for item in rows
+    ) / len(rows)
+
+    assert receipt["state"] == "READY"
+    assert receipt["rows"] == 40
+    assert receipt["continuous_q_compatible"] is True
+    assert adjusted.names == base.names
+    assert adjusted.center == base.center
+    assert adjusted.scale == base.scale
+    assert after < before
+    assert not all(
+        math.isclose(float(left), float(right), abs_tol=1e-12)
+        for left, right in zip(adjusted.beta, base.beta)
+    )
+
+
+def test_recent_residual_is_disabled_by_default_and_explicit_when_enabled():
+    rows = [
+        row(
+            "m" + str(index + 9000),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(100)
+    ]
+    baseline = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        streaming_batch_size=32,
+        selection_calibration_mode="OFF",
+    ).fit(rows)
+    assert baseline.training_receipt["recent_residual"]["state"] == "DISABLED"
+    assert baseline.training_receipt["recent_residual_fraction"] == 0.0
+
+    adaptive = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        streaming_batch_size=32,
+        selection_calibration_mode="OFF",
+        recent_residual_fraction=.25,
+        recent_residual_ridge=8.0,
+    ).fit(rows)
+    recent = adaptive.training_receipt["recent_residual"]
+    assert recent["state"] == "READY"
+    assert recent["fraction"] == .25
+    assert recent["markets"] == 20
+    assert recent["rows"] > 0
+    assert recent["continuous_q_compatible"] is True
+    assert adaptive.training_receipt["recent_residual_semantics"] == (
+        "FROZEN_BASE_FEATURE_GEOMETRY;"
+        "RECENT_WINDOW_FITS_ONLY_BASE_MODEL_RESIDUAL;"
+        "ACTION_CONFORMAL_RECALIBRATES_COMBINED_MODEL"
     )
