@@ -1829,6 +1829,22 @@ class DirectActionValueModel:
             "regime_action_target_counts": dict(
                 sorted(self.regime_action_target_counts.items())),
             "bilateral_side_support": bilateral_support,
+            "action_support_heads": {
+                "enabled": self.support_heads_enabled,
+                "state": support_head_state,
+                "evidence_semantics": (
+                    "P_CAUSAL_ARRIVAL_AND_EXIT_EVIDENCE_OBSERVED_GIVEN_DECISION_ACTION"
+                ),
+                "full_execution_semantics": (
+                    "P_FULL_ENTRY_FILL_AND_FULL_EXIT_AT_ACTION_HORIZON_GIVEN_DECISION_ACTION"
+                ),
+                "minimum_evidence_support_probability": (
+                    self.minimum_evidence_support_probability),
+                "minimum_full_execution_probability": (
+                    self.minimum_full_execution_probability),
+                "used_as_economic_pnl": False,
+                "role": "SELECTION_SUPPORT_GATE_ONLY",
+            },
             "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
             "opposite_side_counterfactual": (
                 "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_"
@@ -2045,6 +2061,28 @@ class DirectActionValueModel:
                     regime_support_key(row, latency_ms), 0)),
             "notional": float(notional),
         }
+        evidence_support_probability = self._probability_prediction(
+            self.evidence_support_model, action)
+        full_execution_probability = self._probability_prediction(
+            self.full_execution_model, action)
+        evidence_gate_ok = (
+            self.minimum_evidence_support_probability is None
+            or (
+                evidence_support_probability is not None
+                and evidence_support_probability + 1e-12
+                    >= self.minimum_evidence_support_probability
+            )
+        )
+        execution_gate_ok = (
+            self.minimum_full_execution_probability is None
+            or (
+                full_execution_probability is not None
+                and full_execution_probability + 1e-12
+                    >= self.minimum_full_execution_probability
+            )
+        )
+        support_eligible = bool(evidence_gate_ok and execution_gate_ok)
+
         residual = residual_policy_friction(
             base, row, portfolio_state=portfolio_state,
             capital_budget=capital_budget,
@@ -2059,6 +2097,9 @@ class DirectActionValueModel:
             "predicted_abs_error_scale": scale,
             "uncertainty_penalty": float(uncertainty_penalty),
             "selection_optimism_penalty": float(selection_optimism_penalty),
+            "evidence_support_probability": evidence_support_probability,
+            "full_execution_probability": full_execution_probability,
+            "support_eligible": support_eligible,
             "calibrated_lower_cash_value": float(lower_cash),
             "calibrated_lower_value": float(policy_utility),
             "policy_utility": float(policy_utility),
@@ -2099,6 +2140,37 @@ class DirectActionValueModel:
             boundaries.update(
                 _polylog_level_crossings(
                     scale_shape, self.uncertainty_floor, lower, upper))
+
+        if (
+            self.evidence_support_model is not None
+            and self.minimum_evidence_support_probability is not None
+        ):
+            evidence_shape = self._quantity_shape(
+                self.evidence_support_model, row,
+                horizon_ms=horizon_ms, latency_ms=latency_ms, side=side)
+            boundaries.update(
+                _polylog_level_crossings(
+                    evidence_shape,
+                    self.minimum_evidence_support_probability,
+                    lower,
+                    upper,
+                )
+            )
+        if (
+            self.full_execution_model is not None
+            and self.minimum_full_execution_probability is not None
+        ):
+            execution_shape = self._quantity_shape(
+                self.full_execution_model, row,
+                horizon_ms=horizon_ms, latency_ms=latency_ms, side=side)
+            boundaries.update(
+                _polylog_level_crossings(
+                    execution_shape,
+                    self.minimum_full_execution_probability,
+                    lower,
+                    upper,
+                )
+            )
 
         side_state = decision_side_state(row, side)
         ask = float(side_state["ask"])
@@ -2248,6 +2320,12 @@ class DirectActionValueModel:
                         capital_budget=capital_budget)
                     for q in quantities
                 ]
+                horizon_scores = [
+                    value for value in horizon_scores
+                    if value.get("support_eligible") is True
+                ]
+                if not horizon_scores:
+                    continue
                 horizon_scores.sort(
                     key=lambda value: (
                         value["policy_utility"],
@@ -2268,7 +2346,14 @@ class DirectActionValueModel:
             ),
             reverse=True,
         )
-        return scored, "READY" if scored else "NO_FEASIBLE_ACTION"
+        if scored:
+            return scored, "READY"
+        if (
+            self.minimum_evidence_support_probability is not None
+            or self.minimum_full_execution_probability is not None
+        ):
+            return [], "ACTION_SUPPORT_GATE"
+        return [], "NO_FEASIBLE_ACTION"
 
     def select_action(self, row, *, latency_ms=50, available_capital=None,
                       live_geometry=True, minimum_lower_value=0.0,
@@ -2776,6 +2861,8 @@ def walk_forward_direct_action(
                         "signal_age_ms", "effective_action_age_ms", "notional",
                         "policy_utility", "predicted_total_net_cash_pnl",
                         "uncertainty_penalty", "selection_optimism_penalty",
+                        "evidence_support_probability",
+                        "full_execution_probability",
                         "total_residual_friction",
                         "realized_pnl", "target_state",
                         "censored_worst_case_pnl",
