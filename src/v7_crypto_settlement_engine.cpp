@@ -215,14 +215,17 @@ struct PmQueuedEvent {
     std::uint64_t connection_epoch = 0;
 };
 
-inline constexpr std::array<std::uint32_t, 11> kRepricingHorizonsMs{25, 50, 100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000};
+inline constexpr std::array<std::uint32_t, 18> kRepricingHorizonsMs{
+    5, 10, 25, 50, 100, 250, 500, 750, 1000,
+    1250, 1500, 1750, 2000, 3000, 4000, 5000, 7500, 10000
+};
 struct RepricingWindow {
     std::uint64_t signal_version = 0;
     std::uint64_t instrument_handle = 0;
     std::int64_t trigger_ns = 0;
     std::int64_t decision_ns = 0;
     std::array<std::int64_t, kRepricingHorizonsMs.size()> target_ns{};
-    std::uint16_t emitted_mask = 0;
+    std::uint32_t emitted_mask = 0;
     // Signal direction is provenance. instrument_handle is the economically
     // selected token and owns the executable depth labels.
     std::int8_t direction = 0;
@@ -532,7 +535,7 @@ int main(int argc, char** argv) {
         std::uint64_t last_execution_window_instrument = 0;
         std::uint8_t last_execution_window_reason = 0, last_execution_window_accepted = 0;
         std::int64_t execution_window_until_ns = 0;
-        std::array<RepricingWindow, 16> repricing_windows{};
+        std::array<RepricingWindow, 64> repricing_windows{};
         std::uint64_t repricing_origins = 0, repricing_labels = 0;
         std::uint64_t repricing_censors = 0, repricing_window_overflow = 0;
         std::int64_t repricing_evidence_compute_ns = 0, repricing_evidence_max_ns = 0;
@@ -618,7 +621,7 @@ int main(int argc, char** argv) {
             for (auto& window : repricing_windows) {
                 if (window.active == 0) continue;
                 for (std::size_t i = 0; i < kRepricingHorizonsMs.size(); ++i) {
-                    const auto mask = static_cast<std::uint16_t>(1U << i);
+                    const auto mask = static_cast<std::uint32_t>(1U << i);
                     if ((window.emitted_mask & mask) != 0 || window.target_ns[i] >= watermark_ns) continue;
                     const auto evidence_started_ns = monotonic_now_ns();
                     const bool selected_up = window.instrument_handle == kYes;
@@ -638,7 +641,7 @@ int main(int argc, char** argv) {
                     if (!evidence_writer.publish_observation(point)) ++adapter_handoff_failures;
                     if (point.repricing_pair_valid != 0) ++repricing_labels;
                     else ++repricing_censors;
-                    window.emitted_mask = static_cast<std::uint16_t>(window.emitted_mask | mask);
+                    window.emitted_mask = static_cast<std::uint32_t>(window.emitted_mask | mask);
                     const auto evidence_elapsed_ns = monotonic_now_ns() - evidence_started_ns;
                     repricing_evidence_compute_ns += evidence_elapsed_ns;
                     repricing_evidence_max_ns = std::max(repricing_evidence_max_ns, evidence_elapsed_ns);
@@ -1383,7 +1386,9 @@ int main(int argc, char** argv) {
             {"repricing_window_overflow", repricing_window_overflow},
             {"repricing_evidence_compute_ns", repricing_evidence_compute_ns},
             {"repricing_evidence_max_ns", repricing_evidence_max_ns},
-            {"repricing_horizons_ms", json::array{25, 50, 100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000}},
+            {"repricing_horizons_ms", json::array{
+                5, 10, 25, 50, 100, 250, 500, 750, 1000,
+                1250, 1500, 1750, 2000, 3000, 4000, 5000, 7500, 10000}},
             {"native_observation_capture_mode", options.capture_native_observations
                 ? "FULL" : options.capture_execution_windows ? "DECISION_WINDOWS"
                 : options.capture_native_decisions ? "DECISIONS" : "NONE"},
