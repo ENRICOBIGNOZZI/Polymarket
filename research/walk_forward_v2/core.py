@@ -1565,8 +1565,23 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
             "metrics": summarize(outcomes),
             "uncertainty": market_bootstrap(outcomes),
         }
-        # Raw row outcomes are needed only for the two diagnostic charts that
-        # consume them. All other candidates are summarized immediately.
+        # Keep only compact fill-level equity events for the economically
+        # relevant markout horizons. This supports true chronological equity
+        # and drawdown plots without retaining the full OOS opportunity tape.
+        if name in {"markout_500ms", "markout_1000ms", "markout_2000ms"}:
+            value["equity_events"] = [
+                {
+                    "decision_ns": row.get("decision_ns"),
+                    "market_id": row.get("market_id"),
+                    "asset": row.get("asset"),
+                    "horizon": row.get("horizon"),
+                    "markout": row.get("markout"),
+                    "filled": row.get("filled"),
+                }
+                for row in outcomes
+                if row.get("filled", 0) > 0 and row.get("markout") is not None
+            ]
+        # PM and 500ms retain raw outcomes for existing diagnostic charts only.
         if name in {"pm", "markout_500ms"}:
             value["outcomes"] = outcomes
         result["models"][name] = value
