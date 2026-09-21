@@ -187,7 +187,11 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now "$UNIT"
+# Keep append-only predictions across upgrades, but remove stale health state so
+# post-install validation cannot accidentally read the previous process.
+rm -f "$OUT/status.json"
+systemctl enable "$UNIT"
+systemctl restart "$UNIT"
 for i in $(seq 1 30); do
   systemctl is-active --quiet "$UNIT" && test -s "$OUT/status.json" && break
   sleep 1
