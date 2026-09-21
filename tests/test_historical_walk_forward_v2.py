@@ -6,6 +6,8 @@ from research.walk_forward_v2.core import (
     HORIZONS_MS,
     Ridge,
     asset_markout_predictors,
+    asset_selection_diagnostics,
+    live_parity_policy_diagnostics,
     book_targets,
     build_dataset,
     folds,
@@ -637,3 +639,61 @@ def test_per_asset_markout_models_use_same_hyperparameters_but_separate_coeffici
     assert meta["1000"]["ETH"]["ridge"] == 8.0
     assert meta["1000"]["BTC"]["feature_names"] == meta["1000"]["ETH"]["feature_names"]
     assert meta["1000"]["BTC"]["target"] == meta["1000"]["ETH"]["target"]
+
+
+
+def test_live_parity_diagnostics_expose_tte_entry_cap_and_full_depth_mismatches():
+    row = record("parity")
+    row["asset"] = "ETH"
+    row["tte_ns"] = 100_000_000_000
+    row["ask"] = .78
+    row["bid"] = .77
+    row["quantity"] = 3.0
+    row["minimum"] = 1.0
+    event = {
+        "decision_ns": row["decision_ns"],
+        "decision_id": row["decision_id"],
+        "row": row,
+        "asset_markout_predictions": {"500": .02, "1000": .02, "2000": .02},
+    }
+    diag = live_parity_policy_diagnostics([event])
+    cell = diag["horizons"]["500"]["ETH"]
+    assert cell["research_tte"] == 1
+    assert cell["live_tte"] == 0
+    assert cell["research_entry_cap"] == 0
+    assert cell["live_entry_cap"] == 1
+    assert cell["research_depth_gate"] == 1
+    assert cell["live_full_depth_gate"] == 0
+
+
+def test_asset_diagnostics_surface_fee_schedule_and_size_capacity():
+    events = []
+    for asset, rate, depth in (("BTC", .01, 12.0), ("ETH", .03, 4.0)):
+        row = record("diag-" + asset.lower())
+        row["asset"] = asset
+        row["fee_rate"] = rate
+        row["fee_exponent"] = 1.0
+        row["quantity"] = depth
+        row["minimum"] = 1.0
+        row["targets"] = {
+            "1000": {
+                "state": "OBSERVED",
+                "arrival_bid": .55,
+                "observed_time_ns": row["decision_ns"] + 1_000_000_000,
+            }
+        }
+        events.append({
+            "decision_ns": row["decision_ns"],
+            "decision_id": row["decision_id"],
+            "row": row,
+            "markout_predictions": {"1000": .02},
+            "asset_markout_predictions": {"1000": .02},
+        })
+    diag = asset_selection_diagnostics(events, horizons=(1000,))
+    btc = diag["horizons"]["1000"]["BTC"]
+    eth = diag["horizons"]["1000"]["ETH"]
+    assert btc["mean_entry_fee"] < eth["mean_entry_fee"]
+    assert btc["fee_schedule_counts"] != eth["fee_schedule_counts"]
+    assert btc["size_capacity"]["5.0"]["both"] == 1
+    assert eth["size_capacity"]["5.0"]["both"] == 0
+    assert diag["required_prediction"] == .01
