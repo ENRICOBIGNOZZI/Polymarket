@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_direct_action_risk_research_ssm_request_v1",
   "version": 1,
-  "request_id": "direct-action-nested-risk-20260921T1549CEST",
+  "request_id": "direct-action-nested-risk-retry-20260921T1602CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "minimum_wall_ns": 1789921800000000000,
   "outer_folds": 3,
