@@ -34,6 +34,7 @@
     "scripts/v7_ledger_spool.py",
     "scripts/v7_legacy_native_claims.py",
     "scripts/v7_legacy_native_reconciler.py",
+    "scripts/v7_model_runtime_approval.py",
     "scripts/v7_multi_asset_external_collector.py",
     "scripts/v7_native_crypto_engine_manager.py",
     "scripts/v7_native_paper_settlement.py",
