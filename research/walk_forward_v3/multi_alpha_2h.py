@@ -24,6 +24,7 @@ import numpy as np
 from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, fee_per_share, finite
 from research.walk_forward_v3.direct_action import (
     _valid_state, decision_action_sides, decision_side_state, selected_action_side,
+    realized_action_economics,
 )
 from research.walk_forward_v3.dynamic_exit import DynamicExitValueModel, summarize_dynamic_exit
 from research.walk_forward_v3.btc_compact_equity import (
@@ -310,8 +311,12 @@ def select_window(root, rows):
         sessions, fallback = stream_raw_sessions(Path(root), probe_rows)
         diag = {**diag, **fallback, "fallback": "RAW_CAUSAL_BOOK_JSONL"}
     if not sessions:
-        raise ValueError("NO_CAUSAL_PM_SESSION")
-    cache = {r["decision_id"]: session_for_row(sessions, r) for r in probe_rows}
+        diag = {**diag, "fallback": "NATIVE_KIND6_CAUSAL_REPRICING_ONLY"}
+    cache = (
+        {r["decision_id"]: session_for_row(sessions, r) for r in probe_rows}
+        if sessions else
+        {r["decision_id"]: (None, "NO_CONTINUOUS_BOOK_SESSION") for r in probe_rows}
+    )
     for c in top:
         matched, reasons = 0, Counter()
         for row in c["rows"]:
@@ -406,6 +411,79 @@ def exact_baseline_cube(rows, session_cache):
         "censored": {k: dict(v) for k,v in censored.items()},
     }
 
+
+def native_execute_side_cell(row, latency_ms, exit_ms, side):
+    """Causal kind=6 diagnostic execution; separate from continuous-tape baseline."""
+    return realized_action_economics(
+        row,
+        size=SIZE,
+        horizon_ms=int(exit_ms),
+        latency_ms=int(latency_ms),
+        side=side,
+        entry_cap=.99,
+        hard_order_notional=100.0,
+        require_full_decision_depth=True,
+    )
+
+
+def native_baseline_cube(rows):
+    metrics, events = {}, defaultdict(list)
+    censored = defaultdict(Counter)
+    for latency in LATENCIES:
+        for horizon in EXITS:
+            key = f"{latency}::{horizon}"
+            observed = fills = no_fills = 0
+            for row in rows:
+                economics, state = native_execute_side_cell(
+                    row, latency, horizon, selected_action_side(row))
+                if economics is None:
+                    censored[key][state] += 1
+                    continue
+                observed += 1
+                if float(economics.get("filled") or 0) > 0:
+                    fills += 1
+                    events[key].append({
+                        "decision_ns": int(row["decision_ns"]),
+                        "decision_id": str(row["decision_id"]),
+                        "market_id": str(row["market_id"]),
+                        "asset": str(row.get("asset") or "UNKNOWN"),
+                        "contract_horizon": str(row.get("horizon") or "UNKNOWN"),
+                        "cash_pnl": float(economics["cash_pnl"]),
+                        "execution_state": state,
+                        "evidence_source": "NATIVE_KIND6_CAUSAL_REPRICING",
+                        **economics,
+                    })
+                else:
+                    no_fills += 1
+            stats = equity_stats(events[key])
+            metrics[key] = {
+                "opportunities": len(rows),
+                "observed_actions": observed,
+                "fills": fills,
+                "no_fills": no_fills,
+                "censored": len(rows) - observed,
+                **{k: v for k, v in stats.items() if k != "equity"},
+            }
+    return {
+        "evidence_source": "NATIVE_KIND6_CAUSAL_REPRICING_DIAGNOSTIC",
+        "not_exact_continuous_baseline": True,
+        "metrics": metrics,
+        "equity_events": {
+            k: sorted(v, key=lambda e: (e["decision_ns"], e["decision_id"]))
+            for k, v in events.items()
+        },
+        "equity_paths": {k: equity_stats(v)["equity"] for k, v in events.items()},
+        "censored": {k: dict(v) for k, v in censored.items()},
+    }
+
+
+def observed_surface_rows(surface):
+    return sum(
+        int(cell.get("observed_actions") or 0)
+        for cell in (surface.get("metrics") or {}).values()
+    )
+
+
 def design_record(row, side, latency, horizon, info_keys, tape_index=None, delay_ms=0):
     state = decision_side_state(row, side)
     if state is None:
@@ -470,37 +548,44 @@ class Ridge:
         z=np.hstack([np.ones((len(records),1)),z,missing.astype(float)])
         return z@self.beta
 
-def training_examples(rows, session_cache, info_keys, tape_index):
+def training_examples(rows, session_cache, info_keys, tape_index, *, native=False):
     records, targets, states = [], [], Counter()
     for row in rows:
-        session, reason = session_cache[row["decision_id"]]
-        if session is None:
-            states[str(reason)] += 1
-            continue
+        session = reason = None
+        if not native:
+            session, reason = session_cache[row["decision_id"]]
+            if session is None:
+                states[str(reason)] += 1
+                continue
         for latency in LATENCIES:
             for horizon in EXITS:
                 for side in decision_action_sides(row):
                     design=design_record(row,side,latency,horizon,info_keys,tape_index,0)
                     if design is None:
                         continue
-                    economics,state=execute_side_cell(row,session,latency,horizon,side)
+                    if native:
+                        economics,state=native_execute_side_cell(row,latency,horizon,side)
+                    else:
+                        economics,state=execute_side_cell(row,session,latency,horizon,side)
                     states[state]+=1
                     if economics is not None:
                         records.append(design)
                         targets.append(float(economics["cash_pnl"]))
     return records,targets,dict(states)
 
-def evaluate_model(model, rows, session_cache, info_keys, tape_index, delay_ms=0):
+def evaluate_model(model, rows, session_cache, info_keys, tape_index, delay_ms=0, *, native=False):
     metrics,events = {},defaultdict(list)
     censored,decisions = defaultdict(Counter),defaultdict(Counter)
     for latency in LATENCIES:
         for horizon in EXITS:
             key=f"{latency}::{horizon}"
             for row in rows:
-                session,reason=session_cache[row["decision_id"]]
-                if session is None:
-                    censored[key][str(reason)]+=1
-                    continue
+                session=reason=None
+                if not native:
+                    session,reason=session_cache[row["decision_id"]]
+                    if session is None:
+                        censored[key][str(reason)]+=1
+                        continue
                 candidates,sides=[],[]
                 for side in decision_action_sides(row):
                     rec=design_record(row,side,latency,horizon,info_keys,tape_index,delay_ms)
@@ -515,7 +600,10 @@ def evaluate_model(model, rows, session_cache, info_keys, tape_index, delay_ms=0
                     decisions[key]["NO_TRADE"]+=1
                     continue
                 side=sides[best]
-                economics,state=execute_side_cell(row,session,latency,horizon,side)
+                if native:
+                    economics,state=native_execute_side_cell(row,latency,horizon,side)
+                else:
+                    economics,state=execute_side_cell(row,session,latency,horizon,side)
                 if economics is None:
                     censored[key][state]+=1
                     continue
@@ -610,7 +698,19 @@ def run(root,output_dir,minimum_wall_ns,baseline_code_sha,source_sha):
     tape_index,feature_diag=load_feature_tape(root,start_ns,end_ns)
     nested,available=nested_family_keys(window_rows,tape_index)
     baseline_all=exact_baseline_cube(window_rows,session_cache)
-    baseline_test=exact_baseline_cube(splits["LOCAL_TEST"],session_cache)
+    baseline_test_continuous=exact_baseline_cube(splits["LOCAL_TEST"],session_cache)
+    native_baseline_all=native_baseline_cube(window_rows)
+    native_baseline_test=native_baseline_cube(splits["LOCAL_TEST"])
+    use_native=(
+        observed_surface_rows(baseline_all)==0
+        and observed_surface_rows(native_baseline_all)>0
+    )
+    primary_evidence=(
+        "NATIVE_KIND6_CAUSAL_REPRICING_DIAGNOSTIC"
+        if use_native else "CONTINUOUS_PM_L1"
+    )
+    baseline_primary=native_baseline_all if use_native else baseline_all
+    baseline_test=native_baseline_test if use_native else baseline_test_continuous
 
     write_json(output_dir/"01_2h_manifest.json",{
         "schema":SCHEMA+"_manifest_v1",**SAFETY,"automatic_promotion":False,
@@ -627,6 +727,9 @@ def run(root,output_dir,minimum_wall_ns,baseline_code_sha,source_sha):
         "opportunities":len(window_rows),"markets":len({str(r["market_id"]) for r in window_rows}),
         "split_rows":{k:len(v) for k,v in splits.items()},
         "pm_tape_diagnostics":tape_diag,"feature_tape_diagnostics":feature_diag,
+        "continuous_observed_surface_rows":observed_surface_rows(baseline_all),
+        "native_kind6_observed_surface_rows":observed_surface_rows(native_baseline_all),
+        "primary_research_evidence":primary_evidence,
         "available_feature_keys":list(available),
     })
     write_json(output_dir/"03_baseline_manifest.json",{
@@ -638,7 +741,16 @@ def run(root,output_dir,minimum_wall_ns,baseline_code_sha,source_sha):
         "exit_horizons_ms":list(EXITS),"size_shares":SIZE,"data_sha256":data.get("data_sha256"),
         "window_start_ns":start_ns,"window_end_ns":end_ns,
     })
-    write_json(output_dir/"04_baseline_2h.json",{"schema":SCHEMA+"_baseline_2h_v1",**SAFETY,"full_2h":baseline_all,"local_test_comparator":baseline_test})
+    write_json(output_dir/"04_baseline_2h.json",{
+        "schema":SCHEMA+"_baseline_2h_v1",**SAFETY,
+        "primary_research_evidence":primary_evidence,
+        "full_2h":baseline_primary,
+        "continuous_exact_full_2h":baseline_all,
+        "native_kind6_diagnostic_full_2h":native_baseline_all,
+        "local_test_comparator":baseline_test,
+        "continuous_local_test":baseline_test_continuous,
+        "native_kind6_local_test":native_baseline_test,
+    })
     write_json(output_dir/"05_external_backfill.json",{
         "schema":SCHEMA+"_external_inventory_v1",**SAFETY,
         "captured_causal_feature_tape":feature_diag,
@@ -660,14 +772,17 @@ def run(root,output_dir,minimum_wall_ns,baseline_code_sha,source_sha):
             scorecard.append({"family":family,"features_added":[],"status":"INSUFFICIENT_DATA","median_delta_pnl":None,"positive_fraction":None})
             continue
         try:
-            records,targets,states=training_examples(splits["TRAIN"],session_cache,keys,tape_index)
+            records,targets,states=training_examples(
+                splits["TRAIN"],session_cache,keys,tape_index,native=use_native)
             model=Ridge(8.0).fit(records,targets)
         except (ValueError,np.linalg.LinAlgError):
             scorecard.append({"family":family,"features_added":added,"status":"INSUFFICIENT_DATA","median_delta_pnl":None,"positive_fraction":None})
             continue
         models[family]=model
-        validation=evaluate_model(model,splits["VALIDATION"],session_cache,keys,tape_index,0)
-        test=evaluate_model(model,splits["LOCAL_TEST"],session_cache,keys,tape_index,0)
+        validation=evaluate_model(
+            model,splits["VALIDATION"],session_cache,keys,tape_index,0,native=use_native)
+        test=evaluate_model(
+            model,splits["LOCAL_TEST"],session_cache,keys,tape_index,0,native=use_native)
         delta=delta_cube(test,baseline_test);score=robust_score(delta)
         sample=[]
         for row in splits["LOCAL_TEST"][:16]:
@@ -692,7 +807,9 @@ def run(root,output_dir,minimum_wall_ns,baseline_code_sha,source_sha):
                 if delay and not tape_index:
                     curve[str(delay)]=None
                 else:
-                    delayed=evaluate_model(model,splits["LOCAL_TEST"],session_cache,nested[family],tape_index,delay)
+                    delayed=evaluate_model(
+                        model,splits["LOCAL_TEST"],session_cache,nested[family],tape_index,delay,
+                        native=use_native)
                     curve[str(delay)]=delayed["metrics"][cell]["total_pnl"]
         info_latency[family]=curve
     by_family={r["family"]:r for r in scorecard}
@@ -740,20 +857,29 @@ def run(root,output_dir,minimum_wall_ns,baseline_code_sha,source_sha):
     ranked.sort(key=lambda kv:float(kv[1]),reverse=True)
     best_family=ranked[0][0] if ranked else None
     best_result=results.get(best_family,{}).get("local_test") if best_family else None
-    write_json(output_dir/"15_equities.json",{"schema":SCHEMA+"_equities_v1",**SAFETY,"baseline":baseline_all["equity_paths"],"best_family":best_family,"best_enriched":(best_result or {}).get("events",{})})
+    write_json(output_dir/"15_equities.json",{
+        "schema":SCHEMA+"_equities_v1",**SAFETY,
+        "primary_research_evidence":primary_evidence,
+        "baseline":baseline_primary["equity_paths"],
+        "continuous_baseline":baseline_all["equity_paths"],
+        "native_kind6_baseline":native_baseline_all["equity_paths"],
+        "best_family":best_family,
+        "best_enriched":(best_result or {}).get("events",{}),
+    })
     write_json(output_dir/"16_feature_scorecard.json",{"schema":SCHEMA+"_scorecard_v1",**SAFETY,"rows":scorecard})
     promising=[r["family"] for r in scorecard if str(r.get("status","")).startswith("PROMISING_2H")]
     shortlist=["BASELINE_V0"]+promising[:3]
     write_json(output_dir/"17_shortlist.json",{"schema":SCHEMA+"_shortlist_v1",**SAFETY,"candidates":shortlist,"maximum_nonbaseline_candidates":3,"automatic_promotion":False,"next_stage":"LONGER_HISTORICAL_ROBUSTNESS_THEN_FROZEN_FUTURE_PAPER_OOS"})
     write_json(output_dir/"18_rejected_features.json",{"schema":SCHEMA+"_rejections_v1",**SAFETY,"rejected":[r for r in scorecard if r["status"]=="REJECT_2H_SCREEN"],"insufficient":[r for r in scorecard if r["status"]=="INSUFFICIENT_DATA"]})
 
-    bkey,bval=best_cell(baseline_all["metrics"]);rkey,rval=best_cell((best_result or {}).get("metrics",{}))
+    bkey,bval=best_cell(baseline_primary["metrics"]);rkey,rval=best_cell((best_result or {}).get("metrics",{}))
     (output_dir/"00_executive_summary.md").write_text(
         "# Multi-alpha 2H research\n\n"
         "**Status:** 2H INTERNAL RESEARCH TEST. Not final OOS evidence.\n\n"
         f"- Window: {start_ns} to {end_ns} (exactly 2 hours).\n"
         f"- Opportunities: {len(window_rows)}.\n"
-        f"- Exact baseline best cell: {bkey}; PnL {None if bval is None else bval.get('total_pnl')}.\n"
+        f"- Primary research evidence: {primary_evidence}.\n"
+        f"- Baseline/diagnostic best cell: {bkey}; PnL {None if bval is None else bval.get('total_pnl')}.\n"
         f"- Best enriched family on local test: {best_family}; cell {rkey}; PnL {None if rval is None else rval.get('total_pnl')}.\n"
         f"- Shortlist: {', '.join(shortlist)}.\n\n"
         "Window selection used data quality and causal coverage only. PnL was not used.\n"
