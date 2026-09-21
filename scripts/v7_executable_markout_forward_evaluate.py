@@ -211,7 +211,7 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
         "arrival_available": 0, "simulated_fills": 0, "marked_fills": 0,
         "positive_markout_fills": 0, "markout": 0.0,
         "prediction_errors": [], "inference_age_ms": [], "fill_sizes": [],
-        "forecast_values": [],
+        "forecast_values": [], "actual_targets": [],
     })
     for key, pred in sorted(predictions.items(), key=lambda item: int(item[1]["scored_wall_ns"])):
         asset = str(pred.get("asset") or "UNKNOWN")
@@ -244,6 +244,7 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
                     - cash_fee_per_share(target["bid"], rate, exponent)
                 )
                 cell["labels"] += 1
+                cell["actual_targets"].append(actual_target)
                 cell["prediction_errors"].append(forecast - actual_target)
             if forecast < .01:
                 continue
@@ -294,7 +295,14 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
         ages = cell.pop("inference_age_ms")
         sizes = cell.pop("fill_sizes")
         forecasts = cell.pop("forecast_values")
+        actuals = cell.pop("actual_targets")
+        cell["forecast_mean"] = sum(forecasts) / len(forecasts) if forecasts else None
         cell["forecast_quantiles"] = quantiles(forecasts)
+        cell["actual_target_mean"] = sum(actuals) / len(actuals) if actuals else None
+        cell["actual_target_quantiles"] = quantiles(actuals)
+        cell["actual_target_positive_fraction"] = (
+            sum(value > 0 for value in actuals) / len(actuals) if actuals else None
+        )
         cell["forecast_fractions"] = {
             str(threshold): (
                 sum(value >= threshold for value in forecasts) / len(forecasts)
