@@ -1,9 +1,9 @@
 {
-    "schema": "polymarket_v7_pure_arb_live_probe_request_v1",
-    "version": 1,
-    "request_id": "pure-arb-live-c7c4de15-second-20260921",
-    "expected_sha": "c7c4de15df26805f51b78733dcf755854ffc87e3",
-    "paper_only": true,
-    "authenticated_execution": false,
-    "real_order_submission": false
+  "schema": "polymarket_v7_pure_arb_live_probe_request_v1",
+  "version": 1,
+  "request_id": "pure-arb-post-grafana-folder-20260921",
+  "expected_sha": "c7c4de15df26805f51b78733dcf755854ffc87e3",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false
 }
