@@ -76,7 +76,7 @@ def load_request(path: Path) -> dict:
     ):
         raise ValueError("invalid capital budget")
     if not re.fullmatch(
-        r"docs/research/decomposed-horse-race-[0-9]{4}-[0-9]{2}-[0-9]{2}",
+        r"docs/research/decomposed-horse-race(?:-fast)?-[0-9]{4}-[0-9]{2}-[0-9]{2}",
         value["output_directory"],
     ):
         raise ValueError("invalid benchmark output directory")
