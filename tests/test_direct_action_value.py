@@ -16,6 +16,8 @@ from research.walk_forward_v3.risk_frontier import (
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
     FrictionPolicy,
+    action_execution_kernel,
+    economics_from_execution_kernel,
     StreamingRidge,
     candidate_sizes,
     decision_action_sides,
@@ -801,3 +803,39 @@ def test_nested_risk_frontier_never_uses_outer_oos_to_choose_policy():
             assert selection["policy_id"] is None
             assert selection["qualification"] == (
                 "VALIDATION_PARETO_SET_NO_SINGLE_SELECTION")
+
+
+def test_execution_kernel_is_economically_identical_for_all_candidate_sizes():
+    r = row("m980", exit_bid=.55, depth=20.0)
+    # Arrival depth below decision depth creates both full and partial fills.
+    r["arrivals"]["50"]["quantity"] = 6.0
+    kernel, state = action_execution_kernel(
+        r, horizon_ms=500, latency_ms=50)
+    assert state == "OBSERVED_EXECUTABLE"
+    assert kernel is not None
+
+    for size in (1.0, 5.0, 6.0, 10.0, 20.0):
+        direct, direct_state = realized_action_economics(
+            r, size=size, horizon_ms=500, latency_ms=50)
+        cached, cached_state = economics_from_execution_kernel(kernel, size)
+        assert direct_state == cached_state
+        assert direct.keys() == cached.keys()
+        for key in direct:
+            left, right = direct[key], cached[key]
+            if isinstance(left, float):
+                assert math.isclose(left, right, rel_tol=0, abs_tol=1e-12), key
+            else:
+                assert left == right, key
+
+
+def test_execution_kernel_preserves_zero_chase_no_fill_for_every_size():
+    r = row("m981", exit_bid=.55, depth=20.0)
+    r["arrivals"]["50"]["ask"] = .51
+    kernel, state = action_execution_kernel(
+        r, horizon_ms=500, latency_ms=50)
+    assert state == "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
+    for size in (1.0, 5.0, 20.0):
+        economics, observed = economics_from_execution_kernel(kernel, size)
+        assert observed == "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
+        assert economics["cash_pnl"] == 0.0
+        assert economics["filled"] == 0.0
