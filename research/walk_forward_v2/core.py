@@ -2151,6 +2151,7 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500),
                 minimum_tte_ns=105_000_000_000,
                 maximum_tte_ns=120_000_000_000,
                 require_full_visible_depth=True,
+                limit_chase_ticks=0,
             )
             pooled_cells[str(latency)] = {
                 "state": "READY",
@@ -2189,6 +2190,7 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500),
                 minimum_tte_ns=105_000_000_000,
                 maximum_tte_ns=120_000_000_000,
                 require_full_visible_depth=True,
+                limit_chase_ticks=0,
             )
             cid = family.lower() + "_" + hkey + "ms"
             result["live_policy_promotion_candidates"][cid] = {
