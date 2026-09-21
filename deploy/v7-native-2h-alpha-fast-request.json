@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_native_2h_alpha_fast_request_v1",
   "version": 1,
-  "request_id": "native-2h-alpha-fast-expanded-20260921",
+  "request_id": "native-2h-alpha-fast-expanded-r2-20260921",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "expected_research_sha": "4da1945f7ab8407db3ce13a1df8ef9c1f7976242",
   "minimum_wall_ns": 1790007780000000000,
