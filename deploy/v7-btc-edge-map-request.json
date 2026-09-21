@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_btc_edge_map_request_v1",
   "version": 1,
-  "request_id": "btc-edge-map-warm-index-20260921T2134CEST",
+  "request_id": "btc-edge-map-broad-grid-20260921T2150CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "2d4c82e4f21989130129e2495b0f75fcd065b4f3",
+  "expected_research_sha": "ad30ae0f0e825df038ce96f27c3fe580ad473430",
   "minimum_wall_ns": 1790007780000000000,
   "output_directory": "docs/research/btc-edge-map-fast-2026-09-21",
   "paper_only": true,
