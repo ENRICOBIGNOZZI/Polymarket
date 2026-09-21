@@ -211,6 +211,7 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
         "arrival_available": 0, "simulated_fills": 0, "marked_fills": 0,
         "positive_markout_fills": 0, "markout": 0.0,
         "prediction_errors": [], "inference_age_ms": [], "fill_sizes": [],
+        "forecast_values": [],
     })
     for key, pred in sorted(predictions.items(), key=lambda item: int(item[1]["scored_wall_ns"])):
         asset = str(pred.get("asset") or "UNKNOWN")
@@ -220,14 +221,16 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
             cell = cells[(asset, horizon)]
             cell["predictions"] += 1
             cell["inference_age_ms"].append(float(pred.get("inference_age_ns") or 0) / 1_000_000)
-            if origin is None:
-                continue
-            cell["origin_joined"] += 1
-            target = labels.get((*key, horizon))
             try:
                 forecast = float(predictions_map[str(horizon)])
             except (KeyError, TypeError, ValueError):
                 continue
+            if finite(forecast):
+                cell["forecast_values"].append(forecast)
+            if origin is None:
+                continue
+            cell["origin_joined"] += 1
+            target = labels.get((*key, horizon))
             if target is not None:
                 scored = int(pred["scored_wall_ns"])
                 if scored >= int(target["information_ns"]):
@@ -290,6 +293,15 @@ def evaluate(predictions: dict[tuple[Any, ...], dict[str, Any]],
         errors = cell.pop("prediction_errors")
         ages = cell.pop("inference_age_ms")
         sizes = cell.pop("fill_sizes")
+        forecasts = cell.pop("forecast_values")
+        cell["forecast_quantiles"] = quantiles(forecasts)
+        cell["forecast_fractions"] = {
+            str(threshold): (
+                sum(value >= threshold for value in forecasts) / len(forecasts)
+                if forecasts else None
+            )
+            for threshold in (0.0, .0025, .005, .01, .02)
+        }
         cell["mae"] = sum(abs(x) for x in errors) / len(errors) if errors else None
         cell["bias"] = sum(errors) / len(errors) if errors else None
         cell["inference_age_ms_quantiles"] = quantiles(ages)
