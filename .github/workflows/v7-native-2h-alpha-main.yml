@@ -102,8 +102,6 @@ jobs:
             --source-sha "$SOURCE_SHA" \
             --minimum-wall-ns "$MINIMUM_WALL_NS" \
             --output-dir "$OUTPUT_DIR"
-          PYTHONPATH=. python3 -m research.walk_forward_v3.native_2h_alpha_figures \
-            --root "$OUTPUT_DIR"
 
       - name: Render exhaustive equity gallery on runner
         run: |
@@ -132,12 +130,12 @@ jobs:
           assert manifest['cells_per_alpha']==60
           assert manifest['figure_count']>=len(data['alphas'])*8+60
           assert (root/'21_native_alpha_grid.csv').is_file()
-          assert (root/'22_native_alpha_equity_paths.csv.gz').is_file()
+          assert (root/'22_native_alpha_equity_1m.csv.gz').is_file()
           rows=list(csv.DictReader(open(root/'21_native_alpha_grid.csv',newline='')))
           assert len(rows)==len(data['alphas'])*60
-          with gzip.open(root/'22_native_alpha_equity_paths.csv.gz','rt',encoding='utf-8') as f:
+          with gzip.open(root/'22_native_alpha_equity_1m.csv.gz','rt',encoding='utf-8') as f:
               header=f.readline().strip()
-              assert 'cumulative_pnl' in header
+              assert 'minute' in header and 'cumulative_pnl' in header
           PY
 
       - name: Publish only to isolated research branch
