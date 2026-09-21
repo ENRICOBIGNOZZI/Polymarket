@@ -790,6 +790,12 @@ class Manager:
             "launch_retry_count": len(self.launch_retry_attempts),
             "launch_retry_attempts": dict(sorted(self.launch_retry_attempts.items())),
             "launch_retry_reasons": dict(sorted(self.launch_retry_reasons.items())),
+            "observation_only": bool(getattr(self.args, "observation_only", False)),
+            "execution_mode": (
+                "OBSERVATION_ONLY"
+                if getattr(self.args, "observation_only", False)
+                else "PAPER_SIMULATED"
+            ),
             "native_capture_mode": (
                 "FULL" if getattr(self.args, "capture_native_observations", False)
                 else "SCOPED_FULL_REQUESTED" if getattr(self.args, "capture_native_full_context", [])
@@ -985,6 +991,8 @@ class Manager:
         capture_headroom = shutil.disk_usage(self.run_root).free >= 20 * 1024**3
         if full_requested and capture_headroom:
             command.append("--capture-native-observations")
+        if getattr(self.args, "observation_only", False):
+            command.append("--observation-only")
         if getattr(self.args, "capture_execution_windows", False):
             command.extend(["--capture-execution-windows", "--execution-window-ns",
                             str(self.args.execution_window_ns)])
@@ -1343,6 +1351,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maximum-tte-ns", type=int, default=120_000_000_000)
     parser.add_argument("--maker-share-cap-microunits", type=int, default=1_000_000)
     parser.add_argument("--asynchronous-settlement", action="store_true")
+    parser.add_argument("--observation-only", action="store_true",
+        help="Keep native feeds/evidence running while preventing any worker admission/execution")
     parser.add_argument("--capture-native-observations", action="store_true",
         help="Full bounded native book/trade + decision research capture")
     parser.add_argument("--capture-native-decisions", action="store_true",
