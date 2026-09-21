@@ -1,0 +1,11 @@
+{
+  "schema": "polymarket_v7_cancel_stale_london_cutover_v1",
+  "version": 1,
+  "request_id": "cancel-e04f3a37-for-c7c4de15-20260921",
+  "command_id": "75cfe924-8bfb-4356-99b8-aae164e4ba50",
+  "stale_sha": "e04f3a37ab915fb382625c857881d9672f38cc1a",
+  "replacement_sha": "c7c4de15df26805f51b78733dcf755854ffc87e3",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false
+}
