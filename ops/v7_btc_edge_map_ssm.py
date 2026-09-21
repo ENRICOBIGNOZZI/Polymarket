@@ -12,6 +12,8 @@ PATHS=(
     "research/walk_forward_v3/__init__.py",
     "research/walk_forward_v3/direct_action.py",
     "research/walk_forward_v3/btc_edge_map.py",
+    "research/walk_forward_v3/btc_compact_equity.py",
+    "scripts/v7_multi_crypto_compact_pm_tape.py",
     "research/walk_forward_v2/__init__.py",
     "research/walk_forward_v2/core.py",
     "research/economic/causal_replay.py",
@@ -50,6 +52,10 @@ PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.
   --root {ctx['run_root']} \
   --minimum-wall-ns {a.minimum_wall_ns} \
   --output {remote}/output/btc_edge_map.json
+PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.walk_forward_v3.btc_compact_equity \
+  --root {ctx['run_root']} \
+  --minimum-wall-ns {a.minimum_wall_ns} \
+  --output {remote}/output/btc_compact_equity.json
 python3 - {remote}/output/btc_edge_map.json <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1]))
@@ -64,6 +70,14 @@ assert v['asset']=='BTC'
 assert v['broad_surface_latencies_ms']==[0,5,10,15,25,35,50,75,100,150,250,350,500,750,1000]
 assert v['broad_surface_exit_horizons_ms']==[50,100,150,250,350,500,750,1000,1500,2000,3000,4000,5000,7500,10000,15000,30000]
 assert v['broad_surface_target_size_shares']==5.0
+q=json.load(open(sys.argv[1].replace('btc_edge_map.json','btc_compact_equity.json')))
+assert q['schema']=='polymarket_v7_btc_compact_timing_equity_v1'
+assert q['state']=='READY'
+assert q['paper_only'] is True
+assert q['authenticated_execution'] is False
+assert q['real_order_submission'] is False
+assert q['latencies_ms']==[10,25,50,100,250]
+assert q['exit_horizons_ms']==[500,750,1000,1500,2000,3000,4000,5000]
 assert v['splits']['DISCOVERY']['entry_exit_surface']['equity_latencies_ms']==[10,25,50,100,250]
 assert v['splits']['DISCOVERY']['entry_exit_surface']['equity_exit_horizons_ms']==[500,750,1000,1500,2000,3000,4000,5000]
 print('BTC_EDGE_MAP_READY')
