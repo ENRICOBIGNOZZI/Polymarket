@@ -7,13 +7,14 @@ no future-after-target state and no trading authority.
 from __future__ import annotations
 
 import argparse
+import gzip
 from bisect import bisect_right
 from collections import defaultdict
 import json
 import math
 from pathlib import Path
 
-from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, fee_per_share, json_lines, valid_book, book_from_row, json_lines
+from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, fee_per_share, valid_book, book_from_row
 from research.walk_forward_v3.direct_action import (
     DEFAULT_HARD_ORDER_NOTIONAL,
     _valid_state,
@@ -30,8 +31,8 @@ from scripts.v7_multi_crypto_compact_pm_tape import (
 )
 
 SCHEMA="polymarket_v7_btc_compact_timing_equity_v1"
-LATENCIES=(10,25,50,100,250)
-EXITS=(500,750,1000,1500,2000,3000,4000,5000)
+LATENCIES=(5,10,25,50,100,250)
+EXITS=(500,750,1000,1500,2000,3000,4000,5000,7500,10000)
 SIZE=5.0
 
 
@@ -58,6 +59,30 @@ def compact_dirs(root):
     return sorted(out)
 
 
+def robust_json_lines(path):
+    """Read plain or gzip JSONL by magic bytes, not filename suffix."""
+    path=Path(path)
+    try:
+        with path.open("rb") as probe:
+            magic=probe.read(2)
+    except OSError:
+        return
+    opener=gzip.open if magic==b"\\x1f\\x8b" else open
+    try:
+        with opener(path,"rt",encoding="utf-8") as stream:
+            for line in stream:
+                if not line.endswith("\\n"):
+                    continue
+                try:
+                    value=json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(value,dict):
+                    yield value
+    except (OSError,UnicodeDecodeError):
+        return
+
+
 def jsonl_sessions(root, rows):
     market_windows={}
     for row in rows:
@@ -78,7 +103,7 @@ def jsonl_sessions(root, rows):
     rows_out=[]
     scanned=retained=0
     for path in paths:
-        for raw in json_lines(path):
+        for raw in robust_json_lines(path):
             scanned+=1
             if raw is None or not valid_book(raw):
                 continue
