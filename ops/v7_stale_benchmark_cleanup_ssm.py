@@ -42,10 +42,10 @@ for line in rows:
         try: targets.append(int(pid_text))
         except ValueError: pass
     if active in args:
-        active_rows.append({
-            "pid":int(pid_text),"elapsed":etime,
-            "cpu":float(cpu),"mem":float(mem),
-        })
+        active_rows.append(dict(
+            pid=int(pid_text),elapsed=etime,
+            cpu=float(cpu),mem=float(mem),
+        ))
 print("stale_targets="+",".join(map(str,targets)))
 print("active_processes_json="+__import__("json").dumps(active_rows,separators=(",",":")))
 for pid in targets:
