@@ -24,7 +24,7 @@ jobs:
         run: |
           python3 - deploy/v7-mamma-grafana-robust-probe-request.json <<'PY'
           import json,sys
-          assert json.load(open(sys.argv[1])) == {"schema":"polymarket_v7_mamma_grafana_robust_probe_v1","read_only":True}
+          assert json.load(open(sys.argv[1]))=={"schema":"polymarket_v7_mamma_grafana_robust_probe_v1","read_only":True}
           PY
 
       - name: Select Tailscale credential
@@ -43,14 +43,14 @@ jobs:
             exit 1
           fi
 
-      - name: Join tailnet authkey
+      - name: Join tailnet with auth key
         if: steps.ts.outputs.mode == 'authkey'
         uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
           ping: ${{ env.SERVER_HOST }}
 
-      - name: Join tailnet oauth
+      - name: Join tailnet with OAuth
         if: steps.ts.outputs.mode == 'oauth'
         uses: tailscale/github-action@v4
         with:
@@ -64,15 +64,16 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
         run: |
           set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/key
           chmod 600 ~/.ssh/key
           ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
 
-      - name: Run probe
+      - name: Copy and run read-only probe
         run: |
           set -euo pipefail
           scp -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -P "$SERVER_PORT" \
             ops/v7_mamma_grafana_probe.sh "$SERVER_USER@$SERVER_HOST:/tmp/v7_mamma_grafana_probe.sh"
-          ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -p "$SERVER_PORT" \
-            "$SERVER_USER@$SERVER_HOST" 'bash /tmp/v7_mamma_grafana_probe.sh; rm -f /tmp/v7_mamma_grafana_probe.sh'
+          ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            'chmod 700 /tmp/v7_mamma_grafana_probe.sh && /tmp/v7_mamma_grafana_probe.sh; rm -f /tmp/v7_mamma_grafana_probe.sh'
