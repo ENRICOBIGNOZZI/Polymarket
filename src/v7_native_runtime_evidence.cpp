@@ -438,6 +438,7 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"identity_provenance", event.kind == 4 ? json::value("EXACT_RUNTIME_ARTIFACT_V1") : json::value(nullptr)},
             {"run_id", config.run_id}, {"server_id", config.server_id},
             {"market_id", config.market_id}, {"token_id", token(event.instrument_handle)},
+            {"yes_token_id", config.yes_token_id}, {"no_token_id", config.no_token_id},
             {"asset", config.asset}, {"horizon", config.horizon},
             {"capture_id", capture_id}, {"connection_epoch", event.connection_epoch},
             {"capture_mode", config.observation_capture_mode},
@@ -491,6 +492,10 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"yes_ask_e4", event.repricing_pair_valid ? json::value(event.yes_ask_e4) : json::value(nullptr)},
             {"no_bid_e4", event.repricing_pair_valid ? json::value(event.no_bid_e4) : json::value(nullptr)},
             {"no_ask_e4", event.repricing_pair_valid ? json::value(event.no_ask_e4) : json::value(nullptr)},
+            {"yes_bid_quantity", event.repricing_pair_valid ? json::value(event.yes_bid_quantity) : json::value(nullptr)},
+            {"yes_ask_quantity", event.repricing_pair_valid ? json::value(event.yes_ask_quantity) : json::value(nullptr)},
+            {"no_bid_quantity", event.repricing_pair_valid ? json::value(event.no_bid_quantity) : json::value(nullptr)},
+            {"no_ask_quantity", event.repricing_pair_valid ? json::value(event.no_ask_quantity) : json::value(nullptr)},
             {"repricing_origin_signal_version", event.repricing_origin_signal_version > 0
                 ? json::value(event.repricing_origin_signal_version) : json::value(nullptr)},
             {"repricing_horizon_ms", event.repricing_horizon_ms > 0

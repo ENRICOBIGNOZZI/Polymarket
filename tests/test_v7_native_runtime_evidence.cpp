@@ -133,6 +133,10 @@ int main() {
         observation.repricing_pair_valid = 1;
         observation.yes_bid_e4 = 4000; observation.yes_ask_e4 = 4100;
         observation.no_bid_e4 = 5900; observation.no_ask_e4 = 6000;
+        observation.yes_bid_quantity = 3'000'000;
+        observation.yes_ask_quantity = 4'000'000;
+        observation.no_bid_quantity = 5'000'000;
+        observation.no_ask_quantity = 6'000'000;
         observation.repricing_origin_signal_version = 42;
         observation.repricing_horizon_ms = 500;
         observation.external_valid = 1;
@@ -251,6 +255,8 @@ int main() {
         assert(!observation.at("economic_score_fill_conditioned").as_bool());
         assert(!observation.at("selector_score_comparable").as_bool());
         assert(observation.at("token_id").as_string() == "yes-token");
+        assert(observation.at("yes_token_id").as_string() == "yes-token");
+        assert(observation.at("no_token_id").as_string() == "no-token");
         assert(observation.at("capture_id").is_string());
         assert(observation.at("model_artifact_hash").is_null());
         assert(observation.at("policy_hash").is_null());
@@ -272,6 +278,10 @@ int main() {
         assert(observation.at("repricing_pair_valid").as_bool());
         assert(observation.at("yes_bid_e4").as_int64() == 4000);
         assert(observation.at("no_ask_e4").as_int64() == 6000);
+        assert(observation.at("yes_bid_quantity").as_int64() == 3'000'000);
+        assert(observation.at("yes_ask_quantity").as_int64() == 4'000'000);
+        assert(observation.at("no_bid_quantity").as_int64() == 5'000'000);
+        assert(observation.at("no_ask_quantity").as_int64() == 6'000'000);
         assert(observation.at("repricing_origin_signal_version").as_int64() == 42);
         assert(observation.at("repricing_horizon_ms").as_int64() == 500);
         assert(observation.at("signal_age_ns").as_int64() == 60'000);

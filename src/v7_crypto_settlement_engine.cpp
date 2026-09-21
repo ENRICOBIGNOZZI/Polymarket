@@ -583,6 +583,10 @@ int main(int argc, char** argv) {
             if (out.repricing_pair_valid != 0) {
                 out.yes_bid_e4 = yes_book.best_bid_e4; out.yes_ask_e4 = yes_book.best_ask_e4;
                 out.no_bid_e4 = no_book.best_bid_e4; out.no_ask_e4 = no_book.best_ask_e4;
+                out.yes_bid_quantity = yes_book.best_bid_microunits;
+                out.yes_ask_quantity = yes_book.best_ask_microunits;
+                out.no_bid_quantity = no_book.best_bid_microunits;
+                out.no_ask_quantity = no_book.best_ask_microunits;
             }
         };
         const auto start_repricing_window = [&](std::uint64_t signal_version,

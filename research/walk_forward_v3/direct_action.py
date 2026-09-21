@@ -96,15 +96,109 @@ def _valid_state(row, *, minimum_tte_ns=DEFAULT_MINIMUM_TTE_NS,
     )
 
 
-def candidate_sizes(row, *, size_grid=DEFAULT_SIZE_GRID,
+def selected_action_side(row):
+    token = str(row.get("token_id") or "")
+    yes = str(row.get("yes_token_id") or "")
+    no = str(row.get("no_token_id") or "")
+    if yes and token == yes:
+        return "YES"
+    if no and token == no:
+        return "NO"
+    return "SELECTED"
+
+
+def action_side_sign(row, side):
+    if side == "YES":
+        return 1.0
+    if side == "NO":
+        return -1.0
+    direction = float(row.get("direction") or 0)
+    return 1.0 if direction >= 0 else -1.0
+
+
+def decision_side_state(row, side=None):
+    side = side or selected_action_side(row)
+    pair = row.get("pair")
+    if (
+        side in ("YES", "NO")
+        and isinstance(pair, dict)
+        and pair.get("state") == "BILATERAL_EXECUTABLE_READY"
+    ):
+        state = pair.get(side.lower())
+        if isinstance(state, dict):
+            return {
+                "bid": float(state["bid"]),
+                "ask": float(state["ask"]),
+                "bid_quantity": float(state.get("bid_quantity") or 0.0),
+                "ask_quantity": float(state.get("ask_quantity") or 0.0),
+            }
+    selected = selected_action_side(row)
+    if side == "SELECTED" or side == selected:
+        return {
+            "bid": float(row["bid"]),
+            "ask": float(row["ask"]),
+            "bid_quantity": float(row.get("bid_quantity") or 0.0),
+            "ask_quantity": float(row.get("quantity") or 0.0),
+        }
+    return None
+
+
+def observed_side_state(container, side, row):
+    pair = container.get("pair") if isinstance(container, dict) else None
+    if (
+        side in ("YES", "NO")
+        and isinstance(pair, dict)
+        and pair.get("state") == "BILATERAL_EXECUTABLE_READY"
+    ):
+        state = pair.get(side.lower())
+        if isinstance(state, dict):
+            return {
+                "bid": float(state["bid"]),
+                "ask": float(state["ask"]),
+                "bid_quantity": float(state.get("bid_quantity") or 0.0),
+                "ask_quantity": float(state.get("ask_quantity") or 0.0),
+            }
+    selected = selected_action_side(row)
+    if side == "SELECTED" or side == selected:
+        bid = container.get("bid", container.get("arrival_bid"))
+        ask = container.get("ask", container.get("arrival_ask"))
+        quantity = container.get("quantity", container.get("arrival_quantity"))
+        if finite(bid) and finite(ask):
+            return {
+                "bid": float(bid), "ask": float(ask),
+                "bid_quantity": 0.0,
+                "ask_quantity": float(quantity or 0.0),
+            }
+    return None
+
+
+def decision_action_sides(row):
+    pair = row.get("pair")
+    if (
+        isinstance(pair, dict)
+        and pair.get("state") == "BILATERAL_EXECUTABLE_READY"
+        and all(
+            isinstance(pair.get(side), dict)
+            and float(pair[side].get("ask_quantity") or 0) > 0
+            for side in ("yes", "no")
+        )
+    ):
+        return ("YES", "NO")
+    return (selected_action_side(row),)
+
+
+def candidate_sizes(row, *, side=None, size_grid=DEFAULT_SIZE_GRID,
                     hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
                     available_capital=None, max_sizes=5):
     """Decision-time feasible size support.  No future depth enters here."""
     if not _valid_state(row):
         return []
-    ask = float(row["ask"])
+    state = decision_side_state(row, side)
+    if state is None:
+        return []
+    ask = float(state["ask"])
     minimum = float(row["minimum"])
-    depth = float(row["quantity"])
+    depth = float(state["ask_quantity"])
     cap = float(hard_order_notional)
     if available_capital is not None:
         cap = min(cap, max(0.0, float(available_capital)))
@@ -131,7 +225,7 @@ def candidate_sizes(row, *, size_grid=DEFAULT_SIZE_GRID,
     return [ordered[i] for i in sorted(indices)]
 
 
-def realized_action_economics(row, *, size, horizon_ms, latency_ms,
+def realized_action_economics(row, *, size, horizon_ms, latency_ms, side=None,
                               entry_cap=DEFAULT_ENTRY_CAP,
                               hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
                               require_full_decision_depth=True):
@@ -145,14 +239,19 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms,
         return None, "HORIZON_NOT_AFTER_EXECUTION"
     if not _valid_state(row):
         return None, "STATE_OUTSIDE_RESEARCH_SUPPORT"
-    ask0 = float(row["ask"])
-    bid0 = float(row["bid"])
+    side = side or selected_action_side(row)
+    decision_state = decision_side_state(row, side)
+    if decision_state is None:
+        return None, "SIDE_DECISION_EVIDENCE_UNAVAILABLE"
+    ask0 = float(decision_state["ask"])
+    bid0 = float(decision_state["bid"])
+    decision_depth = float(decision_state["ask_quantity"])
     size = float(size)
     if ask0 > entry_cap + 1e-12:
         return None, "ENTRY_CAP"
     if size + 1e-12 < float(row["minimum"]) or size <= 0:
         return None, "BELOW_VENUE_MINIMUM"
-    if require_full_decision_depth and size > float(row["quantity"]) + 1e-12:
+    if require_full_decision_depth and size > decision_depth + 1e-12:
         return None, "INSUFFICIENT_DECISION_DEPTH"
     if size * ask0 > float(hard_order_notional) + 1e-9:
         return None, "ORDER_NOTIONAL_CAP"
@@ -160,11 +259,15 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms,
     book, why = arrival(row, int(latency_ms))
     if book is None:
         return None, str(why or "ARRIVAL_UNAVAILABLE")
+    arrival_state = observed_side_state(book, side, row)
+    if arrival_state is None:
+        return None, "SIDE_ARRIVAL_EVIDENCE_UNAVAILABLE"
 
     # Zero chase.  A causally observed non-fill is a real zero payoff for this
     # action, not censored evidence.
-    if float(book["ask"]) > ask0 + 1e-12:
+    if float(arrival_state["ask"]) > ask0 + 1e-12:
         return {
+            "side": side,
             "cash_pnl": 0.0,
             "gross_executable_markout": 0.0,
             "filled": 0.0,
@@ -180,9 +283,10 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms,
             "ideal_midpoint_alpha": None,
             "frictions_embedded_in_cash_pnl": True,
         }, "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
-    fill = min(size, float(book.get("quantity") or 0.0))
+    fill = min(size, float(arrival_state.get("ask_quantity") or 0.0))
     if fill <= 0:
         return {
+            "side": side,
             "cash_pnl": 0.0,
             "gross_executable_markout": 0.0,
             "filled": 0.0,
@@ -200,18 +304,21 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms,
         }, "OBSERVED_NO_FILL_ZERO_DEPTH"
 
     target = row.get("targets", {}).get(str(int(horizon_ms)), {})
-    if target.get("state") != "OBSERVED" or not finite(target.get("arrival_bid")):
+    if target.get("state") != "OBSERVED":
         return None, "EXIT_EVIDENCE_UNAVAILABLE"
+    exit_state = observed_side_state(target, side, row)
+    if exit_state is None:
+        return None, "SIDE_EXIT_EVIDENCE_UNAVAILABLE"
 
-    entry_price = float(book["ask"])
-    exit_bid = float(target["arrival_bid"])
+    entry_price = float(arrival_state["ask"])
+    exit_bid = float(exit_state["bid"])
     entry_fee = fee_per_share(row, entry_price) * fill
     exit_fee = fee_per_share(row, exit_bid) * fill
     gross_executable = fill * (exit_bid - entry_price)
     cash_pnl = gross_executable - entry_fee - exit_fee
 
     decision_mid = (bid0 + ask0) / 2.0
-    future_ask = target.get("arrival_ask")
+    future_ask = exit_state.get("ask")
     future_mid = (
         (exit_bid + float(future_ask)) / 2.0
         if finite(future_ask) and float(future_ask) > exit_bid
@@ -227,6 +334,7 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms,
     )
     state = "OBSERVED_FULL_FILL" if fill + 1e-12 >= size else "OBSERVED_PARTIAL_FILL"
     return {
+        "side": side,
         "cash_pnl": float(cash_pnl),
         "gross_executable_markout": float(gross_executable),
         "filled": float(fill),
@@ -250,12 +358,12 @@ def realized_action_economics(row, *, size, horizon_ms, latency_ms,
     }, state
 
 
-def realized_action_value(row, *, size, horizon_ms, latency_ms,
+def realized_action_value(row, *, size, horizon_ms, latency_ms, side=None,
                           entry_cap=DEFAULT_ENTRY_CAP,
                           hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
                           require_full_decision_depth=True):
     economics, state = realized_action_economics(
-        row, size=size, horizon_ms=horizon_ms, latency_ms=latency_ms,
+        row, size=size, horizon_ms=horizon_ms, latency_ms=latency_ms, side=side,
         entry_cap=entry_cap, hard_order_notional=hard_order_notional,
         require_full_decision_depth=require_full_decision_depth)
     return (None if economics is None else float(economics["cash_pnl"])), state
@@ -282,7 +390,8 @@ def residual_policy_friction(action, row, *, portfolio_state=None,
     state = portfolio_state or {}
     asset_signed = state.get("asset_signed_notional") or {}
     asset = str(row.get("asset") or "UNKNOWN")
-    direction = 1.0 if float(row.get("direction") or 0) >= 0 else -1.0
+    side = str(action.get("side") or selected_action_side(row))
+    direction = action_side_sign(row, side)
     signed = direction * notional
 
     current_asset = float(asset_signed.get(asset, 0.0) or 0.0)
@@ -646,12 +755,14 @@ class DirectActionValueModel:
         names = [
             "state.ask", "state.bid", "state.spread", "state.depth",
             "state.minimum", "state.tte_s", "state.signal_age_ms",
-            "state.direction", "action.size", "action.size2",
+            "state.direction", "action.side_sign", "action.signal_alignment",
+            "action.size", "action.size2",
             "action.log_size", "action.depth_fraction", "action.notional",
             "action.notional_fraction_of_cap", "action.exit_horizon_ms",
             "action.log_exit_horizon", "system.latency_ms",
             "system.log_latency", "interaction.size_signal",
             "interaction.size_abs_signal", "interaction.size_spread",
+            "interaction.size_signal_alignment",
             "interaction.size2_over_depth", "interaction.horizon_signal",
             "interaction.horizon_abs_signal",
         ]
@@ -662,10 +773,16 @@ class DirectActionValueModel:
         names.extend("latency::" + str(v) for v in self.train_latencies_ms)
         self.model_feature_names = tuple(names)
 
-    def _action_record(self, row, *, size, horizon_ms, latency_ms):
-        ask = float(row["ask"])
-        bid = float(row["bid"])
-        depth = max(1e-12, float(row["quantity"]))
+    def _action_record(self, row, *, size, horizon_ms, latency_ms, side=None):
+        side = side or selected_action_side(row)
+        side_state = decision_side_state(row, side)
+        if side_state is None:
+            raise ValueError("action side lacks decision L1 evidence")
+        ask = float(side_state["ask"])
+        bid = float(side_state["bid"])
+        depth = max(1e-12, float(side_state["ask_quantity"]))
+        side_sign = action_side_sign(row, side)
+        alignment = side_sign * float(row.get("direction") or 0)
         signal = 0.0
         for key in (
             "external.binance_return_100ms_bp", "binance_return_100ms_bp",
@@ -684,6 +801,8 @@ class DirectActionValueModel:
             "state.tte_s": float(row["tte_ns"]) / 1e9,
             "state.signal_age_ms": float(row.get("signal_age_ns") or 0) / 1e6,
             "state.direction": float(row.get("direction") or 0),
+            "action.side_sign": side_sign,
+            "action.signal_alignment": alignment,
             "action.size": float(size),
             "action.size2": float(size) ** 2,
             "action.log_size": math.log1p(float(size)),
@@ -697,6 +816,7 @@ class DirectActionValueModel:
             "interaction.size_signal": float(size) * signal,
             "interaction.size_abs_signal": float(size) * abs(signal),
             "interaction.size_spread": float(size) * (ask - bid),
+            "interaction.size_signal_alignment": float(size) * signal * alignment,
             "interaction.size2_over_depth": float(size) ** 2 / depth,
             "interaction.horizon_signal": math.log1p(float(horizon_ms)) * signal,
             "interaction.horizon_abs_signal": math.log1p(float(horizon_ms)) * abs(signal),
@@ -722,6 +842,7 @@ class DirectActionValueModel:
             "asset": asset,
             "contract_horizon": contract,
             "decision_ns": int(row["decision_ns"]),
+            "side": side,
             "size": float(size),
             "exit_horizon_ms": int(horizon_ms),
             "latency_ms": int(latency_ms),
@@ -736,34 +857,38 @@ class DirectActionValueModel:
                 if state_counter is not None:
                     state_counter["STATE_OUTSIDE_RESEARCH_SUPPORT"] += 1
                 continue
-            sizes = candidate_sizes(
-                row, size_grid=self.size_grid,
-                hard_order_notional=self.hard_order_notional,
-                max_sizes=self.max_sizes_per_state,
-            )
-            if not sizes:
-                if state_counter is not None:
-                    state_counter["NO_FEASIBLE_SIZE"] += 1
-                continue
             for latency in self.train_latencies_ms:
                 for horizon in self.action_horizons_ms:
                     if horizon <= latency:
                         continue
-                    for size in sizes:
-                        target, state = realized_action_value(
-                            row, size=size, horizon_ms=horizon, latency_ms=latency,
-                            entry_cap=self.entry_cap,
+                    for side in decision_action_sides(row):
+                        sizes = candidate_sizes(
+                            row, side=side, size_grid=self.size_grid,
                             hard_order_notional=self.hard_order_notional,
+                            max_sizes=self.max_sizes_per_state,
                         )
-                        if state_counter is not None:
-                            state_counter[state] += 1
-                        if target is None:
+                        if not sizes:
+                            if state_counter is not None:
+                                state_counter["NO_FEASIBLE_SIZE"] += 1
                             continue
-                        action = self._action_record(
-                            row, size=size, horizon_ms=horizon, latency_ms=latency)
-                        action["target"] = float(target)
-                        action["target_state"] = state
-                        yield action
+                        for size in sizes:
+                            target, state = realized_action_value(
+                                row, size=size, horizon_ms=horizon, latency_ms=latency,
+                                side=side, entry_cap=self.entry_cap,
+                                hard_order_notional=self.hard_order_notional,
+                            )
+                            if state_counter is not None:
+                                state_counter[state] += 1
+                            if target is None:
+                                continue
+                            action = self._action_record(
+                                row, size=size, horizon_ms=horizon,
+                                latency_ms=latency, side=side)
+                            action["target"] = float(target)
+                            action["target_state"] = state
+                            if state_counter is not None:
+                                state_counter["ACTION_SIDE_" + side] += 1
+                            yield action
 
 
     @staticmethod
@@ -871,8 +996,8 @@ class DirectActionValueModel:
             "action_horizons_ms": list(self.action_horizons_ms),
             "train_latencies_ms": list(self.train_latencies_ms),
             "latency_role": "CONDITIONING_STATE_NOT_OPTIMIZED_ACTION",
-            "action_space": ["NO_TRADE", "SIGNALED_SIDE_X_SIZE_X_EXIT_HORIZON"],
-            "opposite_side_counterfactual": "UNAVAILABLE_UNTIL_BOTH_SIDES_ARE_CAPTURED_CAUSALLY",
+            "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
+            "opposite_side_counterfactual": "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_AND_EXIT_EVIDENCE",
             "entry_cap": self.entry_cap,
             "hard_order_notional": self.hard_order_notional,
             "model": "STREAMING_RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
@@ -931,16 +1056,21 @@ class DirectActionValueModel:
             return 0.0
         return float(model.beta[1 + index]) / float(model.scale[name])
 
-    def _quantity_shape(self, model, row, *, horizon_ms, latency_ms):
+    def _quantity_shape(self, model, row, *, horizon_ms, latency_ms, side):
         """Represent model prediction as c + A*q + B*q^2 + C*log(1+q)."""
         base = self._action_record(
-            row, size=0.0, horizon_ms=horizon_ms, latency_ms=latency_ms)
+            row, size=0.0, horizon_ms=horizon_ms, latency_ms=latency_ms, side=side)
         constant = float(model.predict(base))
-        ask = float(row["ask"])
-        bid = float(row["bid"])
-        depth = max(1e-12, float(row["quantity"]))
+        side_state = decision_side_state(row, side)
+        if side_state is None:
+            raise ValueError("quantity shape side unavailable")
+        ask = float(side_state["ask"])
+        bid = float(side_state["bid"])
+        depth = max(1e-12, float(side_state["ask_quantity"]))
         signal = self._signal_scalar(row)
         spread = ask - bid
+        side_sign = action_side_sign(row, side)
+        alignment = side_sign * float(row.get("direction") or 0)
 
         linear = 0.0
         quadratic = 0.0
@@ -971,6 +1101,11 @@ class DirectActionValueModel:
             self._raw_feature_coefficient(model, "interaction.size_spread")
             * spread
         )
+        linear += (
+            self._raw_feature_coefficient(
+                model, "interaction.size_signal_alignment")
+            * signal * alignment
+        )
         quadratic += (
             self._raw_feature_coefficient(
                 model, "interaction.size2_over_depth")
@@ -978,19 +1113,22 @@ class DirectActionValueModel:
         )
         return (constant, linear, quadratic, log_term)
 
-    def _quantity_bounds(self, row, available_capital):
-        ask = float(row["ask"])
+    def _quantity_bounds(self, row, available_capital, side):
+        side_state = decision_side_state(row, side)
+        if side_state is None:
+            return float(row["minimum"]), 0.0
+        ask = float(side_state["ask"])
         lower = float(row["minimum"])
         cap = self.hard_order_notional
         if available_capital is not None:
             cap = min(cap, max(0.0, float(available_capital)))
-        upper = min(float(row["quantity"]), cap / ask)
+        upper = min(float(side_state["ask_quantity"]), cap / ask)
         return lower, upper
 
-    def _score_quantity(self, row, *, size, horizon_ms, latency_ms,
+    def _score_quantity(self, row, *, size, horizon_ms, latency_ms, side,
                         portfolio_state, capital_budget):
         action = self._action_record(
-            row, size=size, horizon_ms=horizon_ms, latency_ms=latency_ms)
+            row, size=size, horizon_ms=horizon_ms, latency_ms=latency_ms, side=side)
         mean = float(self.mean_model.predict(action))
         if self.scale_model is None:
             scale = float(self.uncertainty_floor)
@@ -999,13 +1137,15 @@ class DirectActionValueModel:
                 float(self.uncertainty_floor),
                 float(self.scale_model.predict(action)),
             )
-        notional = float(size) * float(row["ask"])
+        side_state = decision_side_state(row, side)
+        notional = float(size) * float(side_state["ask"])
         uncertainty_penalty = (
             float(self.friction_policy.uncertainty_aversion)
             * self.calibration_multiplier * scale
         )
         base = {
             "action": "TRADE",
+            "side": side,
             "size": float(size),
             "exit_horizon_ms": int(horizon_ms),
             "latency_ms": int(latency_ms),
@@ -1034,7 +1174,7 @@ class DirectActionValueModel:
         }
 
     def _continuous_quantity_candidates(
-        self, row, *, horizon_ms, latency_ms, lower, upper,
+        self, row, *, horizon_ms, latency_ms, side, lower, upper,
         portfolio_state, capital_budget,
     ):
         """Global critical-point set for the learned 1-D policy utility."""
@@ -1046,11 +1186,11 @@ class DirectActionValueModel:
 
         mean_shape = self._quantity_shape(
             self.mean_model, row,
-            horizon_ms=horizon_ms, latency_ms=latency_ms)
+            horizon_ms=horizon_ms, latency_ms=latency_ms, side=side)
         scale_shape = (
             self._quantity_shape(
                 self.scale_model, row,
-                horizon_ms=horizon_ms, latency_ms=latency_ms)
+                horizon_ms=horizon_ms, latency_ms=latency_ms, side=side)
             if self.scale_model is not None else None
         )
         uncertainty_multiplier = (
@@ -1064,8 +1204,9 @@ class DirectActionValueModel:
                 _polylog_level_crossings(
                     scale_shape, self.uncertainty_floor, lower, upper))
 
-        ask = float(row["ask"])
-        direction = 1.0 if float(row.get("direction") or 0) >= 0 else -1.0
+        side_state = decision_side_state(row, side)
+        ask = float(side_state["ask"])
+        direction = action_side_sign(row, side)
         state = portfolio_state or {}
         asset_signed = state.get("asset_signed_notional") or {}
         asset = str(row.get("asset") or "UNKNOWN")
@@ -1163,43 +1304,47 @@ class DirectActionValueModel:
             return [], "STATE_OUTSIDE_RESEARCH_SUPPORT"
         if live_geometry and not (
             LIVE_MINIMUM_TTE_NS <= int(row["tte_ns"]) <= LIVE_MAXIMUM_TTE_NS
-            and float(row["ask"]) <= self.entry_cap + 1e-12
+            and any(
+                (decision_side_state(row, side) is not None
+                 and float(decision_side_state(row, side)["ask"]) <= self.entry_cap + 1e-12)
+                for side in decision_action_sides(row)
+            )
         ):
             return [], "OUTSIDE_LIVE_GEOMETRY"
 
-        lower, upper = self._quantity_bounds(row, available_capital)
-        if upper + 1e-12 < lower or upper <= 0:
-            return [], "NO_FEASIBLE_SIZE"
-
         scored = []
-        for horizon in self.action_horizons_ms:
-            if horizon <= latency_ms:
+        for side in decision_action_sides(row):
+            lower, upper = self._quantity_bounds(row, available_capital, side)
+            if upper + 1e-12 < lower or upper <= 0:
                 continue
-            quantities = self._continuous_quantity_candidates(
-                row, horizon_ms=horizon, latency_ms=latency_ms,
-                lower=lower, upper=upper,
-                portfolio_state=portfolio_state,
-                capital_budget=capital_budget)
-            if not quantities:
-                continue
-            horizon_scores = [
-                self._score_quantity(
-                    row, size=q, horizon_ms=horizon, latency_ms=latency_ms,
+            for horizon in self.action_horizons_ms:
+                if horizon <= latency_ms:
+                    continue
+                quantities = self._continuous_quantity_candidates(
+                    row, horizon_ms=horizon, latency_ms=latency_ms, side=side,
+                    lower=lower, upper=upper,
                     portfolio_state=portfolio_state,
                     capital_budget=capital_budget)
-                for q in quantities
-            ]
-            horizon_scores.sort(
-                key=lambda value: (
-                    value["policy_utility"],
-                    value["predicted_total_net_cash_pnl"],
-                    -value["notional"],
-                ),
-                reverse=True,
-            )
-            best = dict(horizon_scores[0])
-            best["quantity_candidate_count"] = len(horizon_scores)
-            scored.append(best)
+                if not quantities:
+                    continue
+                horizon_scores = [
+                    self._score_quantity(
+                        row, size=q, horizon_ms=horizon, latency_ms=latency_ms,
+                        side=side, portfolio_state=portfolio_state,
+                        capital_budget=capital_budget)
+                    for q in quantities
+                ]
+                horizon_scores.sort(
+                    key=lambda value: (
+                        value["policy_utility"],
+                        value["predicted_total_net_cash_pnl"],
+                        -value["notional"],
+                    ),
+                    reverse=True,
+                )
+                best = dict(horizon_scores[0])
+                best["quantity_candidate_count"] = len(horizon_scores)
+                scored.append(best)
 
         scored.sort(
             key=lambda value: (
@@ -1298,7 +1443,7 @@ def evaluate_direct_action_policy(
 
         if one_entry_per_market:
             used_markets.add(market)
-        direction = 1.0 if float(row.get("direction") or 0) >= 0 else -1.0
+        direction = action_side_sign(row, str(selected.get("side") or selected_action_side(row)))
         active.append({
             "market_id": market,
             "asset": str(row["asset"]),
@@ -1316,6 +1461,7 @@ def evaluate_direct_action_policy(
             size=selected["size"],
             horizon_ms=selected["exit_horizon_ms"],
             latency_ms=latency_ms,
+            side=selected.get("side"),
             entry_cap=model.entry_cap,
             hard_order_notional=model.hard_order_notional,
         )
@@ -1337,18 +1483,21 @@ def summarize_direct_action(outcomes):
     observed = [row for row in trades if row.get("realized_pnl") is not None]
     pnl = [float(row["realized_pnl"]) for row in observed]
     by_asset = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
+    by_side = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
     by_size = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
     by_horizon = defaultdict(lambda: {"trades": 0, "observed": 0, "pnl": 0.0})
     for row in trades:
         asset = str(row.get("asset") or "UNKNOWN")
+        side = str(row.get("side") or "SELECTED")
         size = str(row.get("size"))
         horizon = str(row.get("exit_horizon_ms"))
         by_asset[asset]["trades"] += 1
+        by_side[side]["trades"] += 1
         by_size[size]["trades"] += 1
         by_horizon[horizon]["trades"] += 1
         if row.get("realized_pnl") is not None:
             value = float(row["realized_pnl"])
-            for cell in (by_asset[asset], by_size[size], by_horizon[horizon]):
+            for cell in (by_asset[asset], by_side[side], by_size[size], by_horizon[horizon]):
                 cell["observed"] += 1
                 cell["pnl"] += value
     return {
@@ -1379,6 +1528,7 @@ def summarize_direct_action(outcomes):
             (float(row.get("replay_max_gross_notional") or 0.0) for row in outcomes),
             default=0.0),
         "by_asset": dict(by_asset),
+        "by_side": dict(by_side),
         "by_size": dict(by_size),
         "by_exit_horizon_ms": dict(by_horizon),
     }

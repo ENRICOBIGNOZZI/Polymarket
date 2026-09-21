@@ -66,6 +66,8 @@ struct NativeObservation {
     std::int32_t bid_e4 = 0, ask_e4 = 0, tick_e4 = 0, trade_e4 = 0;
     // Exact two-token PM state used for causal repricing labels. Missing remains zero/invalid.
     std::int32_t yes_bid_e4 = 0, yes_ask_e4 = 0, no_bid_e4 = 0, no_ask_e4 = 0;
+    std::int64_t yes_bid_quantity = 0, yes_ask_quantity = 0;
+    std::int64_t no_bid_quantity = 0, no_ask_quantity = 0;
     std::uint64_t repricing_origin_signal_version = 0;
     std::uint32_t repricing_horizon_ms = 0;
     std::uint8_t repricing_pair_valid = 0;

@@ -171,6 +171,55 @@ def book_from_row(row):
     }
 
 
+def native_pair_l1(row):
+    """Canonical causal two-token L1 state; missing depth is never imputed."""
+    if row.get("repricing_pair_valid") is not True:
+        return {"state": "UNAVAILABLE"}
+    try:
+        yes_bid = int(row["yes_bid_e4"]) / 10000
+        yes_ask = int(row["yes_ask_e4"]) / 10000
+        no_bid = int(row["no_bid_e4"]) / 10000
+        no_ask = int(row["no_ask_e4"]) / 10000
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return {"state": "UNAVAILABLE"}
+    if not (0 < yes_bid < yes_ask < 1 and 0 < no_bid < no_ask < 1):
+        return {"state": "UNAVAILABLE"}
+
+    quantities = {}
+    complete = True
+    for key in (
+        "yes_bid_quantity", "yes_ask_quantity",
+        "no_bid_quantity", "no_ask_quantity",
+    ):
+        value = row.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            quantities[key] = None
+            complete = False
+        else:
+            quantities[key] = float(value) / 1_000_000
+
+    ready = (
+        complete
+        and quantities["yes_bid_quantity"] > 0
+        and quantities["yes_ask_quantity"] > 0
+        and quantities["no_bid_quantity"] > 0
+        and quantities["no_ask_quantity"] > 0
+    )
+    return {
+        "state": "BILATERAL_EXECUTABLE_READY" if ready else "PRICES_ONLY",
+        "yes": {
+            "bid": yes_bid, "ask": yes_ask,
+            "bid_quantity": quantities["yes_bid_quantity"],
+            "ask_quantity": quantities["yes_ask_quantity"],
+        },
+        "no": {
+            "bid": no_bid, "ask": no_ask,
+            "bid_quantity": quantities["no_bid_quantity"],
+            "ask_quantity": quantities["no_ask_quantity"],
+        },
+    }
+
+
 def numeric_features(row):
     result = {}
     external = row.get("external_features")
@@ -185,7 +234,7 @@ def numeric_features(row):
     for key in (
         "binance_return_100ms_bp", "coinbase_return_100ms_bp",
         "bybit_return_100ms_bp", "signal_return_bp", "signal_age_ns",
-        "tte_ns", "bid_e4", "ask_e4", "ask_quantity",
+        "tte_ns", "bid_e4", "ask_e4", "bid_quantity", "ask_quantity",
     ):
         if finite(row.get(key)):
             result[key] = float(row[key])
@@ -244,7 +293,9 @@ def native_decision(row):
             "confirmed": row.get("confirmed_non_opposing") is True,
             "book_valid": row.get("book_valid") is True,
             "pretrigger": row.get("pm_book_pre_signal") is True or row.get("require_pm_book_pre_signal") is not True,
-            "bid": bid, "ask": ask, "quantity": float(row.get("ask_quantity") or 0) / 1_000_000,
+            "bid": bid, "ask": ask,
+            "bid_quantity": float(row.get("bid_quantity") or 0) / 1_000_000,
+            "quantity": float(row.get("ask_quantity") or 0) / 1_000_000,
             "tick": int(row["tick_e4"]) / 10000,
             "minimum": float(row["minimum_order_microunits"]) / 1_000_000,
             "fee_rate": float(row["fee_rate"]), "fee_exponent": float(row["fee_exponent"]),
@@ -258,6 +309,9 @@ def native_decision(row):
             ),
             "paper_terms_sha256": str(row.get("paper_terms_sha256") or ""),
             "epoch": int(row.get("connection_epoch") or 0),
+            "pair": native_pair_l1(row),
+            "yes_token_id": str(row.get("yes_token_id") or ""),
+            "no_token_id": str(row.get("no_token_id") or ""),
             "features": numeric_features(row), "raw_probability": row.get("probability_forecast"),
             "label": None, "label_information_ns": None, "label_provenance": "UNAVAILABLE",
         }, None
@@ -311,6 +365,7 @@ def native_repricing_point(row):
         bid = int(row["bid_e4"]) / 10000
         ask = int(row["ask_e4"]) / 10000
         tick = int(row["tick_e4"]) / 10000
+        bid_quantity = float(row.get("bid_quantity") or 0) / 1_000_000
         quantity = float(row.get("ask_quantity") or 0) / 1_000_000
         epoch = int(row["connection_epoch"])
         if horizon not in HORIZONS_MS or not 0 < bid < ask < 1 or tick <= 0 or quantity < 0:
@@ -334,7 +389,9 @@ def native_repricing_point(row):
             "observed_time_ns": target_wall,
             "information_ns": information_wall,
             "label_observed_monotonic_ns": observed_mono,
-            "bid": bid, "ask": ask, "quantity": quantity,
+            "bid": bid, "ask": ask,
+            "bid_quantity": bid_quantity, "quantity": quantity,
+            "pair": native_pair_l1(row),
             "tick": tick, "epoch": epoch,
         }
     except (KeyError, TypeError, ValueError, OverflowError):
@@ -372,7 +429,9 @@ def _attach_native_repricing_point(record, horizon, point):
         "ask_change": point["ask"] - record["ask"],
         "bid_change": point["bid"] - record["bid"],
         "arrival_ask": point["ask"], "arrival_bid": point["bid"],
+        "arrival_bid_quantity": point.get("bid_quantity", 0.0),
         "arrival_quantity": point["quantity"],
+        "pair": point.get("pair"),
     }
     if prior is not None:
         if prior != value:
@@ -384,7 +443,9 @@ def _attach_native_repricing_point(record, horizon, point):
             "time_ns": point.get("target_time_ns", point["observed_time_ns"]),
             "information_ns": point.get("information_ns", point["observed_time_ns"]),
             "bid": point["bid"], "ask": point["ask"],
-            "quantity": point["quantity"], "epoch": point["epoch"],
+            "bid_quantity": point.get("bid_quantity", 0.0),
+            "quantity": point["quantity"], "pair": point.get("pair"),
+            "epoch": point["epoch"],
         }
     return "MATCHED"
 
