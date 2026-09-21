@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          request=deploy/v7-native-2h-alpha-main-request.json
+          request=deploy/v7-native-2h-alpha-fast-request.json
           python3 - "$request" <<'PY'
           import json,re,sys
           v=json.load(open(sys.argv[1]))
