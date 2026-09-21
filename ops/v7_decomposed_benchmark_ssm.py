@@ -116,7 +116,7 @@ mkdir -p src output
 tar -xzf source.tgz -C src
 python3 -m venv venv
 venv/bin/pip install --disable-pip-version-check --quiet -r src/research/requirements-learning.txt
-PYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.decomposed_benchmark \
+PYTHONPATH={remote}/src:{app_dir} nice -n 15 venv/bin/python -m research.walk_forward_v3.decomposed_benchmark \
   --root {run_root} \
   --output {remote}/output/horse_race.json \
   --minimum-wall-ns {request['minimum_wall_ns']} \
