@@ -179,7 +179,7 @@ def run(region: str, instance: str, command: str,
     return stdout, stderr
 
 
-def _transport_target_sha(command: dict[str, Any]) -> str | None:
+def _transport_payload_text(command: dict[str, Any]) -> str | None:
     parameters = command.get("Parameters")
     if not isinstance(parameters, dict):
         return None
@@ -188,7 +188,27 @@ def _transport_target_sha(command: dict[str, Any]) -> str | None:
         payloads = [payloads]
     if not isinstance(payloads, list):
         return None
-    text = "\n".join(str(value) for value in payloads)
+    return "\n".join(str(value) for value in payloads)
+
+
+def _looks_like_deploy_transport(command: dict[str, Any]) -> bool:
+    text = _transport_payload_text(command)
+    if text is None:
+        return False
+    markers = (
+        "polymarket-v7-artifact-",
+        "POLYMARKET_EXPECTED_SHA=",
+        "/.cache/polymarket-v7-deploy/",
+        "ops/v7_london_stage_release.sh",
+        "ops/v7_london_cutover.sh",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _transport_target_sha(command: dict[str, Any]) -> str | None:
+    text = _transport_payload_text(command)
+    if text is None:
+        return None
     # SSM RunShellScript payloads are multiline.  The deployment SHA is
     # commonly delimited by a newline (for example "\nSHA=<sha>\n"), so
     # proving transport identity must accept all shell whitespace, not only a
@@ -229,6 +249,13 @@ def cancel_prior_deploy_transports(region: str, instance: str,
             continue
         status = str(command.get("Status") or "")
         if status in TERMINAL:
+            continue
+        # Historical research jobs imported this module's generic SSM helper
+        # and therefore inherited DEPLOY_COMMENT even though they were not
+        # cutover transports.  Ignore those only when their payload lacks all
+        # deploy-specific markers; unknown deploy-like payloads remain
+        # fail-closed below.
+        if not _looks_like_deploy_transport(command):
             continue
         command_id = command.get("CommandId")
         if not isinstance(command_id, str) or not command_id:
