@@ -281,6 +281,7 @@ class Tailer:
                     "research_only": True,
                     "artifact_sha256": self.args.artifact_sha256,
                     "source_code_sha": self.args.source_code_sha,
+                    "shadow_code_sha": self.args.shadow_code_sha,
                     "runtime_model_sha": str(row.get("code_sha") or ""),
                     "run_id": item["run_id"],
                     "server_id": item["server_id"],
@@ -318,6 +319,7 @@ class Tailer:
             "automatic_promotion": False,
             "artifact_sha256": self.args.artifact_sha256,
             "source_code_sha": self.args.source_code_sha,
+            "shadow_code_sha": self.args.shadow_code_sha,
             "horizons_ms": list(HORIZONS),
             "maximum_inference_age_ms": self.args.maximum_inference_age_ms,
             "started_ns": self.started_ns,
@@ -357,6 +359,7 @@ def main() -> int:
     ap.add_argument("--artifact", type=Path, required=True)
     ap.add_argument("--artifact-sha256", required=True)
     ap.add_argument("--source-code-sha", required=True)
+    ap.add_argument("--shadow-code-sha", required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--status", type=Path, required=True)
     ap.add_argument("--poll-ms", type=int, default=10)
@@ -365,6 +368,8 @@ def main() -> int:
     args = ap.parse_args()
     if not exact_hex(args.source_code_sha, 40):
         raise ValueError("exact source code SHA required")
+    if not exact_hex(args.shadow_code_sha, 40):
+        raise ValueError("exact shadow code SHA required")
     if not 1 <= args.poll_ms <= 1000 or not 1 <= args.maximum_inference_age_ms <= 500:
         raise ValueError("invalid timing policy")
     args.output.parent.mkdir(parents=True, exist_ok=True)
