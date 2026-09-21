@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_decomposed_benchmark_ssm_request_v1",
   "version": 1,
-  "request_id": "fast-two-hour-frequency-frontier-20260921T2052CEST",
+  "request_id": "fast-two-hour-indexed-frequency-frontier-20260921T2112CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "0562a95abd9c0ba18e63b778c7e08adcd9ad6127",
+  "expected_research_sha": "a0bd5cf0d4987234dc3124df6782529c97b9e0ac",
   "minimum_wall_ns": 1790007780000000000,
   "folds": 2,
   "latency_ms": 50,
