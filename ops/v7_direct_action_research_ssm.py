@@ -26,6 +26,7 @@ SOURCE_PATHS = (
     "config/v7_trade_frequency_sizing_challenger.json",
     "research/walk_forward_v3/__init__.py",
     "research/walk_forward_v3/direct_action.py",
+    "research/walk_forward_v3/dynamic_exit.py",
     "research/walk_forward_v2/__init__.py",
     "research/walk_forward_v2/core.py",
     "research/economic/causal_replay.py",
@@ -152,6 +153,10 @@ POLYMARKET_RESEARCH_HORIZONS_MS=50,100,250,500,750,1000,1500,2000,3000,4000,5000
   --folds {request['folds']} \
   --latency-ms {request['latency_ms']} \
   --capital-budget {request['capital_budget']}{challenger_flag}
+PYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.dynamic_exit \
+  --root {run_root} \
+  --output {remote}/output/dynamic_exit.json \
+  --minimum-wall-ns {request['minimum_wall_ns']}
 tar -C {remote}/output -czf {remote}/results.tgz .
 python3 - <<'PY'
 import hashlib,json
