@@ -3,6 +3,9 @@ name: V7 independent collection health
 on:
   schedule:
     - cron: "*/10 * * * *"
+  workflow_run:
+    workflows: ["V7 independent collection plane"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
