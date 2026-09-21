@@ -124,3 +124,18 @@ def test_build_dataset_discovers_real_run_root_layout(tmp_path):
     assert data["hft_root"] == str(tmp_path / "research" / "hft_permanent")
     assert data["settlement_root"] == str(tmp_path / "research" / "public_settlements")
     assert data["input_state"] == "NO_ADMISSIBLE_NATIVE_DECISIONS"
+
+
+
+def test_combined_policy_uses_settlement_value_but_requires_positive_repricing():
+    row = record()
+    row["timeline"] = [book(row, row["decision_ns"] + 100_000_000, ask=.50)]
+    settlement_only = replay_one(copy.deepcopy(row), .90, None, latency_ms=100)
+    assert settlement_only["filled"] > 0
+    combined_negative = replay_one(copy.deepcopy(row), .90, -.01, latency_ms=100,
+                                   valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION")
+    assert combined_negative["filled"] == 0
+    assert not combined_negative["funnel"]["predicted_repricing_positive"]
+    combined_positive = replay_one(copy.deepcopy(row), .90, .01, latency_ms=100,
+                                   valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION")
+    assert combined_positive["filled"] > 0
