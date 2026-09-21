@@ -981,8 +981,18 @@ class Manager:
                 "--minimum-absolute-confirmation-return-bp", repr(signal_policy["minimum_confirmation_return_bp"]),
                 "--maximum-signal-age-ns", str(signal_policy["maximum_signal_age_ns"]),
             ])
+        latency_context = _context_key(market) in set(
+            getattr(self.args, "latency_arb_context", []) or [])
+        if latency_context:
+            command.extend([
+                "--latency-arb",
+                "--latency-arb-signal-ttl-ns", str(self.args.latency_arb_signal_ttl_ns),
+                "--latency-arb-hard-timeout-ns", str(self.args.latency_arb_hard_timeout_ns),
+                "--latency-arb-max-spread-ticks", str(self.args.latency_arb_max_spread_ticks),
+                "--latency-arb-min-profit-ticks", str(self.args.latency_arb_min_profit_ticks),
+            ])
         probability_model = getattr(self.args, "probability_model", None)
-        if probability_model is not None:
+        if probability_model is not None and not latency_context:
             command.extend(["--probability-model", str(probability_model)])
             command.extend(["--probability-evaluation-end-wall-ns",
                 str(self.args.probability_evaluation_end_wall_ns)])
@@ -1362,6 +1372,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--execution-window-ns", type=int, default=2_000_000_000)
     parser.add_argument("--capture-native-full-context", action="append", default=[],
         help="Record full native books only for this ASSET:HORIZON, with a 20 GiB free-space launch gate")
+    parser.add_argument("--latency-arb-context", action="append", default=["BTC:M5"],
+        help="Exclusive deterministic latency-arbitrage context; repeat for more ASSET:HORIZON lanes")
+    parser.add_argument("--latency-arb-signal-ttl-ns", type=int, default=100_000_000)
+    parser.add_argument("--latency-arb-hard-timeout-ns", type=int, default=500_000_000)
+    parser.add_argument("--latency-arb-max-spread-ticks", type=int, default=2)
+    parser.add_argument("--latency-arb-min-profit-ticks", type=int, default=1)
     args = parser.parse_args()
     if not exact_sha(args.model_sha):
         parser.error("--model-sha must be exact lowercase 40-hex SHA")
@@ -1383,6 +1399,21 @@ def parse_args() -> argparse.Namespace:
         parser.error("probability model requires explicit evaluation end wall ns")
     if args.probability_model is None and args.probability_evaluation_end_wall_ns != 0:
         parser.error("probability evaluation end requires probability model")
+    valid_contexts = {
+        f"{asset}:{horizon}"
+        for asset in ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+        for horizon in ("M5", "M15", "H1", "H4", "D1")
+    }
+    if any(context not in valid_contexts for context in args.latency_arb_context):
+        parser.error("invalid latency arb context")
+    if not 1_000_000 <= args.latency_arb_signal_ttl_ns <= 500_000_000:
+        parser.error("invalid latency arb signal ttl")
+    if not 10_000_000 <= args.latency_arb_hard_timeout_ns <= 5_000_000_000:
+        parser.error("invalid latency arb timeout")
+    if not 1 <= args.latency_arb_max_spread_ticks <= 20:
+        parser.error("invalid latency arb spread")
+    if not 0 <= args.latency_arb_min_profit_ticks <= 20:
+        parser.error("invalid latency arb profit ticks")
     return args
 
 
