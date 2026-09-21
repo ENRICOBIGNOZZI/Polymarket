@@ -116,13 +116,38 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-while IFS='=' read -r key value; do
-  case "$key" in
-    PM_V7_HOT_CPUSET|PM_V7_COLLECTOR_CPUSET|PM_V7_CONTROL_CPUSET|PM_V7_HOT_NICE|PM_V7_COLLECTOR_NICE|PM_V7_CONTROL_NICE)
-      export "$key=$value" ;;
-    *) echo "unexpected collection resource-plan key: $key" >&2; exit 74 ;;
-  esac
-done < <(python3 scripts/v7_runtime_resource_plan.py   --config config/v7_runtime_resources.json   --output "$CONTROL/runtime_resource_plan.json" --shell)
+# The collection plane deliberately does not consume the trading runtime's
+# HOT/COLLECTOR/CONTROL CPU partition. Data capture must survive model/runtime
+# cpuset changes and hosts with fewer visible CPUs. Optional collector affinity
+# may be supplied explicitly; otherwise collectors run unpinned at low priority.
+PM_V7_COLLECTOR_CPUSET="${PM_V7_COLLECTION_CPUSET:-${PM_V7_COLLECTOR_CPUSET:-}}"
+PM_V7_COLLECTOR_NICE="${PM_V7_COLLECTION_NICE:-10}"
+[[ "$PM_V7_COLLECTOR_NICE" =~ ^[0-9]+$ ]] && (( PM_V7_COLLECTOR_NICE <= 19 )) || {
+  echo "collection nice must be an integer in [0,19]" >&2; exit 74;
+}
+if [[ -n "$PM_V7_COLLECTOR_CPUSET" ]]; then
+  [[ "$PM_V7_COLLECTOR_CPUSET" =~ ^[0-9]+([,-][0-9]+)*$ ]] || {
+    echo "invalid optional collection cpuset" >&2; exit 74;
+  }
+fi
+export PM_V7_COLLECTOR_CPUSET PM_V7_COLLECTOR_NICE
+python3 - "$CONTROL/collection_resource_plan.json" "$PM_V7_COLLECTOR_CPUSET" "$PM_V7_COLLECTOR_NICE" <<'PY'
+import json,os,sys
+from pathlib import Path
+path=Path(sys.argv[1])
+value={
+  "schema":"polymarket_v7_collection_resource_plan_v1",
+  "paper_only":True,
+  "model_independent":True,
+  "trading_runtime_resource_plan_required":False,
+  "collector_cpuset":sys.argv[2] or None,
+  "collector_nice":int(sys.argv[3]),
+  "visible_cpu_count":len(os.sched_getaffinity(0)) if hasattr(os,"sched_getaffinity") else (os.cpu_count() or 1),
+}
+temporary=path.with_name(path.name+f".tmp.{os.getpid()}")
+temporary.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8")
+os.replace(temporary,path)
+PY
 
 DISK_PRESSURE_MIN_FREE_BYTES="$(python3 - "$RETENTION_CONFIG" <<'PY'
 import json,sys
