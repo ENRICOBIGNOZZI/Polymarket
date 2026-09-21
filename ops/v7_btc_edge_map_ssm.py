@@ -44,7 +44,7 @@ mkdir -p src output
 tar -xzf source.tgz -C src
 python3 -m venv venv
 venv/bin/pip install --disable-pip-version-check --quiet -r src/research/requirements-learning.txt
-POLYMARKET_RESEARCH_HORIZONS_MS=50,100,150,250,350,500,750,1000,1500,2000,3000,5000,7500,10000,15000,30000 \
+POLYMARKET_RESEARCH_HORIZONS_MS=50,100,150,250,350,500,750,1000,1500,2000,3000,4000,5000,7500,10000,15000,30000 \
 POLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS=0,5,10,15,25,35,50,75,100,150,250,350,500,750,1000 \
 PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.walk_forward_v3.btc_edge_map \
   --root {ctx['run_root']} \
@@ -62,8 +62,10 @@ assert v['real_capital_at_risk'] is False
 assert v['automatic_promotion'] is False
 assert v['asset']=='BTC'
 assert v['broad_surface_latencies_ms']==[0,5,10,15,25,35,50,75,100,150,250,350,500,750,1000]
-assert v['broad_surface_exit_horizons_ms']==[50,100,150,250,350,500,750,1000,1500,2000,3000,5000,7500,10000,15000,30000]
+assert v['broad_surface_exit_horizons_ms']==[50,100,150,250,350,500,750,1000,1500,2000,3000,4000,5000,7500,10000,15000,30000]
 assert v['broad_surface_target_size_shares']==5.0
+assert v['splits']['DISCOVERY']['entry_exit_surface']['equity_latencies_ms']==[10,25,50,100,250]
+assert v['splits']['DISCOVERY']['entry_exit_surface']['equity_exit_horizons_ms']==[500,750,1000,1500,2000,3000,4000,5000]
 print('BTC_EDGE_MAP_READY')
 PY
 tar -C {remote}/output -czf {remote}/results.tgz .
