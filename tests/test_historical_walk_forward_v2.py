@@ -5,6 +5,9 @@ import math
 from research.walk_forward_v2.core import (
     HORIZONS_MS,
     Ridge,
+    asset_markout_predictors,
+    asset_selection_diagnostics,
+    live_parity_policy_diagnostics,
     book_targets,
     build_dataset,
     folds,
@@ -595,3 +598,102 @@ def test_economic_evaluation_retains_only_fill_level_equity_events():
             event["decision_ns"] for event in events
         )
         assert len(events) <= economics["models"][name]["metrics"]["fills"]
+
+
+
+def test_per_asset_markout_models_use_same_hyperparameters_but_separate_coefficients():
+    train = []
+    base = 1_789_921_800_000_000_001
+    for asset, future_bid in (("BTC", .56), ("ETH", .44)):
+        for index in range(10):
+            row = record(f"{asset.lower()}{index}", decision_ns=base + len(train) * 1_000_000_000)
+            row["asset"] = asset
+            row["fee_rate"] = 0.0
+            row["features"]["x"] = float(index)
+            row["targets"] = {}
+            for horizon in HORIZONS_MS:
+                row["targets"][str(horizon)] = {
+                    "state": "OBSERVED",
+                    "arrival_bid": future_bid,
+                    "mid_change": future_bid - .495,
+                    "observed_time_ns": row["decision_ns"] + horizon * 1_000_000,
+                }
+            train.append(row)
+
+    test = []
+    for asset in ("BTC", "ETH"):
+        row = record(f"test-{asset.lower()}", decision_ns=base + 100_000_000_000 + len(test))
+        row["asset"] = asset
+        row["fee_rate"] = 0.0
+        row["features"]["x"] = 5.0
+        test.append(row)
+
+    predictions, meta = asset_markout_predictors(train, test)
+    btc = predictions["1000"][0]
+    eth = predictions["1000"][1]
+
+    assert btc is not None and eth is not None
+    assert btc > .03
+    assert eth < -.03
+    assert meta["1000"]["BTC"]["ridge"] == 8.0
+    assert meta["1000"]["ETH"]["ridge"] == 8.0
+    assert meta["1000"]["BTC"]["feature_names"] == meta["1000"]["ETH"]["feature_names"]
+    assert meta["1000"]["BTC"]["target"] == meta["1000"]["ETH"]["target"]
+
+
+
+def test_live_parity_diagnostics_expose_tte_entry_cap_and_full_depth_mismatches():
+    row = record("parity")
+    row["asset"] = "ETH"
+    row["tte_ns"] = 100_000_000_000
+    row["ask"] = .78
+    row["bid"] = .77
+    row["quantity"] = 3.0
+    row["minimum"] = 1.0
+    event = {
+        "decision_ns": row["decision_ns"],
+        "decision_id": row["decision_id"],
+        "row": row,
+        "asset_markout_predictions": {"500": .02, "1000": .02, "2000": .02},
+    }
+    diag = live_parity_policy_diagnostics([event])
+    cell = diag["horizons"]["500"]["ETH"]
+    assert cell["research_tte"] == 1
+    assert cell["live_tte"] == 0
+    assert cell["research_entry_cap"] == 0
+    assert cell["live_entry_cap"] == 1
+    assert cell["research_depth_gate"] == 1
+    assert cell["live_full_depth_gate"] == 0
+
+
+def test_asset_diagnostics_surface_fee_schedule_and_size_capacity():
+    events = []
+    for asset, rate, depth in (("BTC", .01, 12.0), ("ETH", .03, 4.0)):
+        row = record("diag-" + asset.lower())
+        row["asset"] = asset
+        row["fee_rate"] = rate
+        row["fee_exponent"] = 1.0
+        row["quantity"] = depth
+        row["minimum"] = 1.0
+        row["targets"] = {
+            "1000": {
+                "state": "OBSERVED",
+                "arrival_bid": .55,
+                "observed_time_ns": row["decision_ns"] + 1_000_000_000,
+            }
+        }
+        events.append({
+            "decision_ns": row["decision_ns"],
+            "decision_id": row["decision_id"],
+            "row": row,
+            "markout_predictions": {"1000": .02},
+            "asset_markout_predictions": {"1000": .02},
+        })
+    diag = asset_selection_diagnostics(events, horizons=(1000,))
+    btc = diag["horizons"]["1000"]["BTC"]
+    eth = diag["horizons"]["1000"]["ETH"]
+    assert btc["mean_entry_fee"] < eth["mean_entry_fee"]
+    assert btc["fee_schedule_counts"] != eth["fee_schedule_counts"]
+    assert btc["size_capacity"]["5.0"]["both"] == 1
+    assert eth["size_capacity"]["5.0"]["both"] == 0
+    assert diag["required_prediction"] == .01
