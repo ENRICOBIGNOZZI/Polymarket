@@ -1,6 +1,11 @@
+import json
 import math
 
 from research.walk_forward_v2.core import Ridge
+from research.walk_forward_v3.bilateral import (
+    build_bilateral_evidence,
+    paired_l1_state,
+)
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
     FrictionPolicy,
@@ -368,3 +373,132 @@ def test_continuous_quantity_optimizer_respects_available_capital_and_depth():
     assert selected["action"] == "TRADE"
     assert math.isclose(selected["size"], 6.0, abs_tol=1e-8)
     assert math.isclose(selected["notional"], 3.0, abs_tol=1e-8)
+
+
+
+def bilateral_native_row(kind, *, horizon=None, quantities=True, pair_valid=True,
+                         decision_ns=1_000_000_000, observed_ns=None,
+                         yes_ask=4100, no_ask=6100):
+    if observed_ns is None:
+        observed_ns = (
+            decision_ns if kind == 2
+            else decision_ns + int(horizon or 0) * 1_000_000
+        )
+    value = {
+        "schema": "polymarket_v7_native_observation_v1",
+        "paper_only": True,
+        "execution_authority": False,
+        "kind": kind,
+        "server_id": "server",
+        "run_id": "run",
+        "capture_id": "capture",
+        "market_id": "market",
+        "token_id": "yes-token",
+        "asset": "BTC",
+        "horizon": "M5",
+        "repricing_origin_signal_version": 42,
+        "signal_version": 42,
+        "decision_monotonic_ns": decision_ns,
+        "observed_monotonic_ns": observed_ns,
+        "close_monotonic_ns": decision_ns + 5_000_000_000,
+        "close_wall_ns": 1_800_000_000_000_000_000,
+        "decision_wall_ns": 1_799_999_995_000_000_000,
+        "signal_age_ns": 1_000_000,
+        "tte_ns": 5_000_000_000,
+        "direction": 1,
+        "signal_valid": True,
+        "confirmed_non_opposing": True,
+        "book_valid": True,
+        "repricing_pair_valid": pair_valid,
+        "yes_bid_e4": 4000,
+        "yes_ask_e4": yes_ask,
+        "no_bid_e4": 5900,
+        "no_ask_e4": no_ask,
+        "minimum_order_microunits": 1_000_000,
+        "fee_rate": 0.01,
+        "fee_exponent": 1.0,
+    }
+    if kind == 6:
+        value["repricing_horizon_ms"] = int(horizon)
+    if quantities:
+        value.update({
+            "yes_bid_quantity": 3_000_000,
+            "yes_ask_quantity": 4_000_000,
+            "no_bid_quantity": 5_000_000,
+            "no_ask_quantity": 6_000_000,
+        })
+    return value
+
+
+def test_bilateral_l1_requires_depth_not_only_paired_prices():
+    prices_only = bilateral_native_row(2, quantities=False)
+    state = paired_l1_state(prices_only)
+    assert state["state"] == "PRICES_ONLY"
+    assert state["yes"]["ask"] == .41
+    assert state["no"]["ask"] == .61
+    assert state["yes"]["ask_quantity"] is None
+
+    ready = paired_l1_state(bilateral_native_row(2, quantities=True))
+    assert ready["state"] == "BILATERAL_EXECUTABLE_READY"
+    assert ready["yes"]["ask_quantity"] == 4.0
+    assert ready["no"]["bid_quantity"] == 5.0
+
+    unavailable = paired_l1_state(
+        bilateral_native_row(2, quantities=True, pair_valid=False))
+    assert unavailable["state"] == "UNAVAILABLE"
+
+
+def test_bilateral_builder_never_imputes_missing_future_depth(tmp_path):
+    path = tmp_path / "bilateral.jsonl"
+    rows = [
+        bilateral_native_row(2, quantities=True),
+        bilateral_native_row(6, horizon=100, quantities=False),
+        bilateral_native_row(6, horizon=250, quantities=True),
+    ]
+    path.write_text(
+        "".join(json.dumps(value) + "\n" for value in rows),
+        encoding="utf-8",
+    )
+    records, summary = build_bilateral_evidence([path])
+    assert summary["origins"] == 1
+    assert summary["origins_bilateral_ready"] == 1
+    assert summary["records_with_bilateral_future"] == 1
+    assert summary["missing_depth_is_never_imputed"] is True
+    assert summary["counterfactual_side_executable"] is True
+    assert len(records) == 1
+    assert "100" not in records[0]["future"]
+    assert records[0]["future"]["250"]["paired_l1"]["state"] == (
+        "BILATERAL_EXECUTABLE_READY"
+    )
+
+
+def test_bilateral_builder_censors_origin_without_decision_depth(tmp_path):
+    path = tmp_path / "bilateral-prices-only.jsonl"
+    rows = [
+        bilateral_native_row(2, quantities=False),
+        bilateral_native_row(6, horizon=250, quantities=True),
+    ]
+    path.write_text(
+        "".join(json.dumps(value) + "\n" for value in rows),
+        encoding="utf-8",
+    )
+    records, summary = build_bilateral_evidence([path])
+    assert records == []
+    assert summary["origins"] == 1
+    assert summary["origins_bilateral_ready"] == 0
+    assert summary["counterfactual_side_executable"] is False
+
+
+def test_bilateral_builder_rejects_conflicting_future_pair(tmp_path):
+    path = tmp_path / "bilateral-conflict.jsonl"
+    first = bilateral_native_row(6, horizon=250, quantities=True)
+    second = bilateral_native_row(
+        6, horizon=250, quantities=True, yes_ask=4200)
+    rows = [bilateral_native_row(2, quantities=True), first, second]
+    path.write_text(
+        "".join(json.dumps(value) + "\n" for value in rows),
+        encoding="utf-8",
+    )
+    import pytest
+    with pytest.raises(ValueError, match="CONFLICTING_BILATERAL_LABEL"):
+        build_bilateral_evidence([path])
