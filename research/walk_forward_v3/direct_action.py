@@ -750,6 +750,100 @@ class StreamingRidge:
 
 
 
+def fit_recent_residual_adjustment(
+    base_model,
+    factory,
+    target,
+    *,
+    ridge=8.0,
+    batch_size=4096,
+):
+    """Fit a recent residual correction in the frozen base feature geometry.
+
+    The returned model uses exactly the base centering/scaling and therefore
+    remains algebraically compatible with the continuous-q polylog optimizer.
+    Memory stays O(p^2 + Bp); no recent design matrix is retained.
+    """
+    import numpy as np
+
+    dimension = len(base_model.beta)
+    gram = np.zeros((dimension, dimension), dtype=np.float64)
+    rhs = np.zeros(dimension, dtype=np.float64)
+    gram_c = np.zeros_like(gram)
+    rhs_c = np.zeros_like(rhs)
+    n = 0
+    residual_sum = 0.0
+    residual_sq_sum = 0.0
+
+    def kahan_add(total, compensation, increment):
+        y = increment - compensation
+        updated = total + y
+        compensation[...] = (updated - total) - y
+        total[...] = updated
+
+    def consume(rows):
+        nonlocal n, residual_sum, residual_sq_sum
+        if not rows:
+            return
+        X = np.asarray([base_model.row(row) for row in rows], dtype=np.float64)
+        y = np.asarray([float(target(row)) for row in rows], dtype=np.float64)
+        residual = y - X @ np.asarray(base_model.beta, dtype=np.float64)
+        kahan_add(gram, gram_c, X.T @ X)
+        kahan_add(rhs, rhs_c, X.T @ residual)
+        residual_sum += float(residual.sum())
+        residual_sq_sum += float(residual @ residual)
+        n += len(rows)
+
+    batch = []
+    for row in factory():
+        batch.append(row)
+        if len(batch) >= int(batch_size):
+            consume(batch)
+            batch.clear()
+    consume(batch)
+    if n == 0:
+        raise ValueError("recent residual ridge received zero rows")
+
+    penalty = np.eye(dimension, dtype=np.float64) * float(ridge)
+    penalty[0, 0] = 0.0
+    regularized = gram + penalty
+    try:
+        delta = np.linalg.solve(regularized, rhs)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError("recent residual ridge singular") from exc
+
+    adjusted = StreamingRidge(
+        base_model.names, ridge=float(ridge), batch_size=int(batch_size))
+    adjusted.center = dict(base_model.center)
+    adjusted.scale = dict(base_model.scale)
+    adjusted.beta = np.asarray(base_model.beta, dtype=np.float64) + delta
+    adjusted.rows = int(getattr(base_model, "rows", 0))
+    adjusted.design_dimension = int(dimension)
+    adjusted.gram_bytes = int(gram.nbytes)
+    adjusted.maximum_batch_bytes = int(
+        int(batch_size) * max(1, len(base_model.names))
+        * 2 * np.dtype(np.float64).itemsize
+    )
+    adjusted.target_mean = float(getattr(base_model, "target_mean", 0.0))
+    adjusted.target_std = float(getattr(base_model, "target_std", 0.0))
+    adjusted.condition_number = float(np.linalg.cond(regularized))
+
+    residual_mean = residual_sum / n
+    residual_var = max(0.0, residual_sq_sum / n - residual_mean ** 2)
+    receipt = {
+        "state": "READY",
+        "rows": int(n),
+        "ridge": float(ridge),
+        "residual_mean_before_adjustment": float(residual_mean),
+        "residual_std_before_adjustment": float(math.sqrt(residual_var)),
+        "delta_l2_norm": float(np.linalg.norm(delta)),
+        "condition_number": adjusted.condition_number,
+        "feature_geometry": "FROZEN_BASE_CENTER_SCALE_AND_MISSINGNESS",
+        "continuous_q_compatible": True,
+    }
+    return adjusted, receipt
+
+
 def _polylog_value(coefficients, q):
     constant, linear, quadratic, log_term = coefficients
     q = float(q)
@@ -846,6 +940,8 @@ class DirectActionValueModel:
         friction_policy=DEFAULT_FRICTION_POLICY,
         selection_calibration_mode="PREQUENTIAL",
         prequential_calibration_blocks=2,
+        recent_residual_fraction=0.0,
+        recent_residual_ridge=None,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -858,12 +954,21 @@ class DirectActionValueModel:
         self.streaming_batch_size = int(streaming_batch_size)
         self.selection_calibration_mode = str(selection_calibration_mode).upper()
         self.prequential_calibration_blocks = int(prequential_calibration_blocks)
+        self.recent_residual_fraction = float(recent_residual_fraction)
+        self.recent_residual_ridge = (
+            self.ridge if recent_residual_ridge is None
+            else float(recent_residual_ridge)
+        )
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
             raise ValueError("selection calibration mode must be PREQUENTIAL or OFF")
         if self.prequential_calibration_blocks <= 0:
             raise ValueError("positive prequential calibration block count required")
+        if not (0.0 <= self.recent_residual_fraction < 1.0):
+            raise ValueError("recent residual fraction must be in [0,1)")
+        if not finite(self.recent_residual_ridge) or self.recent_residual_ridge <= 0:
+            raise ValueError("positive finite recent residual ridge required")
         self.friction_policy = friction_policy.validated()
         self.fitted = False
 
@@ -1070,6 +1175,8 @@ class DirectActionValueModel:
             friction_policy=self.friction_policy,
             selection_calibration_mode="OFF",
             prequential_calibration_blocks=self.prequential_calibration_blocks,
+            recent_residual_fraction=self.recent_residual_fraction,
+            recent_residual_ridge=self.recent_residual_ridge,
         )
 
     def _prequential_selected_policy_calibration(
@@ -1372,6 +1479,12 @@ class DirectActionValueModel:
         self.scale_model = None
         calibration_state = "INSUFFICIENT_MARKET_BLOCKS"
         calibration_block_scores = 0
+        recent_residual_receipt = {
+            "state": "DISABLED",
+            "fraction": self.recent_residual_fraction,
+            "markets": 0,
+            "rows": 0,
+        }
 
         # Chronological split:
         # 60% mean seed, 20% residual scale, final 20% held out from mean for
@@ -1413,6 +1526,35 @@ class DirectActionValueModel:
                     factory(mean_fit_markets, target_states),
                     lambda action: action["target"])
 
+            if self.recent_residual_fraction > 0 and mean_fit_sequence:
+                recent_count = max(
+                    1,
+                    int(math.ceil(
+                        len(mean_fit_sequence) * self.recent_residual_fraction)),
+                )
+                recent_markets = set(mean_fit_sequence[-recent_count:])
+                try:
+                    deployment_mean, adjustment = fit_recent_residual_adjustment(
+                        deployment_mean,
+                        factory(recent_markets),
+                        lambda action: action["target"],
+                        ridge=self.recent_residual_ridge,
+                        batch_size=self.streaming_batch_size,
+                    )
+                    recent_residual_receipt = {
+                        **adjustment,
+                        "fraction": self.recent_residual_fraction,
+                        "markets": len(recent_markets),
+                    }
+                except ValueError as exc:
+                    recent_residual_receipt = {
+                        "state": "INSUFFICIENT_RECENT_ACTION_TARGETS",
+                        "reason": str(exc),
+                        "fraction": self.recent_residual_fraction,
+                        "markets": len(recent_markets),
+                        "rows": 0,
+                    }
+
             # Action-level split conformal uses the full untouched final 20%.
             block_scores = {}
             for action in factory(calibration_markets)():
@@ -1449,6 +1591,34 @@ class DirectActionValueModel:
                 batch_size=self.streaming_batch_size).fit_factory(
                     factory(None, target_states),
                     lambda action: action["target"])
+            if self.recent_residual_fraction > 0 and markets:
+                recent_count = max(
+                    1,
+                    int(math.ceil(
+                        len(markets) * self.recent_residual_fraction)),
+                )
+                recent_markets = set(markets[-recent_count:])
+                try:
+                    deployment_mean, adjustment = fit_recent_residual_adjustment(
+                        deployment_mean,
+                        factory(recent_markets),
+                        lambda action: action["target"],
+                        ridge=self.recent_residual_ridge,
+                        batch_size=self.streaming_batch_size,
+                    )
+                    recent_residual_receipt = {
+                        **adjustment,
+                        "fraction": self.recent_residual_fraction,
+                        "markets": len(recent_markets),
+                    }
+                except ValueError as exc:
+                    recent_residual_receipt = {
+                        "state": "INSUFFICIENT_RECENT_ACTION_TARGETS",
+                        "reason": str(exc),
+                        "fraction": self.recent_residual_fraction,
+                        "markets": len(recent_markets),
+                        "rows": 0,
+                    }
 
         if self.scale_model is None:
             self.uncertainty_floor = max(
@@ -1533,6 +1703,14 @@ class DirectActionValueModel:
             "selection_scores_oos_when_generated": True,
             "selection_score_blocks_may_enter_final_mean_fit": (
                 self.selection_calibration_mode == "PREQUENTIAL"),
+            "recent_residual_fraction": self.recent_residual_fraction,
+            "recent_residual_ridge": self.recent_residual_ridge,
+            "recent_residual": dict(recent_residual_receipt),
+            "recent_residual_semantics": (
+                "FROZEN_BASE_FEATURE_GEOMETRY;"
+                "RECENT_WINDOW_FITS_ONLY_BASE_MODEL_RESIDUAL;"
+                "ACTION_CONFORMAL_RECALIBRATES_COMBINED_MODEL"
+            ),
             "calibration_semantics": (
                 "MEAN_FIT_FIRST_80_PERCENT;"
                 "ACTION_CONFORMAL_FINAL_20_PERCENT;"
