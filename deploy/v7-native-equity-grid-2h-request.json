@@ -1,0 +1,14 @@
+{
+  "schema": "polymarket_v7_native_equity_grid_2h_request_v1",
+  "version": 1,
+  "request_id": "native-equity-grid-2h-20260921",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_research_sha": "edf038b96cc21f05e66900f95863bfadd0d6f0bd",
+  "minimum_wall_ns": 1790007780000000000,
+  "output_directory": "docs/research/native-equity-grid-2h-2026-09-21",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}
