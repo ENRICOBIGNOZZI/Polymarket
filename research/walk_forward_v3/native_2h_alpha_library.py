@@ -84,6 +84,9 @@ def feature(row,name):
         "vol_fast":("external.native_vol_fast","native_vol_fast"),
         "vol_slow":("external.native_vol_slow","native_vol_slow"),
         "signal":("signal_return_bp","external.binance_return_100ms_bp","binance_return_100ms_bp"),
+        "binance100":("external.binance_return_100ms_bp","binance_return_100ms_bp"),
+        "coinbase100":("external.coinbase_return_100ms_bp","coinbase_return_100ms_bp"),
+        "fresh_venues":("external.fresh_venues","fresh_venues"),
     }
     return first_feature(row,*aliases[name])
 
@@ -142,20 +145,37 @@ def select_window(rows):
 def training_thresholds(rows):
     data=defaultdict(list)
     for row in rows:
-        s=feature(row,"signal")
-        if finite(s): data["abs_signal"].append(abs(s))
-        for name in ("dispersion","vol_fast"):
+        sig=feature(row,"signal")
+        if finite(sig): data["abs_signal"].append(abs(sig))
+        for name in ("dispersion","vol_fast","fresh_venues"):
             v=feature(row,name)
             if finite(v): data[name].append(v)
         vf,vs=feature(row,"vol_fast"),feature(row,"vol_slow")
         if finite(vf) and finite(vs) and abs(vs)>1e-12:
             data["vol_ratio"].append(vf/abs(vs))
+        if finite(row.get("tte_ns")):
+            data["tte_s"].append(float(row["tte_ns"])/1e9)
+        side=selected_action_side(row)
+        state=decision_side_state(row,side)
+        if state is not None:
+            bid,ask=float(state["bid"]),float(state["ask"])
+            depth=float(state["ask_quantity"])
+            data["selected_spread"].append(ask-bid)
+            data["selected_depth"].append(depth)
+            data["selected_ask"].append(ask)
     return {
         "abs_signal_median":quantile(data["abs_signal"],.50),
         "abs_signal_q75":quantile(data["abs_signal"],.75),
+        "abs_signal_q90":quantile(data["abs_signal"],.90),
         "dispersion_median":quantile(data["dispersion"],.50),
+        "dispersion_q75":quantile(data["dispersion"],.75),
         "vol_fast_median":quantile(data["vol_fast"],.50),
         "vol_ratio_median":quantile(data["vol_ratio"],.50),
+        "fresh_venues_median":quantile(data["fresh_venues"],.50),
+        "tte_s_median":quantile(data["tte_s"],.50),
+        "selected_spread_median":quantile(data["selected_spread"],.50),
+        "selected_depth_median":quantile(data["selected_depth"],.50),
+        "selected_ask_median":quantile(data["selected_ask"],.50),
     }
 
 
@@ -175,6 +195,24 @@ def pm_yes_mid(row):
     if finite(bid) and finite(ask):
         return (float(bid)+float(ask))/2
     return None
+
+
+def selected_state_value(row,key):
+    state=decision_side_state(row,selected_action_side(row))
+    if state is None:return None
+    if key=="spread":
+        return float(state["ask"])-float(state["bid"])
+    if key=="depth":
+        return float(state["ask_quantity"])
+    if key=="ask":
+        return float(state["ask"])
+    return None
+
+
+def baseline_if_threshold(row,value,threshold,high=True):
+    if threshold is None or not finite(value):return None
+    if (float(value)>=float(threshold))!=high:return None
+    return selected_action_side(row)
 
 
 def alpha_library(th):
@@ -250,6 +288,68 @@ def alpha_library(th):
         if not finite(mid) or abs(float(mid)-.5)<1e-9:return None
         return "NO" if float(mid)>.5 else "YES"
 
+    def venue_rule(name,reverse=False):
+        def rule(row):
+            v=feature(row,name)
+            return side_for_direction(row,-sign(v) if reverse else sign(v))
+        return rule
+
+    def agreement_with_baseline(row,reverse=False):
+        vals=venue_returns(row)
+        sig=feature(row,"signal")
+        if not vals or not finite(sig):return None
+        c=sign(sum(vals));s=sign(sig)
+        if c==0 or s==0 or c!=s:return None
+        return opposite(selected_action_side(row)) if reverse else selected_action_side(row)
+
+    def disagreement_trade(row,follow_external=True):
+        vals=venue_returns(row)
+        sig=feature(row,"signal")
+        if not vals or not finite(sig):return None
+        c=sign(sum(vals));s=sign(sig)
+        if c==0 or s==0 or c==s:return None
+        desired=c if follow_external else s
+        return side_for_direction(row,desired)
+
+    def fresh_confirmation(row,min_venues,reverse=False):
+        fresh=feature(row,"fresh_venues")
+        if not finite(fresh) or float(fresh)<min_venues:return None
+        return consensus(row,reverse=reverse)
+
+    def vol_ratio_regime(row,high=True,reverse=False):
+        vf,vs=feature(row,"vol_fast"),feature(row,"vol_slow")
+        threshold=th.get("vol_ratio_median")
+        if not finite(vf) or not finite(vs) or abs(float(vs))<=1e-12 or threshold is None:return None
+        ratio=float(vf)/abs(float(vs))
+        if (ratio>=threshold)!=high:return None
+        return consensus(row,reverse=reverse)
+
+    def regime_threshold(key,threshold_key,high=True,reverse=False):
+        threshold=th.get(threshold_key)
+        def rule(row):
+            value=(
+                float(row.get("tte_ns") or 0)/1e9 if key=="tte_s"
+                else selected_state_value(row,key)
+            )
+            side=baseline_if_threshold(row,value,threshold,high)
+            if side is None:return None
+            return opposite(side) if reverse else side
+        return rule
+
+    def dispersion_extreme(row,high=True,reverse=False):
+        threshold=th.get("dispersion_q75")
+        d=feature(row,"dispersion")
+        if threshold is None or not finite(d):return None
+        if (float(d)>=threshold)!=high:return None
+        return consensus(row,reverse=reverse)
+
+    def strong_signal_vol(row,high_vol=True,reverse=False):
+        sig=feature(row,"signal");vol=feature(row,"vol_fast")
+        st=th.get("abs_signal_q75");vt=th.get("vol_fast_median")
+        if st is None or vt is None or not finite(sig) or not finite(vol):return None
+        if abs(float(sig))<st or ((float(vol)>=vt)!=high_vol):return None
+        return opposite(selected_action_side(row)) if reverse else selected_action_side(row)
+
     return {
         "baseline_continuation":baseline,
         "baseline_reversal":reversal,
@@ -258,6 +358,7 @@ def alpha_library(th):
         "signal_age_le_50ms":age_cap(50),
         "signal_age_le_100ms":age_cap(100),
         "strong_signal_q75":strength("abs_signal_q75",True),
+        "very_strong_signal_q90":strength("abs_signal_q90",True),
         "weak_signal_bottom50":strength("abs_signal_median",False),
         "ret250_momentum":ret_rule("ret250",False),
         "ret250_reversal":ret_rule("ret250",True),
@@ -265,23 +366,57 @@ def alpha_library(th):
         "ret1s_reversal":ret_rule("ret1s",True),
         "ret5s_momentum":ret_rule("ret5s",False),
         "ret5s_reversal":ret_rule("ret5s",True),
+        "binance100_momentum":venue_rule("binance100",False),
+        "binance100_reversal":venue_rule("binance100",True),
+        "coinbase100_momentum":venue_rule("coinbase100",False),
+        "coinbase100_reversal":venue_rule("coinbase100",True),
         "cross_venue_consensus_momentum":lambda r:consensus(r,False,False),
         "cross_venue_consensus_reversal":lambda r:consensus(r,True,False),
         "cross_venue_full_agreement_momentum":lambda r:consensus(r,False,True),
         "cross_venue_full_agreement_reversal":lambda r:consensus(r,True,True),
+        "signal_crossvenue_agreement":lambda r:agreement_with_baseline(r,False),
+        "signal_crossvenue_agreement_reversal":lambda r:agreement_with_baseline(r,True),
+        "signal_crossvenue_disagree_follow_external":lambda r:disagreement_trade(r,True),
+        "signal_crossvenue_disagree_follow_signal":lambda r:disagreement_trade(r,False),
+        "fresh_venues_ge_2_momentum":lambda r:fresh_confirmation(r,2,False),
+        "fresh_venues_ge_2_reversal":lambda r:fresh_confirmation(r,2,True),
+        "fresh_venues_ge_3_momentum":lambda r:fresh_confirmation(r,3,False),
+        "fresh_venues_ge_3_reversal":lambda r:fresh_confirmation(r,3,True),
         "low_dispersion_momentum":dispersion(True,False),
         "low_dispersion_reversal":dispersion(True,True),
         "high_dispersion_momentum":dispersion(False,False),
         "high_dispersion_reversal":dispersion(False,True),
+        "top_quartile_dispersion_momentum":lambda r:dispersion_extreme(r,True,False),
+        "top_quartile_dispersion_reversal":lambda r:dispersion_extreme(r,True,True),
         "low_vol_consensus_momentum":vol_regime(False,False),
         "low_vol_consensus_reversal":vol_regime(False,True),
         "high_vol_consensus_momentum":vol_regime(True,False),
         "high_vol_consensus_reversal":vol_regime(True,True),
+        "high_vol_ratio_momentum":lambda r:vol_ratio_regime(r,True,False),
+        "high_vol_ratio_reversal":lambda r:vol_ratio_regime(r,True,True),
+        "low_vol_ratio_momentum":lambda r:vol_ratio_regime(r,False,False),
+        "low_vol_ratio_reversal":lambda r:vol_ratio_regime(r,False,True),
+        "strong_signal_high_vol":lambda r:strong_signal_vol(r,True,False),
+        "strong_signal_high_vol_reversal":lambda r:strong_signal_vol(r,True,True),
+        "strong_signal_low_vol":lambda r:strong_signal_vol(r,False,False),
+        "strong_signal_low_vol_reversal":lambda r:strong_signal_vol(r,False,True),
         "acceleration_momentum":lambda r:acceleration(r,False),
         "acceleration_reversal":lambda r:acceleration(r,True),
         "deceleration_reversal":deceleration_reversal,
         "pm_yes_imbalance":lambda r:pm_imbalance(r,False),
         "pm_yes_imbalance_reversal":lambda r:pm_imbalance(r,True),
+        "tight_selected_spread":regime_threshold("spread","selected_spread_median",False,False),
+        "wide_selected_spread":regime_threshold("spread","selected_spread_median",True,False),
+        "deep_selected_book":regime_threshold("depth","selected_depth_median",True,False),
+        "shallow_selected_book":regime_threshold("depth","selected_depth_median",False,False),
+        "short_tte_continuation":regime_threshold("tte_s","tte_s_median",False,False),
+        "long_tte_continuation":regime_threshold("tte_s","tte_s_median",True,False),
+        "short_tte_reversal":regime_threshold("tte_s","tte_s_median",False,True),
+        "long_tte_reversal":regime_threshold("tte_s","tte_s_median",True,True),
+        "low_selected_price_continuation":regime_threshold("ask","selected_ask_median",False,False),
+        "high_selected_price_continuation":regime_threshold("ask","selected_ask_median",True,False),
+        "low_selected_price_reversal":regime_threshold("ask","selected_ask_median",False,True),
+        "high_selected_price_reversal":regime_threshold("ask","selected_ask_median",True,True),
         "pm_extension_reversal":pm_extension_reversal,
     }
 
