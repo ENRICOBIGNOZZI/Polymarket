@@ -2815,6 +2815,11 @@ def main(argv=None):
     parser.add_argument("--capital-budget", type=float, default=10_000.0)
     parser.add_argument("--folds", type=int, default=3)
     parser.add_argument("--minimum-wall-ns", type=int, default=None)
+    parser.add_argument(
+        "--support-policy-mode",
+        choices=("DIAGNOSTIC", "ROBUST_WORST_CASE"),
+        default="DIAGNOSTIC",
+    )
     args = parser.parse_args(argv)
 
     data = build_dataset(
@@ -2831,7 +2836,8 @@ def main(argv=None):
     else:
         result = walk_forward_direct_action(
             data["decisions"], desired_folds=args.folds,
-            latency_ms=args.latency_ms, capital_budget=args.capital_budget)
+            latency_ms=args.latency_ms, capital_budget=args.capital_budget,
+            model_kwargs={"support_policy_mode": args.support_policy_mode})
         result["data_sha256"] = data.get("data_sha256")
     atomic_json(args.output, result)
     return 0 if result.get("state") == "READY" else 2
