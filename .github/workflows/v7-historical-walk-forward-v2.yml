@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: v7-historical-walk-forward-v2
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   run:
