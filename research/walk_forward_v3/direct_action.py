@@ -3425,6 +3425,8 @@ def walk_forward_direct_action(
     latency_ms=50,
     capital_budget=10_000.0,
     model_kwargs=None,
+    trade_frequency_challenger=False,
+    challenger_sizing_policy=DEFAULT_EDGE_SIZING_POLICY,
 ):
     found, receipt = folds(records, desired_folds=desired_folds)
     result = {
@@ -3443,9 +3445,26 @@ def walk_forward_direct_action(
         ),
         "mean_covariance_estimation": False,
     }
+    if trade_frequency_challenger:
+        sizing = challenger_sizing_policy.validated()
+        result["trade_frequency_challenger"] = {
+            "schema": SCHEMA + "_trade_frequency_challenger_v1",
+            **SAFETY,
+            "state": receipt.get("state"),
+            "entry_policy": "ONE_ENTRY_PER_SHOCK",
+            "sizing_policy": {
+                "context_count": sizing.context_count,
+                "knots": [list(point) for point in sizing.knots],
+            },
+            "conditional_calibration": True,
+            "folds": [],
+            "diagnostic_selected_outcomes": [],
+            "selection": "NONE_RESEARCH_CHALLENGER_NOT_PROMOTED",
+        }
     if not found:
         return result
     fold_summaries = []
+    challenger_fold_summaries = []
     for fold in found:
         model = DirectActionValueModel(**(model_kwargs or {})).fit(fold["train_repricing"])
         outcomes = evaluate_direct_action_policy(
@@ -3468,6 +3487,72 @@ def walk_forward_direct_action(
                 capital_budget=capital_budget,
             ),
         })
+        if trade_frequency_challenger:
+            challenger_kwargs = dict(model_kwargs or {})
+            challenger_kwargs["conditional_calibration"] = True
+            challenger_kwargs.setdefault("conditional_calibration_min_markets", 12)
+            challenger_kwargs.setdefault("conditional_calibration_shrinkage", 20.0)
+            challenger_model = DirectActionValueModel(**challenger_kwargs).fit(
+                fold["train_repricing"])
+            challenger_outcomes = evaluate_direct_action_policy(
+                challenger_model,
+                fold["test"],
+                latency_ms=latency_ms,
+                capital_budget=capital_budget,
+                live_geometry=True,
+                entry_policy="ONE_ENTRY_PER_SHOCK",
+                sizing_policy=challenger_sizing_policy,
+            )
+            challenger_summary = summarize_direct_action(challenger_outcomes)
+            challenger_fold_summaries.append(challenger_summary)
+            result["trade_frequency_challenger"]["folds"].append({
+                "fold": fold["fold"],
+                "cutoff_ns": fold["cutoff_ns"],
+                "train_markets": len(fold["train_markets"]),
+                "test_markets": len(fold["test_markets"]),
+                "training": challenger_model.training_receipt,
+                "oos": challenger_summary,
+                "baseline_selected_trades": summary["selected_trades"],
+                "selected_trade_delta": (
+                    challenger_summary["selected_trades"]
+                    - summary["selected_trades"]),
+                "baseline_observed_net_pnl": summary["total_observed_net_pnl"],
+                "observed_net_pnl_delta": (
+                    None
+                    if challenger_summary["total_observed_net_pnl"] is None
+                    or summary["total_observed_net_pnl"] is None
+                    else challenger_summary["total_observed_net_pnl"]
+                    - summary["total_observed_net_pnl"]
+                ),
+            })
+            challenger_remaining = max(
+                0,
+                384 - len(
+                    result["trade_frequency_challenger"][
+                        "diagnostic_selected_outcomes"]),
+            )
+            if challenger_remaining:
+                for challenger_row in (
+                    value for value in challenger_outcomes
+                    if value.get("action") == "TRADE"
+                ):
+                    result["trade_frequency_challenger"][
+                        "diagnostic_selected_outcomes"].append({
+                        key: challenger_row.get(key) for key in (
+                            "market_id", "asset", "contract_horizon", "decision_ns",
+                            "parent_shock_id", "entry_policy", "side", "size",
+                            "exit_horizon_ms", "latency_ms", "notional",
+                            "sizing_mode", "admission_edge_per_dollar",
+                            "context_capital_fraction",
+                            "desired_notional_before_constraints",
+                            "desired_notional_after_constraints",
+                            "calibration_multiplier_used", "uncertainty_penalty",
+                            "policy_utility", "realized_pnl", "target_state",
+                        )
+                    })
+                    challenger_remaining -= 1
+                    if challenger_remaining <= 0:
+                        break
         remaining = max(0, 384 - len(result["diagnostic_selected_outcomes"]))
         if remaining:
             for row in (value for value in outcomes if value.get("action") == "TRADE"):
@@ -3492,6 +3577,31 @@ def walk_forward_direct_action(
                 if remaining <= 0:
                     break
     result["summary"] = merge_direct_action_summaries(fold_summaries)
+    if trade_frequency_challenger:
+        challenger_summary = merge_direct_action_summaries(
+            challenger_fold_summaries)
+        baseline_summary = result["summary"]
+        result["trade_frequency_challenger"]["summary"] = challenger_summary
+        result["trade_frequency_challenger"]["comparison"] = {
+            "selected_trade_delta": (
+                challenger_summary["selected_trades"]
+                - baseline_summary["selected_trades"]),
+            "trade_rate_delta": (
+                (challenger_summary.get("trade_rate") or 0.0)
+                - (baseline_summary.get("trade_rate") or 0.0)),
+            "observed_net_pnl_delta": (
+                None
+                if challenger_summary["total_observed_net_pnl"] is None
+                or baseline_summary["total_observed_net_pnl"] is None
+                else challenger_summary["total_observed_net_pnl"]
+                - baseline_summary["total_observed_net_pnl"]
+            ),
+            "baseline_selected_trades": baseline_summary["selected_trades"],
+            "challenger_selected_trades": challenger_summary["selected_trades"],
+            "baseline_trade_rate": baseline_summary.get("trade_rate"),
+            "challenger_trade_rate": challenger_summary.get("trade_rate"),
+        }
+        result["trade_frequency_challenger"]["state"] = "READY"
     result["state"] = "READY"
     return result
 
@@ -3508,6 +3618,14 @@ def main(argv=None):
         "--support-policy-mode",
         choices=("DIAGNOSTIC", "ROBUST_WORST_CASE"),
         default="DIAGNOSTIC",
+    )
+    parser.add_argument(
+        "--trade-frequency-challenger",
+        action="store_true",
+        help=(
+            "Evaluate conditional-calibration + independent-shock reentry + "
+            "edge/context-budget sizing as a PAPER-only OOS challenger."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -3526,7 +3644,8 @@ def main(argv=None):
         result = walk_forward_direct_action(
             data["decisions"], desired_folds=args.folds,
             latency_ms=args.latency_ms, capital_budget=args.capital_budget,
-            model_kwargs={"support_policy_mode": args.support_policy_mode})
+            model_kwargs={"support_policy_mode": args.support_policy_mode},
+            trade_frequency_challenger=args.trade_frequency_challenger)
         result["data_sha256"] = data.get("data_sha256")
     atomic_json(args.output, result)
     return 0 if result.get("state") == "READY" else 2
