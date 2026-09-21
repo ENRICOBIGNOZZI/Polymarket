@@ -888,14 +888,24 @@ def settlement_predictors(train, test):
 
 
 def executable_markout_target(row, horizon_key):
-    """Future executable bid minus causal decision ask and taker fee, per share."""
+    """Round-trip executable markout per share using causal decision ask and future bid.
+
+    Both BUY entry and SELL exit fees are charged because the canonical replay
+    charges taker fees on either side. Execution reserve is deliberately not
+    included here; it remains a decision margin, not realized PnL.
+    """
     target = row.get("targets", {}).get(str(horizon_key), {})
     if target.get("state") != "OBSERVED":
         return None
-    fee = cash_fee(
-        1_000_000, round(row["ask"] * 10000),
+    entry_price = float(row["ask"])
+    exit_price = float(target["arrival_bid"])
+    entry_fee = cash_fee(
+        1_000_000, round(entry_price * 10000),
         row["fee_rate"], row["fee_exponent"])
-    return float(target["arrival_bid"]) - float(row["ask"]) - float(fee)
+    exit_fee = cash_fee(
+        1_000_000, round(exit_price * 10000),
+        row["fee_rate"], row["fee_exponent"])
+    return exit_price - entry_price - float(entry_fee) - float(exit_fee)
 
 
 def repricing_predictors(train, test):
@@ -921,7 +931,7 @@ def repricing_predictors(train, test):
         details[key] = {
             "state": "READY", "rows": len(eligible), "feature_names": names,
             "midpoint_target": "future_observed_pm_midpoint_change",
-            "economic_target": "future_executable_bid_minus_decision_ask_minus_taker_fee",
+            "economic_target": "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees",
         }
     return midpoint, markout, details
 
@@ -980,7 +990,7 @@ def fit_full_repricing(records):
             "selected_token_pm_midpoint_change_asof_horizon")
         markout_models[key] = _serialize_ridge(
             markout_model, eligible, names, key,
-            "future_executable_bid_minus_decision_ask_minus_taker_fee")
+            "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees")
     return {
         "schema": SCHEMA + "_full_window_repricing_models_v2",
         **SAFETY,
@@ -1080,7 +1090,7 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         after_fee = gross - fee
         predicted_positive = repricing > 0
     elif valuation_mode == "EXECUTABLE_MARKOUT":
-        # prediction is already future executable bid - causal ask - taker fee.
+        # prediction is already future bid - causal ask - entry fee - exit fee.
         after_fee = float(prediction)
         gross = after_fee + fee
         predicted_positive = after_fee > 0
@@ -1141,7 +1151,14 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
     target = row.get("targets", {}).get(str(int(markout_horizon_ms)), {})
     if target.get("state") == "OBSERVED":
         outcome["markout_before_fee"] = filled * target["arrival_bid"] - turnover
-        outcome["markout"] = outcome["markout_before_fee"] - cost_fee
+        exit_fee = (
+            0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND"
+            else fee_per_share(row, target["arrival_bid"]) * filled
+        )
+        outcome["markout_entry_fee"] = cost_fee
+        outcome["markout_exit_fee"] = exit_fee
+        outcome["markout_roundtrip_fees"] = cost_fee + exit_fee
+        outcome["markout"] = outcome["markout_before_fee"] - outcome["markout_roundtrip_fees"]
         funnel["positive_markout"] = outcome["markout"] > 0
     if row["label"] is not None:
         outcome["pnl"] = filled * row["label"] - turnover - cost_fee
@@ -1221,6 +1238,9 @@ def summarize(outcomes):
         "marked_fills": len(marked),
         "positive_markout_fills": sum(row["markout"] > 0 for row in marked),
         "markout_before_fee": sum(row.get("markout_before_fee", 0) for row in marked) if marked else None,
+        "markout_roundtrip_fees": sum(row.get("markout_roundtrip_fees", 0) for row in marked) if marked else None,
+        "markout_entry_fees": sum(row.get("markout_entry_fee", 0) for row in marked) if marked else None,
+        "markout_exit_fees": sum(row.get("markout_exit_fee", 0) for row in marked) if marked else None,
         "markout_pnl": sum(row["markout"] for row in marked) if marked else None,
         "markout_per_fill": sum(row["markout"] for row in marked) / len(marked) if marked else None,
         "fees": sum(row.get("fees", 0) for row in fills), "turnover": sum(row.get("turnover", 0) for row in fills),
