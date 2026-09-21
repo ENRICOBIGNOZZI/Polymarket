@@ -870,6 +870,8 @@ class DirectActionValueModel:
         prequential_calibration_blocks=2,
         maximum_effective_action_age_ms=None,
         minimum_regime_action_targets=0,
+        minimum_observability_probability=0.0,
+        observability_penalty_dollars=0.0,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -889,6 +891,10 @@ class DirectActionValueModel:
         )
         self.minimum_regime_action_targets = int(
             minimum_regime_action_targets)
+        self.minimum_observability_probability = float(
+            minimum_observability_probability)
+        self.observability_penalty_dollars = float(
+            observability_penalty_dollars)
         if (
             self.maximum_effective_action_age_ms is not None
             and (
@@ -900,6 +906,14 @@ class DirectActionValueModel:
                 "positive finite maximum effective action age required")
         if self.minimum_regime_action_targets < 0:
             raise ValueError("nonnegative regime support threshold required")
+        if not 0.0 <= self.minimum_observability_probability <= 1.0:
+            raise ValueError(
+                "observability probability threshold must lie in [0,1]")
+        if (
+            not finite(self.observability_penalty_dollars)
+            or self.observability_penalty_dollars < 0
+        ):
+            raise ValueError("nonnegative finite observability penalty required")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -1158,6 +1172,58 @@ class DirectActionValueModel:
                             yield action
 
 
+    def _iter_observability_rows(self, rows, *, markets=None):
+        """Binary support target; economic PnL remains separately censored."""
+        market_filter = set(markets) if markets is not None else None
+        for row in rows:
+            if market_filter is not None and str(row["market_id"]) not in market_filter:
+                continue
+            if not _valid_state(row):
+                continue
+            for latency in self.train_latencies_ms:
+                for side in decision_action_sides(row):
+                    side_state = decision_side_state(row, side)
+                    if side_state is None:
+                        continue
+                    if float(side_state["ask"]) > self.entry_cap + 1e-12:
+                        continue
+                    for horizon in self.action_horizons_ms:
+                        if horizon <= latency:
+                            continue
+                        kernel, state = action_execution_kernel(
+                            row,
+                            horizon_ms=horizon,
+                            latency_ms=latency,
+                            side=side,
+                            entry_cap=self.entry_cap,
+                        )
+                        action = self._action_record(
+                            row,
+                            size=0.0,
+                            horizon_ms=horizon,
+                            latency_ms=latency,
+                            side=side,
+                        )
+                        action["observability_target"] = (
+                            1.0 if kernel is not None else 0.0)
+                        action["observability_state"] = state
+                        yield action
+
+    def _observability_probability(
+        self, row, *, side, horizon_ms, latency_ms,
+    ):
+        model = getattr(self, "observability_model", None)
+        if model is None:
+            return None
+        action = self._action_record(
+            row,
+            size=0.0,
+            horizon_ms=horizon_ms,
+            latency_ms=latency_ms,
+            side=side,
+        )
+        return min(1.0, max(0.0, float(model.predict(action))))
+
     @staticmethod
     def _market_order(rows):
         first = {}
@@ -1187,6 +1253,9 @@ class DirectActionValueModel:
             prequential_calibration_blocks=self.prequential_calibration_blocks,
             maximum_effective_action_age_ms=self.maximum_effective_action_age_ms,
             minimum_regime_action_targets=self.minimum_regime_action_targets,
+            minimum_observability_probability=(
+                self.minimum_observability_probability),
+            observability_penalty_dollars=self.observability_penalty_dollars,
         )
 
     def _prequential_selected_policy_calibration(
@@ -1584,6 +1653,26 @@ class DirectActionValueModel:
 
         self.mean_model = deployment_mean
         self.regime_action_target_counts = dict(regime_action_targets)
+        self.observability_model = None
+        self.observability_training_rows = 0
+        self.observability_training_rate = None
+        try:
+            self.observability_model = StreamingRidge(
+                self.model_feature_names,
+                ridge=self.ridge,
+                batch_size=self.streaming_batch_size,
+            ).fit_factory(
+                lambda: self._iter_observability_rows(
+                    rows, markets=mean_fit_markets),
+                lambda action: action["observability_target"],
+            )
+            self.observability_training_rows = int(
+                self.observability_model.rows)
+            self.observability_training_rate = float(
+                self.observability_model.target_mean)
+        except ValueError as exc:
+            if str(exc) != "streaming ridge received zero rows":
+                raise
         training_states_used = sum(
             1 for row in rows if str(row["market_id"]) in mean_fit_markets)
         self.training_receipt = {
@@ -1616,6 +1705,16 @@ class DirectActionValueModel:
                 self.minimum_regime_action_targets),
             "regime_action_target_counts": dict(
                 sorted(self.regime_action_target_counts.items())),
+            "observability_head": (
+                "RIDGE_BINARY_CAUSAL_ARRIVAL_PLUS_EXIT_LABEL_AVAILABILITY"),
+            "observability_target_semantics": (
+                "OBSERVED_NO_FILL_IS_ONE;MISSING_ARRIVAL_OR_EXIT_IS_ZERO;"
+                "MISSING_PNL_REMAINS_CENSORED_NOT_ZERO"),
+            "observability_training_rows": self.observability_training_rows,
+            "observability_training_rate": self.observability_training_rate,
+            "minimum_observability_probability": (
+                self.minimum_observability_probability),
+            "observability_penalty_dollars": self.observability_penalty_dollars,
             "action_space": ["NO_TRADE", "YES_X_SIZE_X_EXIT_HORIZON", "NO_X_SIZE_X_EXIT_HORIZON"],
             "opposite_side_counterfactual": "AVAILABLE_ONLY_WITH_CAUSAL_BILATERAL_L1_DECISION_ARRIVAL_AND_EXIT_EVIDENCE",
             "entry_cap": self.entry_cap,
@@ -1791,8 +1890,10 @@ class DirectActionValueModel:
         upper = min(float(side_state["ask_quantity"]), cap / ask)
         return lower, upper
 
-    def _score_quantity(self, row, *, size, horizon_ms, latency_ms, side,
-                        portfolio_state, capital_budget):
+    def _score_quantity(
+        self, row, *, size, horizon_ms, latency_ms, side,
+        portfolio_state, capital_budget, observability_probability=None,
+    ):
         action = self._action_record(
             row, size=size, horizon_ms=horizon_ms, latency_ms=latency_ms, side=side)
         mean = float(self.mean_model.predict(action))
@@ -1833,9 +1934,26 @@ class DirectActionValueModel:
             base, row, portfolio_state=portfolio_state,
             capital_budget=capital_budget,
             friction_policy=self.friction_policy)
+        if observability_probability is None:
+            observability_probability = self._observability_probability(
+                row,
+                side=side,
+                horizon_ms=horizon_ms,
+                latency_ms=latency_ms,
+            )
+        observability_penalty = (
+            0.0
+            if observability_probability is None
+            else self.observability_penalty_dollars
+            * (1.0 - float(observability_probability))
+        )
         lower_cash = (
             mean - uncertainty_penalty - selection_optimism_penalty)
-        policy_utility = lower_cash - residual["total_residual_friction"]
+        policy_utility = (
+            lower_cash
+            - residual["total_residual_friction"]
+            - observability_penalty
+        )
         return {
             **base,
             "predicted_total_net_cash_pnl": mean,
@@ -1843,6 +1961,8 @@ class DirectActionValueModel:
             "predicted_abs_error_scale": scale,
             "uncertainty_penalty": float(uncertainty_penalty),
             "selection_optimism_penalty": float(selection_optimism_penalty),
+            "observability_probability": observability_probability,
+            "observability_penalty": float(observability_penalty),
             "calibrated_lower_cash_value": float(lower_cash),
             "calibrated_lower_value": float(policy_utility),
             "policy_utility": float(policy_utility),
@@ -2011,12 +2131,29 @@ class DirectActionValueModel:
             return [], "OUTSIDE_LIVE_GEOMETRY"
 
         scored = []
+        observability_gate_candidates = 0
+        observability_gate_rejections = 0
         for side in decision_action_sides(row):
             lower, upper = self._quantity_bounds(row, available_capital, side)
             if upper + 1e-12 < lower or upper <= 0:
                 continue
             for horizon in self.action_horizons_ms:
                 if horizon <= latency_ms:
+                    continue
+                observability_probability = self._observability_probability(
+                    row,
+                    side=side,
+                    horizon_ms=horizon,
+                    latency_ms=latency_ms,
+                )
+                if observability_probability is not None:
+                    observability_gate_candidates += 1
+                if (
+                    observability_probability is not None
+                    and observability_probability + 1e-12
+                    < self.minimum_observability_probability
+                ):
+                    observability_gate_rejections += 1
                     continue
                 quantities = self._continuous_quantity_candidates(
                     row, horizon_ms=horizon, latency_ms=latency_ms, side=side,
@@ -2029,7 +2166,8 @@ class DirectActionValueModel:
                     self._score_quantity(
                         row, size=q, horizon_ms=horizon, latency_ms=latency_ms,
                         side=side, portfolio_state=portfolio_state,
-                        capital_budget=capital_budget)
+                        capital_budget=capital_budget,
+                        observability_probability=observability_probability)
                     for q in quantities
                 ]
                 horizon_scores.sort(
@@ -2052,7 +2190,14 @@ class DirectActionValueModel:
             ),
             reverse=True,
         )
-        return scored, "READY" if scored else "NO_FEASIBLE_ACTION"
+        if scored:
+            return scored, "READY"
+        if (
+            observability_gate_candidates > 0
+            and observability_gate_rejections == observability_gate_candidates
+        ):
+            return [], "LOW_OBSERVABILITY_SUPPORT"
+        return [], "NO_FEASIBLE_ACTION"
 
     def select_action(self, row, *, latency_ms=50, available_capital=None,
                       live_geometry=True, minimum_lower_value=0.0,
@@ -2296,6 +2441,10 @@ def summarize_direct_action(outcomes):
             float(row.get("total_residual_friction") or 0.0) for row in trades),
         "total_predicted_uncertainty_penalty": sum(
             float(row.get("uncertainty_penalty") or 0.0) for row in trades),
+        "total_observability_penalty": sum(
+            float(row.get("observability_penalty") or 0.0) for row in trades),
+        "selected_observability_probability_distribution": numeric_distribution(
+            row.get("observability_probability") for row in trades),
         "total_predicted_selection_optimism_penalty": sum(
             float(row.get("selection_optimism_penalty") or 0.0)
             for row in trades),
@@ -2332,6 +2481,7 @@ def merge_direct_action_summaries(summaries):
         "negative_observed_trades", "total_predicted_residual_friction",
         "total_predicted_uncertainty_penalty",
         "total_predicted_selection_optimism_penalty",
+        "total_observability_penalty",
     )
     result = {"schema": SCHEMA + "_summary_v2", **SAFETY}
     for key in additive:
@@ -2340,6 +2490,7 @@ def merge_direct_action_summaries(summaries):
             "total_predicted_residual_friction",
             "total_predicted_uncertainty_penalty",
             "total_predicted_selection_optimism_penalty",
+            "total_observability_penalty",
         ):
             result[key] = int(result[key])
 
@@ -2386,6 +2537,13 @@ def merge_direct_action_summaries(summaries):
     result["observed_pnl_distribution"] = {
         "state": "SEE_EXACT_PER_FOLD_DISTRIBUTIONS",
         "folds": [summary["observed_pnl_distribution"] for summary in summaries],
+    }
+    result["selected_observability_probability_distribution"] = {
+        "state": "SEE_EXACT_PER_FOLD_DISTRIBUTIONS",
+        "folds": [
+            summary["selected_observability_probability_distribution"]
+            for summary in summaries
+        ],
     }
     return result
 
@@ -2560,6 +2718,7 @@ def walk_forward_direct_action(
                         "signal_age_ms", "effective_action_age_ms", "notional",
                         "policy_utility", "predicted_total_net_cash_pnl",
                         "uncertainty_penalty", "selection_optimism_penalty",
+                        "observability_probability", "observability_penalty",
                         "total_residual_friction",
                         "realized_pnl", "target_state",
                         "censored_worst_case_pnl",
