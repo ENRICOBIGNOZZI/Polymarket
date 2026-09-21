@@ -114,23 +114,23 @@ assert baseline['exit_horizons_ms']==[500,750,1000,1500,2000,3000,4000,5000,7500
 assert baseline['size_shares']==5.0
 assert len(summary['candidates'])<=4
 print('MULTI_ALPHA_2H_READY')
-print(json.dumps({
-  'window_start_ns':manifest['window_start_ns'],
-  'window_end_ns':manifest['window_end_ns'],
-  'assets':baseline['assets'],
-  'contract_horizons':baseline['contract_horizons'],
-  'shortlist':summary['candidates'],
-},sort_keys=True))
+print(json.dumps(dict(
+  window_start_ns=manifest['window_start_ns'],
+  window_end_ns=manifest['window_end_ns'],
+  assets=baseline['assets'],
+  contract_horizons=baseline['contract_horizons'],
+  shortlist=summary['candidates'],
+),sort_keys=True))
 PY
 tar -C {remote}/output/multi-alpha-2h -czf {remote}/results.tgz .
 python3 - {remote}/results.tgz <<'PY'
 from pathlib import Path
 import hashlib,json,sys
 p=Path(sys.argv[1])
-print('MULTI_ALPHA_2H_RESULT='+json.dumps({
-  'bytes':p.stat().st_size,
-  'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-},sort_keys=True))
+print('MULTI_ALPHA_2H_RESULT='+json.dumps(dict(
+  bytes=p.stat().st_size,
+  sha256=hashlib.sha256(p.read_bytes()).hexdigest(),
+),sort_keys=True))
 PY"""
 
     stdout, _ = run(REGION, args.instance_id, command, 5400)
