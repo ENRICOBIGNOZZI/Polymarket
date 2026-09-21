@@ -2,7 +2,7 @@
 
 ## Direct answers
 
-- 500ms-reference OOS executable markout: **POSITIVE POINT ESTIMATE / UNCERTAIN**
+- 500ms-reference OOS executable markout: **NEGATIVE POINT ESTIMATE / UNCERTAIN**
 - Settlement alpha: **UNKNOWN / INSUFFICIENT CAUSAL SETTLEMENT LABELS**
 - PM lag after causal external signal: **POSITIVE DESCRIPTIVE 250MS MOVE**
 - Prior zero-trade diagnosis: **PM midpoint baseline cannot cross executable ask plus costs.**
@@ -10,25 +10,25 @@
 
 ## Identity
 
-- Starting SHA: 12a8b17ddcaa3eabad50bdac2d22ed27797a51f2
-- Data SHA: f5b28084101709f8fc3d6dcf7172153540cd9bbb5e022caaa0b555fefb288ff1
+- Starting SHA: ffb951a7568f414e26a9c9b7effeb9dce3298d5e
+- Data SHA: 71ec205434a5d08155c206f2961fba60a12b0c615f105b3727818fc33f468d1a
 - Input state: READY
-- Decisions: 398781
-- Markets: 1952
-- Short-horizon pairs: 77596
-- OOS predictions: 298392
+- Decisions: 408873
+- Markets: 2000
+- Short-horizon pairs: 79246
+- OOS predictions: 306672
 - Full-window midpoint models ready: 7
 - Full-window executable-markout models ready: 7
 
 ## 500ms reference executable-markout economics
 
-- Simulated orders: 52
-- Fills: 23
-- Marked fills: 18
+- Simulated orders: 55
+- Fills: 28
+- Marked fills: 22
 - Positive marked fills: 5
-- Net executable markout: 0.12904899999999916
-- Markout/fill: 0.007169388888888842
-- Fill rate: 0.4423076923076923
+- Net executable markout: -0.3006510000000015
+- Markout/fill: -0.013665954545454613
+- Fill rate: 0.509090909090909
 
 The report never converts unavailable books, labels, forecasts, or fills into zero.
 

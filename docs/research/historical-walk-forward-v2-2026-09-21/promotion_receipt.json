@@ -1,6 +1,6 @@
 {
   "action": "HOLD",
-  "artifact_sha256": "732c1ce3f4fd297d08911341767207b9a7dafc618644bfbc2ed90cf0c21dbd47",
+  "artifact_sha256": "5f060c2f890dbf401aafb516e103f57b726cb71076ac3a901c640c91772a25b8",
   "authenticated_execution": false,
   "automatic_promotion_scope": "PAPER_RESEARCH_CHAMPION_ONLY",
   "candidates": [
@@ -27,30 +27,30 @@
       "horizon_ms": 1000,
       "latency_checks": {
         "25": {
-          "marked_fills": 66,
-          "markout_pnl": -1.0838500000000006,
+          "marked_fills": 63,
+          "markout_pnl": -0.4857500000000009,
           "state": "READY"
         },
         "50": {
-          "marked_fills": 64,
-          "markout_pnl": -2.9965700000000006,
+          "marked_fills": 58,
+          "markout_pnl": -2.3614500000000005,
           "state": "READY"
         }
       },
       "metrics": {
-        "fill_rate": 0.8705882352941177,
-        "fills": 74,
-        "marked_fills": 64,
-        "markets": 64,
-        "markout_per_fill": -0.04682140625000001,
+        "fill_rate": 0.7252747252747253,
+        "fills": 66,
+        "marked_fills": 58,
+        "markets": 58,
+        "markout_per_fill": -0.0407146551724138,
         "markout_per_fill_interval": [
-          -0.10865968749999999,
-          0.03409921875
+          -0.10073189655172414,
+          0.0555551724137931
         ],
-        "markout_pnl": -2.9965700000000006
+        "markout_pnl": -2.3614500000000005
       },
       "qualified": false,
-      "score": -0.10865968749999999
+      "score": -0.10073189655172414
     },
     {
       "candidate_contract": {
@@ -75,30 +75,30 @@
       "horizon_ms": 2000,
       "latency_checks": {
         "25": {
-          "marked_fills": 56,
-          "markout_pnl": -2.2124500000000005,
+          "marked_fills": 74,
+          "markout_pnl": -3.1753499999999995,
           "state": "READY"
         },
         "50": {
-          "marked_fills": 55,
-          "markout_pnl": -3.9177500000000003,
+          "marked_fills": 67,
+          "markout_pnl": -4.225199999999999,
           "state": "READY"
         }
       },
       "metrics": {
-        "fill_rate": 0.8589743589743589,
-        "fills": 67,
-        "marked_fills": 55,
-        "markets": 55,
-        "markout_per_fill": -0.07123181818181819,
+        "fill_rate": 0.7666666666666667,
+        "fills": 92,
+        "marked_fills": 67,
+        "markets": 67,
+        "markout_per_fill": -0.06306268656716417,
         "markout_per_fill_interval": [
-          -0.13315000000000002,
-          -0.0025699999999999933
+          -0.12644253731343283,
+          0.005230597014925393
         ],
-        "markout_pnl": -3.9177500000000003
+        "markout_pnl": -4.225199999999999
       },
       "qualified": false,
-      "score": -0.13315000000000002
+      "score": -0.12644253731343283
     },
     {
       "candidate_contract": {
@@ -123,30 +123,30 @@
       "horizon_ms": 500,
       "latency_checks": {
         "25": {
-          "marked_fills": 56,
-          "markout_pnl": -0.3365500000000006,
+          "marked_fills": 55,
+          "markout_pnl": -1.1970500000000002,
           "state": "READY"
         },
         "50": {
-          "marked_fills": 53,
-          "markout_pnl": -1.6746000000000005,
+          "marked_fills": 50,
+          "markout_pnl": -1.8994000000000004,
           "state": "READY"
         }
       },
       "metrics": {
-        "fill_rate": 0.8169014084507042,
-        "fills": 58,
-        "marked_fills": 53,
-        "markets": 53,
-        "markout_per_fill": -0.03159622641509435,
+        "fill_rate": 0.691358024691358,
+        "fills": 56,
+        "marked_fills": 50,
+        "markets": 50,
+        "markout_per_fill": -0.03798800000000001,
         "markout_per_fill_interval": [
-          -0.10236603773584912,
-          0.06620377358490565
+          -0.09937000000000001,
+          0.062449
         ],
-        "markout_pnl": -1.6746000000000005
+        "markout_pnl": -1.8994000000000004
       },
       "qualified": false,
-      "score": -0.10236603773584912
+      "score": -0.09937000000000001
     },
     {
       "candidate_contract": {
@@ -172,29 +172,29 @@
       "latency_checks": {
         "25": {
           "marked_fills": 29,
-          "markout_pnl": 1.406149999999999,
+          "markout_pnl": 0.6318499999999996,
           "state": "READY"
         },
         "50": {
           "marked_fills": 25,
-          "markout_pnl": -0.31800000000000117,
+          "markout_pnl": -0.3855500000000009,
           "state": "READY"
         }
       },
       "metrics": {
-        "fill_rate": 0.8409090909090909,
-        "fills": 37,
+        "fill_rate": 0.8085106382978723,
+        "fills": 38,
         "marked_fills": 25,
         "markets": 25,
-        "markout_per_fill": -0.012720000000000047,
+        "markout_per_fill": -0.015422000000000036,
         "markout_per_fill_interval": [
-          -0.07073200000000002,
-          0.0485339999999999
+          -0.07754399999999999,
+          0.05601599999999991
         ],
-        "markout_pnl": -0.31800000000000117
+        "markout_pnl": -0.3855500000000009
       },
       "qualified": false,
-      "score": -0.07073200000000002
+      "score": -0.07754399999999999
     },
     {
       "candidate_contract": {
@@ -210,7 +210,6 @@
       "candidate_id": "pooled_2000ms",
       "failures": [
         "INSUFFICIENT_MARKED_FILLS",
-        "INSUFFICIENT_MARKET_BLOCKS",
         "NONPOSITIVE_TOTAL_MARKOUT",
         "NONPOSITIVE_MARKOUT_PER_FILL",
         "MARKET_BLOCK_LOWER_BOUND_NEGATIVE",
@@ -220,30 +219,30 @@
       "horizon_ms": 2000,
       "latency_checks": {
         "25": {
-          "marked_fills": 23,
-          "markout_pnl": 1.2872,
+          "marked_fills": 25,
+          "markout_pnl": 0.4003000000000007,
           "state": "READY"
         },
         "50": {
-          "marked_fills": 19,
-          "markout_pnl": -0.3401500000000001,
+          "marked_fills": 21,
+          "markout_pnl": -0.6239999999999993,
           "state": "READY"
         }
       },
       "metrics": {
-        "fill_rate": 0.8297872340425532,
-        "fills": 39,
-        "marked_fills": 19,
-        "markets": 19,
-        "markout_per_fill": -0.017902631578947375,
+        "fill_rate": 0.8235294117647058,
+        "fills": 42,
+        "marked_fills": 21,
+        "markets": 21,
+        "markout_per_fill": -0.029714285714285683,
         "markout_per_fill_interval": [
-          -0.12404999999999997,
-          0.06998157894736838
+          -0.12660952380952376,
+          0.06279999999999997
         ],
-        "markout_pnl": -0.3401500000000001
+        "markout_pnl": -0.6239999999999993
       },
       "qualified": false,
-      "score": -0.12404999999999997
+      "score": -0.12660952380952376
     },
     {
       "candidate_contract": {
@@ -265,30 +264,30 @@
       "horizon_ms": 500,
       "latency_checks": {
         "25": {
-          "marked_fills": 26,
-          "markout_pnl": 2.52,
+          "marked_fills": 30,
+          "markout_pnl": 1.7252499999999988,
           "state": "READY"
         },
         "50": {
-          "marked_fills": 23,
-          "markout_pnl": 1.1883999999999992,
+          "marked_fills": 26,
+          "markout_pnl": 0.8109499999999991,
           "state": "READY"
         }
       },
       "metrics": {
-        "fill_rate": 0.8333333333333334,
-        "fills": 30,
-        "marked_fills": 23,
-        "markets": 23,
-        "markout_per_fill": 0.05166956521739127,
+        "fill_rate": 0.8048780487804879,
+        "fills": 33,
+        "marked_fills": 26,
+        "markets": 26,
+        "markout_per_fill": 0.031190384615384578,
         "markout_per_fill_interval": [
-          -0.0233195652173913,
-          0.14949130434782607
+          -0.04019807692307697,
+          0.1278307692307692
         ],
-        "markout_pnl": 1.1883999999999992
+        "markout_pnl": 0.8109499999999991
       },
       "qualified": false,
-      "score": -0.0233195652173913
+      "score": -0.04019807692307697
     }
   ],
   "execution_authority": false,
@@ -297,8 +296,8 @@
     "passed": true,
     "training_window": {
       "configured_minimum_wall_ns": 1789921800000000000,
-      "decision_rows": 398781,
-      "maximum_decision_ns": 1789989310527011507,
+      "decision_rows": 408873,
+      "maximum_decision_ns": 1789991326488376312,
       "mode": "EXPANDING_ALL_CAUSAL_HISTORY"
     }
   },
