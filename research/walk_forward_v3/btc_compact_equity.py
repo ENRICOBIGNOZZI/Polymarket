@@ -13,7 +13,7 @@ import json
 import math
 from pathlib import Path
 
-from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, fee_per_share
+from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, fee_per_share, json_lines
 from research.walk_forward_v3.direct_action import (
     DEFAULT_HARD_ORDER_NOTIONAL,
     _valid_state,
@@ -162,18 +162,138 @@ def stream_sessions(root, rows):
     return sessions,diagnostics
 
 
-def session_for_row(sessions,row):
+
+def stream_raw_sessions(root, rows):
+    book_root=Path(root)/"research/repricing_book/book_observations"
+    diagnostics={"source":"RAW_CAUSAL_BOOK_JSONL","book_root":str(book_root),
+                 "files_seen":0,"rows_seen":0,"rows_retained":0,
+                 "sessions_loaded":0,"sequence_gaps":0,"lineage_breaks":0}
+    if not book_root.is_dir() or book_root.is_symlink():
+        return [],diagnostics
+    market_tokens=defaultdict(set)
+    windows={}
+    for row in rows:
+        market=str(row["market_id"])
+        for token in (row.get("yes_token_id"),row.get("no_token_id"),row.get("token_id")):
+            if token:
+                market_tokens[market].add(str(token))
+        decision_ms=int(row["decision_ns"])//1_000_000
+        lo,hi=windows.get(market,(decision_ms,decision_ms))
+        windows[market]=(min(lo,decision_ms),max(hi,decision_ms))
+    paths=[p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()]
+    paths.sort(key=lambda p:(p.name=="current.jsonl",p.name))
+    sessions={}
+    for path in paths:
+        diagnostics["files_seen"]+=1
+        for raw in json_lines(path):
+            if not isinstance(raw,dict) or raw.get("schema")!="polymarket_v7_causal_book_observation_v1":
+                continue
+            diagnostics["rows_seen"]+=1
+            try:
+                sid=str(raw["observer_session_id"]); epoch=int(raw["connection_epoch"])
+                seq=int(raw["observer_sequence"]); wall=int(raw["receive_wall_ms"])
+                market=str(raw["market_id"]); token=str(raw["token_id"])
+            except (KeyError,TypeError,ValueError,OverflowError):
+                continue
+            key=(sid,epoch)
+            state=sessions.setdefault(key,{"session_id":sid,"epoch":epoch,"last_seq":None,
+                                           "span":0,"span_watermark":defaultdict(int),
+                                           "rows":[],"first_wall_ms":None,"last_wall_ms":None})
+            prior=state["last_seq"]
+            if prior is not None and seq!=prior+1:
+                state["span"]+=1; diagnostics["sequence_gaps"]+=1
+            state["last_seq"]=seq
+            state["first_wall_ms"]=wall if state["first_wall_ms"] is None else min(state["first_wall_ms"],wall)
+            state["last_wall_ms"]=wall if state["last_wall_ms"] is None else max(state["last_wall_ms"],wall)
+            lineage=raw.get("lineage_continuous") is True
+            if not lineage:
+                state["span"]+=1; diagnostics["lineage_breaks"]+=1
+                continue
+            span=state["span"]
+            state["span_watermark"][span]=max(state["span_watermark"][span],wall)
+            if market not in windows or token not in market_tokens[market]:
+                continue
+            lo,hi=windows[market]
+            if not (lo-5000<=wall<=hi+max(EXITS)+5000):
+                continue
+            try:
+                bid=float(raw["best_bid"]); ask=float(raw["best_ask"])
+                bid_depth=float(raw.get("bid_depth_l1") or 0.0)
+                ask_depth=float(raw.get("ask_depth_l1") or 0.0)
+                tick=float(raw.get("tick_size") or .01)
+            except (KeyError,TypeError,ValueError,OverflowError):
+                continue
+            if raw.get("valid") is not True or not (0<bid<ask<1 and bid_depth>=0 and ask_depth>=0 and tick>0):
+                continue
+            state["rows"].append({"market_id":market,"token_id":token,"time_ms":wall,
+                                  "bid":bid,"ask":ask,"bid_depth":bid_depth,
+                                  "ask_depth":ask_depth,"tick":tick,"span":span})
+            diagnostics["rows_retained"]+=1
+    output=[]
+    for state in sessions.values():
+        if not state["rows"]:
+            continue
+        indexed=defaultdict(list)
+        for row in state["rows"]:
+            indexed[(row["market_id"],row["token_id"])].append(row)
+        index={}
+        for key,seq in indexed.items():
+            seq.sort(key=lambda r:r["time_ms"])
+            index[key]={"rows":seq,"stamps":[r["time_ms"] for r in seq]}
+        state["raw_index"]=dict(index)
+        output.append(state)
+    diagnostics["sessions_loaded"]=len(output)
+    return output,diagnostics
+
+
+def raw_token_asof(session, market, token, target_ms):
+    idx=session.get("raw_index",{}).get((market,token))
+    if not idx:
+        return None
+    pos=bisect_right(idx["stamps"],target_ms)-1
+    if pos<0:
+        return None
+    row=idx["rows"][pos]
+    if session["span_watermark"].get(row["span"],0)<target_ms:
+        return None
+    return row
+
+
+def pair_asof_session(session, row, target_ms):
     market=str(row["market_id"])
+    if "indexed" in session:
+        return pair_asof_indexed(session["indexed"],market,target_ms)
+    yes_token=str(row.get("yes_token_id") or "")
+    no_token=str(row.get("no_token_id") or "")
+    yes=raw_token_asof(session,market,yes_token,target_ms)
+    no=raw_token_asof(session,market,no_token,target_ms)
+    if yes is None or no is None or yes["span"]!=no["span"]:
+        return None
+    yes_mid=(yes["bid"]+yes["ask"])/2.0
+    no_mid=(no["bid"]+no["ask"])/2.0
+    tolerance=2.0*max(yes["tick"],no["tick"])+1e-12
+    if abs(yes_mid+no_mid-1.0)>tolerance:
+        return None
+    return {"pm_yes":(yes_mid+1.0-no_mid)/2.0,
+            "yes_best_bid":yes["bid"],"yes_best_ask":yes["ask"],
+            "no_best_bid":no["bid"],"no_best_ask":no["ask"],
+            "yes_bid_depth_l1":yes["bid_depth"],"yes_ask_depth_l1":yes["ask_depth"],
+            "no_bid_depth_l1":no["bid_depth"],"no_ask_depth_l1":no["ask_depth"],
+            "connection_epoch":session["epoch"],
+            "state_available_wall_ms":max(yes["time_ms"],no["time_ms"])}
+
+def session_for_row(sessions,row):
     origin_ms=int(row["decision_ns"])/1_000_000.0
     candidates=[]
     for session in sessions:
-        if session["watermark_ms"]<origin_ms:
+        watermark=session.get("watermark_ms",session.get("last_wall_ms") or 0)
+        if watermark<origin_ms:
             continue
-        pair=pair_asof_indexed(session["indexed"],market,origin_ms)
+        pair=pair_asof_session(session,row,origin_ms)
         if pair is not None:
             candidates.append(session)
     if len(candidates)!=1:
-        return None,"NO_CONTINUOUS_COMPACT_SESSION" if not candidates else "OVERLAPPING_COMPACT_SESSIONS"
+        return None,"NO_CONTINUOUS_BOOK_SESSION" if not candidates else "OVERLAPPING_BOOK_SESSIONS"
     return candidates[0],None
 
 
@@ -206,12 +326,13 @@ def execute_cell(row,session,latency_ms,exit_ms):
     origin_ms=int(row["decision_ns"])/1_000_000.0
     arrival_ms=origin_ms+latency_ms
     exit_target_ms=origin_ms+exit_ms
-    if session["watermark_ms"]<exit_target_ms:
+    watermark=session.get("watermark_ms",session.get("last_wall_ms") or 0)
+    if watermark<exit_target_ms:
         return None,"SESSION_WATERMARK_BEFORE_EXIT"
-    arrival_pair=pair_asof_indexed(session["indexed"],str(row["market_id"]),arrival_ms)
+    arrival_pair=pair_asof_session(session,row,arrival_ms)
     if arrival_pair is None:
         return None,"ARRIVAL_ASOF_UNAVAILABLE"
-    exit_pair=pair_asof_indexed(session["indexed"],str(row["market_id"]),exit_target_ms)
+    exit_pair=pair_asof_session(session,row,exit_target_ms)
     if exit_pair is None:
         return None,"EXIT_ASOF_UNAVAILABLE"
     arrival=side_state(arrival_pair,side)
@@ -259,6 +380,8 @@ def analyze(root,minimum_wall_ns):
         return {"schema":SCHEMA,**SAFETY,"state":data.get("input_state")}
     rows=[r for r in data["decisions"] if _valid_state(r) and str(r.get("asset"))=="BTC"]
     sessions,tape_diag=stream_sessions(Path(root).resolve().parent,rows)
+    if not sessions:
+        sessions,tape_diag=stream_raw_sessions(Path(root),rows)
     discovery,validation=market_halves(rows)
     output={"schema":SCHEMA,**SAFETY,"state":"READY","asset":"BTC",
             "latencies_ms":list(LATENCIES),"exit_horizons_ms":list(EXITS),
