@@ -1186,7 +1186,7 @@ def live_parity_policy_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
         "live_policy_reference": {
             "minimum_tte_ns": 105_000_000_000,
             "maximum_tte_ns": 120_000_000_000,
-            "maximum_entry_price": .75,
+            "maximum_entry_price": .80,
             "target_shares": shares,
             "require_full_visible_depth": True,
         },
@@ -1230,7 +1230,7 @@ def live_parity_policy_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                 research_tte = 30_000_000_000 <= tte <= 120_000_000_000
                 live_tte = 105_000_000_000 <= tte <= 120_000_000_000
                 research_cap = row["ask"] <= .75
-                live_cap = row["ask"] <= .75
+                live_cap = row["ask"] <= .80
                 research_depth = min(shares, row["quantity"]) >= row["minimum"]
                 live_depth = row["quantity"] + 1e-12 >= shares and row["minimum"] <= shares + 1e-12
                 cell["research_tte"] += int(research_tte)
@@ -1377,13 +1377,15 @@ def arrival(row, latency_ms):
 
 def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, entry_cap=.75, shares=5.0,
                execution_reserve=.005, ideal="REALISTIC", valuation_mode="SETTLEMENT",
-               markout_horizon_ms=250, market_available=True, capital_available=True):
+               markout_horizon_ms=250, market_available=True, capital_available=True,
+               minimum_tte_ns=30_000_000_000, maximum_tte_ns=120_000_000_000,
+               require_full_visible_depth=False):
     """Same L1 taker economics for every candidate; unavailable is never a nonfill."""
     funnel = {stage: False for stage in FUNNEL_STAGES}
     funnel["native_decision_rows"] = True
     funnel["valid_causal_signals"] = row["signal_valid"]
     funnel["confirmed_signals"] = funnel["valid_causal_signals"] and row["confirmed"]
-    funnel["tte_valid"] = funnel["confirmed_signals"] and 30_000_000_000 <= row["tte_ns"] <= 120_000_000_000
+    funnel["tte_valid"] = funnel["confirmed_signals"] and minimum_tte_ns <= row["tte_ns"] <= maximum_tte_ns
     funnel["fresh_book"] = funnel["tte_valid"] and row["book_valid"]
     funnel["pm_pretrigger"] = funnel["fresh_book"] and row["pretrigger"]
     outcome = {"status": "NO_SIGNAL", "funnel": funnel, "filled": 0.0, "pnl": None, "markout": None}
@@ -1428,8 +1430,15 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
     funnel["reserve_adjusted_edge_positive"] = after_reserve > 0
     funnel["edge_threshold"] = after_reserve >= edge_threshold
     funnel["price_cap"] = row["ask"] <= entry_cap
-    requested = min(shares, row["quantity"])
-    funnel["sufficient_depth"] = requested >= row["minimum"]
+    if require_full_visible_depth:
+        requested = shares
+        funnel["sufficient_depth"] = (
+            row["quantity"] + 1e-12 >= shares
+            and row["minimum"] <= shares + 1e-12
+        )
+    else:
+        requested = min(shares, row["quantity"])
+        funnel["sufficient_depth"] = requested >= row["minimum"]
     funnel["risk_size"] = funnel["sufficient_depth"]
     funnel["capital_admitted"] = funnel["risk_size"] and capital_available
     required_gates = ["edge_threshold", "price_cap", "sufficient_depth", "risk_size", "capital_admitted"]
@@ -1488,7 +1497,9 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
                   edge_threshold=.005, entry_cap=.75, shares=5.0,
                   execution_reserve=.005, ideal="REALISTIC",
                   markout_horizon_ms=250, capital_budget=1000.0,
-                  assume_sorted=False):
+                  assume_sorted=False, minimum_tte_ns=30_000_000_000,
+                  maximum_tte_ns=120_000_000_000,
+                  require_full_visible_depth=False):
     """Sequential one-entry-per-market PAPER replay with bounded capital reservation.
 
     A market is consumed when an order is actually simulated, matching the
@@ -1512,6 +1523,8 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
             execution_reserve=execution_reserve, ideal=ideal,
             valuation_mode=valuation_mode, markout_horizon_ms=markout_horizon_ms,
             market_available=available, capital_available=capital_available,
+            minimum_tte_ns=minimum_tte_ns, maximum_tte_ns=maximum_tte_ns,
+            require_full_visible_depth=require_full_visible_depth,
         )
         outcome["market_id"], outcome["asset"], outcome["horizon"] = (
             row["market_id"], row["asset"], row["horizon"])
@@ -1523,12 +1536,13 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
     return outcomes
 
 
-def _base_funnel_for_skipped(row):
+def _base_funnel_for_skipped(row, *, minimum_tte_ns=30_000_000_000,
+                             maximum_tte_ns=120_000_000_000):
     funnel = {stage: False for stage in FUNNEL_STAGES}
     funnel["native_decision_rows"] = True
     funnel["valid_causal_signals"] = row["signal_valid"]
     funnel["confirmed_signals"] = funnel["valid_causal_signals"] and row["confirmed"]
-    funnel["tte_valid"] = funnel["confirmed_signals"] and 30_000_000_000 <= row["tte_ns"] <= 120_000_000_000
+    funnel["tte_valid"] = funnel["confirmed_signals"] and minimum_tte_ns <= row["tte_ns"] <= maximum_tte_ns
     funnel["fresh_book"] = funnel["tte_valid"] and row["book_valid"]
     funnel["pm_pretrigger"] = funnel["fresh_book"] and row["pretrigger"]
     return funnel
@@ -1558,7 +1572,9 @@ def replay_policy_summary(evaluations, selector, *, latency_ms, valuation_mode,
                           edge_threshold=.005, entry_cap=.75, shares=5.0,
                           execution_reserve=.005, ideal="REALISTIC",
                           markout_horizon_ms=250, capital_budget=1000.0,
-                          assume_sorted=False):
+                          assume_sorted=False, minimum_tte_ns=30_000_000_000,
+                          maximum_tte_ns=120_000_000_000,
+                          require_full_visible_depth=False):
     """Exact aggregate replay without retaining one outcome dict per opportunity.
 
     Rows that cannot reach forecast/execution are aggregated directly. This is
@@ -1581,7 +1597,8 @@ def replay_policy_summary(evaluations, selector, *, latency_ms, valuation_mode,
 
         # Fast path for the dominant rejected population. Preserve exact funnel
         # semantics without constructing a full replay outcome.
-        base = _base_funnel_for_skipped(row)
+        base = _base_funnel_for_skipped(
+            row, minimum_tte_ns=minimum_tte_ns, maximum_tte_ns=maximum_tte_ns)
         if not base["pm_pretrigger"] or prediction is None:
             for stage, value in base.items():
                 funnel_counts[stage] += int(bool(value))
@@ -1598,6 +1615,8 @@ def replay_policy_summary(evaluations, selector, *, latency_ms, valuation_mode,
             execution_reserve=execution_reserve, ideal=ideal,
             valuation_mode=valuation_mode, markout_horizon_ms=markout_horizon_ms,
             market_available=available, capital_available=capital_available,
+            minimum_tte_ns=minimum_tte_ns, maximum_tte_ns=maximum_tte_ns,
+            require_full_visible_depth=require_full_visible_depth,
         )
         if outcome["funnel"]["simulated_order"]:
             used_markets.add(row["market_id"])
