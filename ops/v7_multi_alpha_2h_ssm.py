@@ -22,6 +22,7 @@ INSTANCE = re.compile(r"^i-[0-9a-f]+$")
 SOURCE_PATHS = (
     "research/walk_forward_v3/__init__.py",
     "research/walk_forward_v3/multi_alpha_2h.py",
+    "research/walk_forward_v3/native_2h_alpha_library.py",
     "research/walk_forward_v3/multi_alpha_2h_figures.py",
     "research/walk_forward_v3/btc_compact_equity.py",
     "research/walk_forward_v3/direct_action.py",
@@ -102,6 +103,10 @@ PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.
   --minimum-wall-ns {req['minimum_wall_ns']} \
   --baseline-code-sha {req['baseline_code_sha']} \
   --source-sha {a.source_sha}
+PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.walk_forward_v3.native_2h_alpha_library \\
+  --root {ctx['run_root']} \\
+  --output-dir {remote}/output \\
+  --minimum-wall-ns {req['minimum_wall_ns']}
 PYTHONPATH={remote}/src:{ctx['app_dir']} venv/bin/python -m research.walk_forward_v3.multi_alpha_2h_figures \\
   --root {remote}/output
 python3 - {remote}/output <<'PY'
