@@ -75,3 +75,18 @@ def test_program_is_paper_only_and_has_no_execution_transport():
     assert "real_order_submission" not in source or "No real execution" in source
     forbidden=("requests.post(","requests.get(","subprocess.run(","os.system(","place_order","cancel_order")
     assert not any(token in source for token in forbidden)
+
+
+def test_delayed_features_do_not_leak_native_external_cut():
+    row={
+        "features":{"binance_return_100ms_bp":99.0},
+        "market_id":"m","decision_ns":1_000_000_000,
+        "pair":{},"tte_ns":60_000_000_000,"signal_age_ns":1_000_000,
+        "bid":.4,"ask":.41,"quantity":10.0,"direction":1,
+    }
+    tape={"m":{"stamps":[800_000_000],"rows":[{"ready_ns":800_000_000,"features":{"external.return_100ms_bp":2.0}}]}}
+    now=m.row_features(row,tape,0)
+    delayed=m.row_features(row,tape,100)
+    assert now["binance_return_100ms_bp"]==99.0
+    assert "binance_return_100ms_bp" not in delayed
+    assert delayed["external.return_100ms_bp"]==2.0
