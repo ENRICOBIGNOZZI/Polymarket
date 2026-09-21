@@ -1312,6 +1312,8 @@ def test_effective_action_age_is_signal_age_plus_execution_latency():
     assert math.isclose(features["state.signal_age_ms"], 37.0, abs_tol=1e-12)
     assert math.isclose(
         features["system.effective_action_age_ms"], 87.0, abs_tol=1e-12)
+    assert math.isclose(action["signal_age_ms"], 37.0, abs_tol=1e-12)
+    assert math.isclose(action["effective_action_age_ms"], 87.0, abs_tol=1e-12)
     assert features["age::50_100"] == 1.0
     assert features["age::le50"] == 0.0
     assert features["age::100_250"] == 0.0
@@ -1381,6 +1383,18 @@ def test_latency_age_surface_is_diagnostic_and_preserves_gate():
         25, 50, 100, 250
     ]
     assert all(entry["state"] == "READY" for entry in surface["entries"])
+    assert surface["selection_warning"] == (
+        "LATENCY_AND_AGE_BUCKETS_ARE_DIAGNOSTIC_OOS_CELLS;"
+        "DO_NOT_PICK_A_GATE_FROM_THE_SAME_OUTER_OOS"
+    )
+    for entry in surface["entries"]:
+        assert "by_effective_age_bucket" in entry
+        assert entry["selected_effective_age_ms"]["count"] == (
+            entry["summary"]["selected_trades"])
+        assert sum(
+            cell["selected_trades"]
+            for cell in entry["by_effective_age_bucket"].values()
+        ) == entry["summary"]["selected_trades"]
     assert model.maximum_effective_action_age_ms == 100.0
 
 
