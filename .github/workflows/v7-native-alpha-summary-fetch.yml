@@ -1,0 +1,112 @@
+name: V7 native alpha compact summary fetch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-native-alpha-summary-fetch.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: native-alpha-summary-fetch
+          aws-region: eu-west-2
+
+      - name: Pack and fetch compact alpha summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64,hashlib,json,subprocess,time
+          from pathlib import Path
+
+          req=json.load(open("deploy/v7-native-alpha-summary-fetch.json"))
+          instance=req["instance_id"]
+          remote=req["remote_prefix"]
+          chunk=14000
+
+          def aws(args):
+              p=subprocess.run(["aws",*args],text=True,capture_output=True)
+              if p.returncode:
+                  raise RuntimeError(p.stderr or p.stdout)
+              return p.stdout
+
+          def run_remote(command, timeout=300):
+              params=json.dumps({"commands":[command]})
+              raw=aws([
+                  "ssm","send-command","--instance-ids",instance,
+                  "--document-name","AWS-RunShellScript",
+                  "--parameters",params,
+                  "--query","Command.CommandId","--output","text",
+              ]).strip()
+              deadline=time.time()+timeout
+              while time.time()<deadline:
+                  time.sleep(.5)
+                  try:
+                      inv=json.loads(aws([
+                          "ssm","get-command-invocation","--command-id",raw,
+                          "--instance-id",instance,"--output","json"
+                      ]))
+                  except Exception:
+                      continue
+                  status=inv.get("Status")
+                  if status=="Success":
+                      return inv.get("StandardOutputContent") or ""
+                  if status in {"Failed","Cancelled","TimedOut"}:
+                      raise RuntimeError((inv.get("StandardErrorContent") or "")[-4000:])
+              raise RuntimeError("SSM timeout")
+
+          marker=run_remote(
+              "set -euo pipefail; "
+              f"test -f {remote}/output/20_native_alpha_library.json; "
+              f"test -f {remote}/output/21_native_alpha_grid.csv; "
+              f"tar -C {remote}/output -czf {remote}/summary.tgz "
+              "20_native_alpha_library.json 21_native_alpha_grid.csv; "
+              f"python3 -c \"import hashlib,json,pathlib;"
+              f"p=pathlib.Path('{remote}/summary.tgz');"
+              "print('SUMMARY='+json.dumps({'bytes':p.stat().st_size,"
+              "'sha256':hashlib.sha256(p.read_bytes()).hexdigest()},sort_keys=True))\""
+          )
+          line=next(x for x in marker.splitlines() if x.startswith("SUMMARY="))
+          info=json.loads(line.split("=",1)[1])
+          size=int(info["bytes"])
+          if not 0<size<=20*1024*1024:
+              raise RuntimeError("summary size out of range")
+
+          parts=[]
+          for offset in range(0,size,chunk):
+              code=(
+                  "import base64;f=open("+repr(remote+"/summary.tgz")+",'rb');"
+                  "f.seek("+str(offset)+");print(base64.b64encode(f.read("+str(chunk)+")).decode())"
+              )
+              out=run_remote("python3 -c "+repr(code),timeout=90)
+              parts.append(base64.b64decode(out.strip().splitlines()[-1],validate=True))
+          payload=b"".join(parts)
+          if len(payload)!=size or hashlib.sha256(payload).hexdigest()!=info["sha256"]:
+              raise RuntimeError("summary identity mismatch")
+          Path("/tmp/native-alpha-summary.tgz").write_bytes(payload)
+          print(json.dumps(info,sort_keys=True))
+          PY
+          mkdir -p docs/research/native-alpha-2h-summary
+          tar -xzf /tmp/native-alpha-summary.tgz -C docs/research/native-alpha-2h-summary
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-native-alpha-2h-summary-${{ github.run_id }}
+          path: docs/research/native-alpha-2h-summary
+          retention-days: 30
