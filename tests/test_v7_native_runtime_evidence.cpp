@@ -255,6 +255,8 @@ int main() {
         assert(!observation.at("economic_score_fill_conditioned").as_bool());
         assert(!observation.at("selector_score_comparable").as_bool());
         assert(observation.at("token_id").as_string() == "yes-token");
+        assert(observation.at("yes_token_id").as_string() == "yes-token");
+        assert(observation.at("no_token_id").as_string() == "no-token");
         assert(observation.at("capture_id").is_string());
         assert(observation.at("model_artifact_hash").is_null());
         assert(observation.at("policy_hash").is_null());
