@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -54,6 +56,32 @@ def heatmap(root,name,title,metrics,delta=False):
 def annotate_empty(text):
     plt.text(.5,.5,text,ha="center",va="center",transform=plt.gca().transAxes)
     plt.xticks([]);plt.yticks([])
+
+def safe_name(value):
+    return re.sub(r"[^A-Za-z0-9_.-]+","_",str(value))
+
+def plot_equity_group(root, event_map, keys, title, filename):
+    plt.figure(figsize=(11,5.5))
+    drawn=False
+    for key in keys:
+        events=event_map.get(key,[])
+        x,y=equity(events)
+        if not x:
+            continue
+        origin=min(x)
+        xm=[(v-origin)/60_000_000_000 for v in x]
+        plt.plot(xm,y,label=key,linewidth=1.2)
+        drawn=True
+    if drawn:
+        plt.axhline(0,linewidth=.8)
+        plt.legend(fontsize=7,ncol=2)
+        plt.xlabel("minutes since first fill")
+        plt.ylabel("cumulative PnL")
+    else:
+        annotate_empty("No observed fills for this group")
+    plt.title(title)
+    save(root,filename)
+    return drawn
 
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
@@ -184,6 +212,101 @@ def main(argv=None):
         plt.ylabel("PnL");plt.title(title)
         save(root,name)
 
+    # Exhaustive equity gallery: every model, every latency group, every exit group.
+    gallery=root/"equity_gallery"
+    gallery.mkdir(parents=True,exist_ok=True)
+    sources={"BASELINE":baseline.get("equity_events") or {}}
+    for family,value in sorted(nested.items()):
+        local=(value or {}).get("local_test") or {}
+        events=local.get("events") or {}
+        if events:
+            sources[family]=events
+
+    gallery_files=[]
+    grid_rows=[]
+    for model_name,event_map in sources.items():
+        model_safe=safe_name(model_name)
+        model_dir=gallery/model_safe
+        model_dir.mkdir(parents=True,exist_ok=True)
+
+        # One chart with all 60 cells.
+        name=f"equity_gallery/{model_safe}/00_all_60_cells.png"
+        plot_equity_group(
+            root,event_map,
+            [f"{l}::{h}" for l in LATENCIES for h in EXITS],
+            f"{model_name}: all entry × exit equity lines",
+            name,
+        )
+        gallery_files.append(name)
+
+        # Six charts: each entry latency with all ten exits.
+        for latency in LATENCIES:
+            name=f"equity_gallery/{model_safe}/latency_{latency}ms_all_exits.png"
+            plot_equity_group(
+                root,event_map,
+                [f"{latency}::{h}" for h in EXITS],
+                f"{model_name}: entry {latency}ms, all exits",
+                name,
+            )
+            gallery_files.append(name)
+
+        # Ten charts: each exit horizon with all six entry latencies.
+        for horizon in EXITS:
+            name=f"equity_gallery/{model_safe}/exit_{horizon}ms_all_latencies.png"
+            plot_equity_group(
+                root,event_map,
+                [f"{l}::{horizon}" for l in LATENCIES],
+                f"{model_name}: exit {horizon}ms, all entry latencies",
+                name,
+            )
+            gallery_files.append(name)
+
+        metrics = baseline.get("metrics") if model_name=="BASELINE" else (
+            ((nested.get(model_name) or {}).get("local_test") or {}).get("metrics") or {}
+        )
+        deltas = {} if model_name=="BASELINE" else (
+            (nested.get(model_name) or {}).get("delta_vs_exact_baseline_local_test") or {}
+        )
+        for latency in LATENCIES:
+            for horizon in EXITS:
+                key=f"{latency}::{horizon}"
+                cell=metrics.get(key) or {}
+                grid_rows.append({
+                    "model":model_name,
+                    "entry_latency_ms":latency,
+                    "exit_horizon_ms":horizon,
+                    "total_pnl":cell.get("total_pnl"),
+                    "fills":cell.get("fills"),
+                    "trade_count":cell.get("trade_count",cell.get("observed_actions")),
+                    "pnl_per_trade":cell.get("pnl_per_trade"),
+                    "pnl_per_fill":cell.get("pnl_per_fill"),
+                    "hit_rate":cell.get("hit_rate"),
+                    "max_drawdown":cell.get("max_drawdown"),
+                    "delta_vs_baseline":deltas.get(key),
+                })
+
+    with (gallery/"pnl_grid_all_models.csv").open("w",newline="",encoding="utf-8") as handle:
+        fields=[
+            "model","entry_latency_ms","exit_horizon_ms","total_pnl","fills",
+            "trade_count","pnl_per_trade","pnl_per_fill","hit_rate","max_drawdown",
+            "delta_vs_baseline",
+        ]
+        writer=csv.DictWriter(handle,fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(grid_rows)
+
+    (gallery/"gallery_manifest.json").write_text(json.dumps({
+        "schema":"polymarket_v7_multi_alpha_2h_equity_gallery_v1",
+        "models":sorted(sources),
+        "latencies_ms":list(LATENCIES),
+        "exit_horizons_ms":list(EXITS),
+        "cells_per_model":len(LATENCIES)*len(EXITS),
+        "grouped_equity_figures_per_model":1+len(LATENCIES)+len(EXITS),
+        "figure_count":len(gallery_files),
+        "figures":gallery_files,
+        "grid_csv":"equity_gallery/pnl_grid_all_models.csv",
+    },indent=2,sort_keys=True)+"\n",encoding="utf-8")
+
     manifest={
         "schema":"polymarket_v7_multi_alpha_2h_figures_v1",
         "best_enriched_family":rich_family,"baseline_cell":bkey,"rich_cell":rkey,
@@ -193,6 +316,8 @@ def main(argv=None):
             "07_information_latency_frontier.png","08_signal_decay.png","09_momentum_reversal_map.png",
             "10_alpha_family_contribution.png","11_dynamic_exit.png","12_pnl_by_asset.png","13_pnl_by_contract_horizon.png",
         ],
+        "equity_gallery":"equity_gallery/gallery_manifest.json",
+        "pnl_grid_csv":"equity_gallery/pnl_grid_all_models.csv",
     }
     (root/"figures_manifest.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     return 0
