@@ -47,14 +47,24 @@ jobs:
           systemctl is-active polymarket-v7-paper.service || true
           systemctl show polymarket-v7-paper.service -p ActiveEnterTimestamp -p MainPID -p Environment --no-pager | head -20 || true'
           params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["90"]},separators=(",",":")))' "$payload")"
-          cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$params" --comment "Polymarket V7 read-only process probe" --region "$AWS_REGION" --query 'Command.CommandId' --output text)"
-          for i in $(seq 1 45); do
+          cid=""
+          for delay in 2 4 8 12 16; do
+            cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$params" --comment "Polymarket V7 read-only process probe" --region "$AWS_REGION" --query 'Command.CommandId' --output text 2>/dev/null || true)"
+            if [[ -n "$cid" && "$cid" != "None" ]]; then break; fi
+            sleep "$delay"
+          done
+          [[ -n "$cid" && "$cid" != "None" ]]
+          for i in $(seq 1 60); do
             status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query Status --output text 2>/dev/null || true)"
             if [[ "$status" == "Success" ]]; then
-              aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardOutputContent --output text
+              for delay in 2 4 8; do
+                out="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardOutputContent --output text 2>/dev/null || true)"
+                if [[ -n "$out" ]]; then printf '%s\n' "$out"; exit 0; fi
+                sleep "$delay"
+              done
               exit 0
             fi
             case "$status" in Failed|Cancelled|TimedOut) exit 1;; esac
-            sleep 1
+            sleep 2
           done
           exit 1
