@@ -6,6 +6,13 @@ from research.walk_forward_v3.bilateral import (
     build_bilateral_evidence,
     paired_l1_state,
 )
+from research.walk_forward_v3.risk_frontier import (
+    empirical_var_cvar_from_losses,
+    pareto_frontier,
+    scenario_risk_metrics,
+    select_policy_under_risk_budget,
+    nested_walk_forward_risk_frontier,
+)
 from research.walk_forward_v3.direct_action import (
     DirectActionValueModel,
     FrictionPolicy,
@@ -608,3 +615,189 @@ def test_direct_policy_can_choose_no_side_when_its_learned_value_is_higher():
 def test_legacy_state_without_bilateral_depth_never_invents_opposite_side():
     r = row("m953")
     assert decision_action_sides(r) == ("SELECTED",)
+
+
+
+def _risk_outcome(index, pnl, *, censored=False, horizon_ms=500):
+    return {
+        "market_id": "risk-" + str(index),
+        "asset": "BTC" if index % 2 == 0 else "ETH",
+        "side": "YES" if index % 2 == 0 else "NO",
+        "decision_ns": 1_000_000_000 + index * 2_000_000_000,
+        "action": "TRADE",
+        "size": 5.0,
+        "notional": 2.5,
+        "exit_horizon_ms": horizon_ms,
+        "realized_pnl": None if censored else float(pnl),
+        "replay_max_active_positions": 3,
+        "replay_max_gross_notional": 75.0,
+    }
+
+
+def test_empirical_cvar_uses_upper_loss_tail_without_gaussian_assumption():
+    result = empirical_var_cvar_from_losses([-4.0, -1.0, 2.0, 3.0], .95)
+    assert result["var"] == 3.0
+    assert result["cvar"] == 3.0
+    assert result["tail_count"] == 1
+
+
+def test_scenario_risk_metrics_cluster_exits_and_measure_dollar_drawdown():
+    outcomes = [
+        _risk_outcome(0, 1.0),
+        _risk_outcome(1, -2.0),
+        _risk_outcome(2, -3.0),
+        _risk_outcome(3, 4.0),
+    ]
+    risk = scenario_risk_metrics(outcomes, block_ms=500)
+    assert risk["state"] == "ALL_SELECTED_TRADES_OBSERVED"
+    assert risk["scenario_blocks"] == 4
+    assert risk["total_observed_net_pnl"] == 0.0
+    assert risk["worst_scenario_pnl"] == -3.0
+    assert risk["tail_loss"]["0.95"]["cvar"] == 3.0
+    assert risk["max_drawdown"] == 5.0
+    assert risk["max_active_positions"] == 3
+    assert risk["max_gross_notional"] == 75.0
+    assert risk["by_asset_pnl"]["BTC"] == -2.0
+    assert risk["by_asset_pnl"]["ETH"] == 2.0
+
+
+def test_scenario_risk_metrics_fail_closed_on_censored_selected_trade():
+    outcomes = [
+        _risk_outcome(0, 1.0),
+        _risk_outcome(1, -1.0, censored=True),
+    ]
+    risk = scenario_risk_metrics(outcomes, block_ms=500)
+    assert risk["state"] == "PARTIAL_CENSORED_NO_PROMOTION_CLAIM"
+    assert risk["selected_trades"] == 2
+    assert risk["observed_selected_trades"] == 1
+    assert risk["censored_selected_trades"] == 1
+
+
+def test_pareto_frontier_keeps_more_pnl_only_when_tail_risk_is_not_worse():
+    def entry(name, pnl, cvar, drawdown):
+        return {
+            "policy_id": name,
+            "risk": {
+                "state": "ALL_SELECTED_TRADES_OBSERVED",
+                "total_observed_net_pnl": pnl,
+                "max_drawdown": drawdown,
+                "tail_loss": {"0.95": {"cvar": cvar}},
+            },
+        }
+
+    entries = [
+        entry("dominated", 8.0, 4.0, 5.0),
+        entry("safe", 8.0, 2.0, 3.0),
+        entry("profit", 12.0, 3.0, 4.0),
+        {
+            "policy_id": "censored",
+            "risk": {
+                "state": "PARTIAL_CENSORED_NO_PROMOTION_CLAIM",
+                "total_observed_net_pnl": 100.0,
+                "max_drawdown": 0.0,
+                "tail_loss": {"0.95": {"cvar": 0.0}},
+            },
+        },
+    ]
+    frontier = set(pareto_frontier(entries))
+    assert "dominated" not in frontier
+    assert frontier == {"safe", "profit"}
+
+
+
+def test_risk_budget_selection_requires_explicit_budget_and_uses_validation_only():
+    frontier = {
+        "entries": [
+            {
+                "policy_id": "loose",
+                "risk": {
+                    "state": "ALL_SELECTED_TRADES_OBSERVED",
+                    "total_observed_net_pnl": 12.0,
+                    "max_drawdown": 6.0,
+                    "tail_loss": {"0.95": {"cvar": 5.0}},
+                },
+            },
+            {
+                "policy_id": "safe",
+                "risk": {
+                    "state": "ALL_SELECTED_TRADES_OBSERVED",
+                    "total_observed_net_pnl": 8.0,
+                    "max_drawdown": 2.0,
+                    "tail_loss": {"0.95": {"cvar": 1.5}},
+                },
+            },
+        ]
+    }
+    none = select_policy_under_risk_budget(frontier)
+    assert none["state"] == "NO_RISK_BUDGET_NO_AUTOMATIC_SELECTION"
+    assert none["policy_id"] is None
+
+    chosen = select_policy_under_risk_budget(
+        frontier, max_cvar95=2.0, max_drawdown=3.0)
+    assert chosen["state"] == "VALIDATION_POLICY_SELECTED"
+    assert chosen["policy_id"] == "safe"
+
+    impossible = select_policy_under_risk_budget(
+        frontier, max_cvar95=1.0, max_drawdown=1.0)
+    assert impossible["state"] == "NO_POLICY_MEETS_VALIDATION_RISK_BUDGET"
+    assert impossible["policy_id"] is None
+
+
+
+def test_nested_risk_frontier_never_uses_outer_oos_to_choose_policy():
+    rows = []
+    for index in range(120):
+        positive = index % 3 != 0
+        item = row(
+            "m" + str(index + 2000),
+            signal=2.0 if positive else -2.0,
+            exit_bid=.56 if positive else .44,
+            depth=20.0,
+        )
+        item["information_end_ns"] = item["decision_ns"]
+        item["label"] = None
+        item["label_information_ns"] = None
+        rows.append(item)
+
+    grid = [
+        {
+            "policy_id": "baseline",
+            "friction_policy": FrictionPolicy(
+                uncertainty_aversion=1.0,
+                asset_concentration_lambda=0.0,
+                common_factor_concentration_lambda=0.0,
+            ),
+        },
+        {
+            "policy_id": "conservative",
+            "friction_policy": FrictionPolicy(
+                uncertainty_aversion=2.0,
+                asset_concentration_lambda=.01,
+                common_factor_concentration_lambda=.01,
+            ),
+        },
+    ]
+    result = nested_walk_forward_risk_frontier(
+        rows,
+        desired_folds=2,
+        inner_desired_folds=2,
+        policy_grid=grid,
+        latency_ms=50,
+        capital_budget=1000.0,
+        model_kwargs={
+            "size_grid": (1.0, 5.0),
+            "action_horizons_ms": (500,),
+            "train_latencies_ms": (50,),
+            "streaming_batch_size": 32,
+        },
+    )
+    assert result["state"] == "READY"
+    assert result["selection_semantics"] == (
+        "INNER_VALIDATION_ONLY_OUTER_OOS_NEVER_USED_TO_CHOOSE_RISK_POLICY")
+    assert result["folds"]
+    for fold in result["folds"]:
+        selection = fold["selection"]
+        if selection["state"] == "NO_RISK_BUDGET_NO_AUTOMATIC_SELECTION":
+            assert selection["policy_id"] is None
+            assert selection["qualification"] == (
+                "VALIDATION_PARETO_SET_NO_SINGLE_SELECTION")
