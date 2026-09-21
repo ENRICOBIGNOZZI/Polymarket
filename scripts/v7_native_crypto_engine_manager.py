@@ -982,6 +982,8 @@ class Manager:
                 "--maximum-signal-age-ns", str(signal_policy["maximum_signal_age_ns"]),
             ])
         probability_model = getattr(self.args, "probability_model", None)
+        if getattr(self.args, "clip_capital_target_to_visible_depth", False):
+            command.append("--clip-capital-target-to-visible-depth")
         if probability_model is not None:
             command.extend(["--probability-model", str(probability_model)])
             command.extend(["--probability-evaluation-end-wall-ns",
@@ -1353,6 +1355,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--asynchronous-settlement", action="store_true")
     parser.add_argument("--observation-only", action="store_true",
         help="Keep native feeds/evidence running while preventing any worker admission/execution")
+    parser.add_argument("--clip-capital-target-to-visible-depth", action="store_true",
+        help="PAPER observation-only research: clip capital target to observed L1 rather than reject thin books")
     parser.add_argument("--capture-native-observations", action="store_true",
         help="Full bounded native book/trade + decision research capture")
     parser.add_argument("--capture-native-decisions", action="store_true",
@@ -1383,6 +1387,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("probability model requires explicit evaluation end wall ns")
     if args.probability_model is None and args.probability_evaluation_end_wall_ns != 0:
         parser.error("probability evaluation end requires probability model")
+    if args.clip_capital_target_to_visible_depth and not args.observation_only:
+        parser.error("capital-target depth clipping is PAPER observation-only research")
     return args
 
 
