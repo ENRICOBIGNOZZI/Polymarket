@@ -186,6 +186,30 @@ def test_transport_target_sha_extracts_exact_cutover_sha():
     assert m._transport_target_sha({"Parameters": {"commands": ["echo no-sha"]}}) is None
 
 
+def test_transport_target_sha_accepts_multiline_shell_assignment():
+    old = "b" * 40
+    command = {
+        "Parameters": {
+            "commands": [
+                "bash -lc 'set -euo pipefail\n"
+                f"SHA={old}\n"
+                "echo deploy\n'"
+            ],
+        },
+    }
+    assert m._transport_target_sha(command) == old
+
+
+def test_transport_target_sha_does_not_match_embedded_variable_name():
+    old = "b" * 40
+    command = {
+        "Parameters": {
+            "commands": [f"bash -lc 'NOT_SHA={old}\necho x'"],
+        },
+    }
+    assert m._transport_target_sha(command) is None
+
+
 def test_cancel_prior_deploy_transports_cancels_only_proven_older_sha(monkeypatch):
     old = "b" * 40
     cancelled = []
