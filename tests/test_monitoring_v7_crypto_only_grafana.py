@@ -98,7 +98,8 @@ def test_provisioning_names_and_manifest_are_crypto_only() -> None:
     provider = (ROOT / "monitoring/grafana/provisioning/dashboards/v7.yml").read_text(encoding="utf-8")
     datasource = (ROOT / "monitoring/grafana/provisioning/datasources/prometheus-v7.yml").read_text(encoding="utf-8")
     assert "name: Polymarket V7 Crypto" in provider
-    assert "folder: Polymarket V7 Crypto" in provider
+    assert "folder: Polymarket London" in provider
+    assert "folderUid: afyms0c1xjabkf" in provider
     assert "disableDeletion: false" in provider
     assert "allowUiUpdates: false" in provider
     assert "name: Polymarket V7 Crypto Prometheus" in datasource
