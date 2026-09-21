@@ -111,6 +111,19 @@ jobs:
               echo "delete_contained_branch=$branch"
               delete_branch "$branch"
               deleted_contained=$((deleted_contained+1))
+              continue
+            fi
+
+            # Squash merges do not make the original branch tip an ancestor of
+            # main. Delete only when a closed merged PR proves that its exact
+            # head OID equals the current remote branch tip. Any post-merge
+            # commits therefore keep the branch protected.
+            tip="$(git rev-parse "$ref")"
+            merged_exact="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --state closed --limit 100 --json headRefOid,mergedAt | python3 -c 'import json,sys; tip=sys.argv[1]; rows=json.load(sys.stdin); print(sum(1 for row in rows if row.get("mergedAt") and row.get("headRefOid")==tip))' "$tip")"
+            if [[ "$merged_exact" != "0" ]]; then
+              echo "delete_exact_squash_merged_branch=$branch"
+              delete_branch "$branch"
+              deleted_contained=$((deleted_contained+1))
             else
               echo "preserve_divergent_branch=$branch"
               preserved_divergent=$((preserved_divergent+1))
