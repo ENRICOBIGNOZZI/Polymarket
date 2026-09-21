@@ -9,6 +9,7 @@ from __future__ import annotations
 from array import array
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
+import fcntl
 import gzip
 import hashlib
 import json
@@ -101,6 +102,125 @@ def source_hash(path):
         for block in iter(lambda: stream.read(1 << 20), b""):
             hasher.update(block)
     return hasher.hexdigest()
+
+
+COMPACT_WINDOW_INDEX_SCHEMA = "historical_walk_forward_v2_compact_window_index_v1"
+
+
+def _compact_window_index_path(cache_dir, path):
+    key = hashlib.sha256(
+        str(Path(path).resolve()).encode("utf-8")
+    ).hexdigest()
+    return Path(cache_dir) / (key + ".json")
+
+
+def _compact_file_fingerprint(path):
+    stat = Path(path).stat()
+    return {
+        "device": int(stat.st_dev),
+        "inode": int(stat.st_ino),
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "ctime_ns": int(stat.st_ctime_ns),
+    }
+
+
+def _compact_index_matches(value, path, fingerprint):
+    return (
+        isinstance(value, dict)
+        and value.get("schema") == COMPACT_WINDOW_INDEX_SCHEMA
+        and value.get("path") == str(Path(path).resolve())
+        and value.get("fingerprint") == fingerprint
+        and isinstance(value.get("source_sha256"), str)
+        and len(value["source_sha256"]) == 64
+    )
+
+
+def compact_window_index(path, cache_dir):
+    """Content-verified causal time range for one compact source.
+
+    The first access scans the source exactly and records its byte SHA plus
+    decision-origin ranges. Later accesses may reuse the index only while the
+    filesystem identity, size and high-resolution modification/change times are
+    identical. Growing/replaced compact files therefore invalidate themselves.
+
+    A per-source flock prevents concurrent backtests from rebuilding the same
+    large compact object simultaneously.
+    """
+    path = Path(path)
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    index_path = _compact_window_index_path(cache_dir, path)
+    lock_path = index_path.with_suffix(index_path.suffix + ".lock")
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        fingerprint = _compact_file_fingerprint(path)
+        if index_path.is_file() and not index_path.is_symlink():
+            try:
+                cached = json.loads(index_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                cached = None
+            if _compact_index_matches(cached, path, fingerprint):
+                return cached, True
+
+        kind2_min = kind2_max = None
+        kind6_min = kind6_max = None
+        kind2_rows = kind6_rows = native_rows = invalid_json = 0
+        for row in json_lines(path):
+            if row is None:
+                invalid_json += 1
+                continue
+            if row.get("schema") != "polymarket_v7_native_observation_v1":
+                continue
+            native_rows += 1
+            kind = row.get("kind")
+            if kind == 2:
+                wall = row.get("decision_wall_ns")
+                if isinstance(wall, int) and wall > 0:
+                    kind2_rows += 1
+                    kind2_min = wall if kind2_min is None else min(kind2_min, wall)
+                    kind2_max = wall if kind2_max is None else max(kind2_max, wall)
+            elif kind == 6:
+                origin = row.get("decision_wall_ns")
+                if isinstance(origin, int) and origin > 0:
+                    kind6_rows += 1
+                    kind6_min = origin if kind6_min is None else min(kind6_min, origin)
+                    kind6_max = origin if kind6_max is None else max(kind6_max, origin)
+
+        # Hash the exact compressed/source bytes once. Future recent-window runs
+        # reuse this digest while the verified filesystem fingerprint is stable.
+        value = {
+            "schema": COMPACT_WINDOW_INDEX_SCHEMA,
+            "path": str(path.resolve()),
+            "fingerprint": fingerprint,
+            "source_sha256": source_hash(path),
+            "native_rows": native_rows,
+            "invalid_json_rows": invalid_json,
+            "kind2_rows": kind2_rows,
+            "kind2_min_decision_wall_ns": kind2_min,
+            "kind2_max_decision_wall_ns": kind2_max,
+            "kind6_rows": kind6_rows,
+            "kind6_min_origin_wall_ns": kind6_min,
+            "kind6_max_origin_wall_ns": kind6_max,
+        }
+        atomic_json(index_path, value)
+        return value, False
+
+
+def compact_index_intersects_decisions(index, minimum_wall_ns):
+    maximum = index.get("kind2_max_decision_wall_ns")
+    return isinstance(maximum, int) and maximum >= int(minimum_wall_ns)
+
+
+def compact_index_intersects_repricing(index, minimum_decision_ns, maximum_decision_ns):
+    minimum = index.get("kind6_min_origin_wall_ns")
+    maximum = index.get("kind6_max_origin_wall_ns")
+    return (
+        isinstance(minimum, int)
+        and isinstance(maximum, int)
+        and maximum >= int(minimum_decision_ns)
+        and minimum <= int(maximum_decision_ns)
+    )
 
 
 def native_wall_ns(row):
@@ -707,7 +827,10 @@ def attach_streamed_book_evidence(decisions, paths, *, tolerance_ns=TARGET_TOLER
     }
 
 
-def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=None):
+def build_dataset(
+    root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=None,
+    include_settlement_labels=True, use_compact_window_index=True,
+):
     """Build V2 primarily from compact native decisions + producer kind=6 labels.
 
     Native kind=6 labels are emitted by the same engine/capture identity as the
@@ -747,16 +870,35 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
     compact = sorted(list((hft_root / "compact").glob("*.jsonl*"))
                      + list((hft_root / "compact_closed").glob("*.jsonl*")))
     seen_sources, seen_decisions = set(), set()
+    index_cache = hft_root / ".walk_forward_v2_window_index"
+    indexed_sources = []
+    index_hits = index_misses = 0
+    decision_files_scanned = decision_files_skipped = 0
 
     for path in compact:
         if path.is_symlink() or not path.is_file():
             continue
-        content = source_hash(path)
+        if use_compact_window_index:
+            index, hit = compact_window_index(path, index_cache)
+            index_hits += int(hit)
+            index_misses += int(not hit)
+            content = index["source_sha256"]
+        else:
+            index = None
+            content = source_hash(path)
         if content in seen_sources:
             result["exclusions"]["DUPLICATE_SOURCE_OBJECT"] += 1
             continue
         seen_sources.add(content)
         result["sources"].append({"path": str(path.relative_to(hft_root)), "sha256": content})
+        indexed_sources.append((path, index))
+        if (
+            index is not None
+            and not compact_index_intersects_decisions(index, minimum_wall_ns)
+        ):
+            decision_files_skipped += 1
+            continue
+        decision_files_scanned += 1
         for row in json_lines(path):
             if row is None:
                 result["exclusions"]["INVALID_JSON"] += 1
@@ -782,9 +924,39 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
                 result["decisions"].append(decision)
 
     result["decisions"].sort(key=lambda r: (r["decision_ns"], r["decision_id"]))
-    attach_labels(result["decisions"], label_roots)
+    if include_settlement_labels:
+        attach_labels(result["decisions"], label_roots)
     if result["decisions"]:
-        result["book_evidence"] = attach_native_repricing_stream(result["decisions"], compact)
+        minimum_decision_ns = min(row["decision_ns"] for row in result["decisions"])
+        maximum_decision_ns = max(row["decision_ns"] for row in result["decisions"])
+        repricing_paths = []
+        repricing_files_skipped = 0
+        for path, index in indexed_sources:
+            if index is None or compact_index_intersects_repricing(
+                index, minimum_decision_ns, maximum_decision_ns
+            ):
+                repricing_paths.append(path)
+            else:
+                repricing_files_skipped += 1
+        result["book_evidence"] = attach_native_repricing_stream(
+            result["decisions"], repricing_paths)
+    else:
+        repricing_paths = []
+        repricing_files_skipped = len(indexed_sources)
+    result["compact_window_index"] = {
+        "schema": COMPACT_WINDOW_INDEX_SCHEMA,
+        "enabled": bool(use_compact_window_index),
+        "cache_root": str(index_cache) if use_compact_window_index else None,
+        "cache_hits": index_hits,
+        "cache_misses": index_misses,
+        "source_files": len(indexed_sources),
+        "decision_files_scanned": decision_files_scanned,
+        "decision_files_skipped": decision_files_skipped,
+        "repricing_files_scanned": len(repricing_paths),
+        "repricing_files_skipped": repricing_files_skipped,
+        "minimum_wall_ns": int(minimum_wall_ns),
+        "settlement_labels_included": bool(include_settlement_labels),
+    }
 
     result["exclusions"] = dict(result["exclusions"])
     if not hft_root.is_dir():
@@ -797,6 +969,11 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
         "minimum_wall_ns": minimum_wall_ns, "sources": result["sources"],
         "decision_ids": [r["decision_id"] for r in result["decisions"]],
         "book_evidence": result["book_evidence"],
+        "compact_window_index": {
+            key: value for key, value in result.get("compact_window_index", {}).items()
+            if key not in {"cache_root", "cache_hits", "cache_misses"}
+        },
+        "settlement_labels_included": bool(include_settlement_labels),
     })
     return result
 
