@@ -1,0 +1,17 @@
+{
+  "schema": "polymarket_v7_decomposed_benchmark_ssm_request_v1",
+  "version": 1,
+  "request_id": "fast-two-hour-frequency-frontier-20260921T2052CEST",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_research_sha": "0562a95abd9c0ba18e63b778c7e08adcd9ad6127",
+  "minimum_wall_ns": 1790007780000000000,
+  "folds": 2,
+  "latency_ms": 50,
+  "capital_budget": 10000,
+  "output_directory": "docs/research/decomposed-horse-race-fast-2026-09-21",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}
