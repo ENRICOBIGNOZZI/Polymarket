@@ -223,7 +223,8 @@ def walk_forward_horse_race(
             max_market_exposure=float(capital_budget) / sizing.context_count,
         )
 
-        decomposed = DecomposedActionValueModel(**challenger_kwargs).fit(train)
+        decomposed = DecomposedActionValueModel(**challenger_kwargs).fit(
+            train, fitted_base=direct)
         decomposed_outcomes = evaluate_direct_action_policy(
             decomposed,
             test,
