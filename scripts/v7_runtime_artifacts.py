@@ -52,7 +52,8 @@ def main()->int:
     receipt={
         "schema":"polymarket_v7_runtime_artifact_receipt_v1","paper_only":True,"authenticated_execution":False,"real_order_submission":False,
         "target_model_sha":a.model_sha,"bundle_manifest_sha256":sha256(manifest_path),"maker_execution_model_sha256":sha256(staged),"candidate_validation_sha256":sha256(cv),
-        "maker_staged_path":str(staged),"rich_model_state":rich_state,"rich_model_path":str(rich_path) if rich_path else None,"runtime_training":False,
+        "maker_staged_path":str(staged),"rich_model_state":rich_state,"rich_model_path":str(rich_path) if rich_path else None,
+        "rich_model_sha256":sha256(rich_path) if rich_path else None,"runtime_training":False,
     }
     a.receipt.parent.mkdir(parents=True,exist_ok=True); a.receipt.write_text(json.dumps(receipt,sort_keys=True,indent=2)+"\n")
     print(json.dumps(receipt,sort_keys=True)); return 0
