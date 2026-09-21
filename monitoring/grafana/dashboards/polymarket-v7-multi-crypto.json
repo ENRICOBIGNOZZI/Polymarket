@@ -2606,7 +2606,7 @@
     {
       "id": 480,
       "type": "stat",
-      "title": "PAPER Locked PnL (pre-gas)",
+      "title": "PAPER L1 Capacity PnL (pre-gas)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus-v7"
@@ -2831,7 +2831,7 @@
     {
       "id": 485,
       "type": "timeseries",
-      "title": "Locked PAPER PnL by Asset / Horizon / Direction",
+      "title": "L1 Capacity PnL by Asset / Horizon / Direction",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus-v7"
@@ -2997,6 +2997,6 @@
   "timezone": "browser",
   "title": "Polymarket V7 Multi-Crypto Performance & Runtime",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 11,
+  "version": 12,
   "description": "PAPER economic performance plus native runtime and data-plane health. Live telemetry remains visible when freshness gates hide stale economic panels; missing economic series are never interpreted as zeros."
 }
