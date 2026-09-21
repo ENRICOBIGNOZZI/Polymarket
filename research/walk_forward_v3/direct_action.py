@@ -37,7 +37,7 @@ from research.walk_forward_v2.core import (
 SCHEMA = "polymarket_direct_action_value_v3"
 DEFAULT_SIZE_GRID = (1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 320.0)
 DEFAULT_ACTION_HORIZONS_MS = (50, 100, 250, 500, 1000, 2000)
-DEFAULT_TRAIN_LATENCIES_MS = (25, 50, 100, 250)
+DEFAULT_TRAIN_LATENCIES_MS = (50,)
 DEFAULT_ENTRY_CAP = 0.80
 DEFAULT_HARD_ORDER_NOTIONAL = 100.0
 DEFAULT_MINIMUM_TTE_NS = 30_000_000_000
@@ -565,6 +565,9 @@ class DirectActionValueModel:
             "size_grid": list(self.size_grid),
             "action_horizons_ms": list(self.action_horizons_ms),
             "train_latencies_ms": list(self.train_latencies_ms),
+            "latency_role": "CONDITIONING_STATE_NOT_OPTIMIZED_ACTION",
+            "action_space": ["NO_TRADE", "SIGNALED_SIDE_X_SIZE_X_EXIT_HORIZON"],
+            "opposite_side_counterfactual": "UNAVAILABLE_UNTIL_BOTH_SIDES_ARE_CAPTURED_CAUSALLY",
             "entry_cap": self.entry_cap,
             "hard_order_notional": self.hard_order_notional,
             "model": "RIDGE_DIRECT_EXECUTABLE_CASH_PNL",
