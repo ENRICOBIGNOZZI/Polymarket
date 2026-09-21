@@ -22,8 +22,11 @@ from research.walk_forward_v3.direct_action import (
 )
 
 SCHEMA="polymarket_v7_simple_edge_diagnostic_v1"
-LATENCIES=(25,50,100)
-EXITS=(250,500,1000,2000)
+# Entry latency tests how quickly we can act after the Binance lead signal.
+# Exit horizon tests how long Polymarket needs to catch up. Missing causal book
+# evidence is censored rather than imputed.
+LATENCIES=(10,25,50,100,250)
+EXITS=(25,50,100,250,500,750,1000,1250,1500,1750,2000)
 
 
 def finite(v):
