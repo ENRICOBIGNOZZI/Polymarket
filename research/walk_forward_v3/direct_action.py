@@ -202,6 +202,124 @@ def _valid_state(row, *, minimum_tte_ns=DEFAULT_MINIMUM_TTE_NS,
     )
 
 
+def trade_frequency_opportunity_audit(records, *, entry_cap=DEFAULT_ENTRY_CAP):
+    """Descriptive causal opportunity attrition; never used for policy choice."""
+    rows = list(records)
+    stages = [
+        ("signal_valid", lambda r: r.get("signal_valid") is True),
+        ("confirmed", lambda r: r.get("confirmed") is True),
+        ("book_valid", lambda r: r.get("book_valid") is True),
+        ("pretrigger", lambda r: r.get("pretrigger") is True),
+        ("price_sane", lambda r: (
+            finite(r.get("ask")) and finite(r.get("bid"))
+            and 0 < float(r["bid"]) < float(r["ask"]) < 1
+        )),
+        ("positive_depth_and_minimum", lambda r: (
+            finite(r.get("quantity")) and float(r["quantity"]) > 0
+            and finite(r.get("minimum")) and float(r["minimum"]) > 0
+            and float(r["quantity"]) + 1e-12 >= float(r["minimum"])
+        )),
+        ("research_tte_30_120s", lambda r: (
+            isinstance(r.get("tte_ns"), int)
+            and DEFAULT_MINIMUM_TTE_NS <= r["tte_ns"] <= DEFAULT_MAXIMUM_TTE_NS
+        )),
+        ("live_tte_105_120s", lambda r: (
+            isinstance(r.get("tte_ns"), int)
+            and LIVE_MINIMUM_TTE_NS <= r["tte_ns"] <= LIVE_MAXIMUM_TTE_NS
+        )),
+        ("entry_price_cap", lambda r: (
+            finite(r.get("ask")) and float(r["ask"]) <= float(entry_cap) + 1e-12
+        )),
+    ]
+    survivors = list(rows)
+    funnel = []
+    previous = len(survivors)
+    for name, predicate in stages:
+        survivors = [row for row in survivors if predicate(row)]
+        count = len(survivors)
+        rejected = previous - count
+        funnel.append({
+            "stage": name,
+            "input": previous,
+            "survivors": count,
+            "rejected": rejected,
+            "survival_fraction_of_total": count / len(rows) if rows else None,
+            "marginal_rejection_fraction": rejected / previous if previous else None,
+        })
+        previous = count
+
+    tte_buckets = Counter()
+    for row in rows:
+        value = row.get("tte_ns")
+        if not isinstance(value, int):
+            tte_buckets["missing"] += 1
+            continue
+        seconds = value / 1e9
+        if seconds < 30:
+            key = "lt30"
+        elif seconds < 60:
+            key = "30_60"
+        elif seconds < 90:
+            key = "60_90"
+        elif seconds < 105:
+            key = "90_105"
+        elif seconds <= 120:
+            key = "105_120"
+        elif seconds < 180:
+            key = "120_180"
+        else:
+            key = "ge180"
+        tte_buckets[key] += 1
+
+    market_shocks = defaultdict(set)
+    missing_shock_rows = 0
+    for row in rows:
+        market = str(row.get("market_id") or "")
+        shock = str(
+            row.get("parent_shock_id")
+            or (row.get("features") or {}).get("parent_shock_id")
+            or ""
+        )
+        if not shock:
+            missing_shock_rows += 1
+            continue
+        market_shocks[market].add(shock)
+    shock_counts = [len(values) for values in market_shocks.values()]
+
+    classification = {
+        "signal_valid": "HARD_CAUSAL_DATA_CONSTRAINT",
+        "confirmed": "ECONOMIC_PREDICTOR_NOT_SAFETY",
+        "book_valid": "HARD_EXECUTION_EVIDENCE_CONSTRAINT",
+        "pretrigger": "HARD_CAUSALITY_CONSTRAINT",
+        "price_sane": "HARD_DATA_SANITY_CONSTRAINT",
+        "positive_depth_and_minimum": "HARD_EXECUTION_FEASIBILITY_CONSTRAINT",
+        "research_tte_30_120s": "RESEARCH_SUPPORT_BOUNDARY",
+        "live_tte_105_120s": "LEGACY_ECONOMIC_HEURISTIC_TO_CHALLENGE",
+        "entry_price_cap": "LEGACY_ECONOMIC_HEURISTIC_TO_CHALLENGE",
+        "one_entry_per_market": "LEGACY_ECONOMIC_HEURISTIC_TO_CHALLENGE",
+    }
+    return {
+        "schema": SCHEMA + "_trade_frequency_opportunity_audit_v1",
+        **SAFETY,
+        "diagnostic_only": True,
+        "selection": "NONE_NO_POLICY_TUNING_FROM_OUTER_OOS",
+        "records": len(rows),
+        "entry_cap": float(entry_cap),
+        "sequential_funnel": funnel,
+        "filter_classification": classification,
+        "tte_bucket_counts": dict(sorted(tte_buckets.items())),
+        "shock_identity": {
+            "rows_missing_parent_shock_id": missing_shock_rows,
+            "rows_with_parent_shock_id": len(rows) - missing_shock_rows,
+            "markets_with_shock_identity": len(market_shocks),
+            "markets_with_multiple_independent_shocks": sum(
+                count > 1 for count in shock_counts),
+            "independent_shock_count": sum(shock_counts),
+            "shocks_per_market": numeric_distribution(shock_counts),
+        },
+    }
+
+
 def selected_action_side(row):
     token = str(row.get("token_id") or "")
     yes = str(row.get("yes_token_id") or "")
@@ -3645,6 +3763,8 @@ def walk_forward_direct_action(
         "latency_ms": int(latency_ms),
         "capital_budget": float(capital_budget),
         "bilateral_evidence": bilateral_evidence_summary(records),
+        "trade_frequency_opportunity_audit": trade_frequency_opportunity_audit(
+            records),
         "folds": [],
         "diagnostic_selected_outcomes": [],
         "output_semantics": (
