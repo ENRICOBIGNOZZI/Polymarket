@@ -47,6 +47,7 @@ def row(market, *, signal=1.0, exit_bid=.55, depth=20.0, ask=.50, minimum=1.0):
         "pretrigger": True,
         "bid": ask - .01,
         "ask": ask,
+        "bid_quantity": depth,
         "quantity": depth,
         "minimum": minimum,
         "tick": .01,
@@ -62,6 +63,7 @@ def row(market, *, signal=1.0, exit_bid=.55, depth=20.0, ask=.50, minimum=1.0):
                 "time_ns": decision_ns + 50_000_000,
                 "bid": ask - .01,
                 "ask": ask,
+                "bid_quantity": depth,
                 "quantity": depth,
                 "epoch": 7,
             }
@@ -71,6 +73,7 @@ def row(market, *, signal=1.0, exit_bid=.55, depth=20.0, ask=.50, minimum=1.0):
                 "state": "OBSERVED",
                 "arrival_bid": exit_bid,
                 "arrival_ask": exit_bid + .01,
+                "arrival_bid_quantity": depth,
                 "arrival_quantity": depth,
                 "observed_time_ns": decision_ns + 500_000_000,
             }
@@ -202,11 +205,14 @@ def test_execution_friction_decomposition_reconciles_without_double_counting():
     assert math.isclose(economics["decision_half_spread_cost"], .05, abs_tol=1e-12)
     assert math.isclose(economics["exit_half_spread_cost"], .05, abs_tol=1e-12)
     assert math.isclose(economics["latency_price_drift_cost"], 0.0, abs_tol=1e-12)
+    assert math.isclose(economics["exit_liquidity_shortfall_cost"], 0.0, abs_tol=1e-12)
+    assert economics["fully_exitable_at_horizon"] is True
     reconstructed = (
         economics["ideal_midpoint_alpha"]
         - economics["decision_half_spread_cost"]
         - economics["latency_price_drift_cost"]
         - economics["exit_half_spread_cost"]
+        - economics["exit_liquidity_shortfall_cost"]
         - economics["total_fees"]
     )
     assert math.isclose(reconstructed, economics["cash_pnl"], abs_tol=1e-12)
@@ -261,6 +267,7 @@ def test_model_receipt_lists_execution_frictions_inside_target_and_residuals_out
     embedded = set(receipt["execution_frictions_in_training_target"])
     assert "entry_taker_fee" in embedded
     assert "exit_taker_fee" in embedded
+    assert "exit_l1_capacity_and_zero_value_residual_lower_bound" in embedded
     assert "fill_and_no_fill" in embedded
     assert "post_signal_latency_price_drift_via_arrival_book" in embedded
     assert receipt["residual_policy_frictions"]["capital_charge_bps_per_second"] == 1.0
@@ -898,3 +905,46 @@ def test_fold_summary_merge_preserves_exact_counts_and_pnl():
     assert merged["max_active_positions"] == 2
     assert merged["by_asset"]["BTC"]["trades"] == 1
     assert merged["by_asset"]["ETH"]["trades"] == 1
+
+
+
+def test_exit_horizon_respects_observed_bid_capacity_and_values_residual_at_zero():
+    r = row("m982", exit_bid=.55, depth=20.0)
+    r["targets"]["500"]["arrival_bid_quantity"] = 4.0
+    economics, state = realized_action_economics(
+        r, size=10.0, horizon_ms=500, latency_ms=50)
+    assert state == "OBSERVED_FULL_FILL"
+    assert economics["filled"] == 10.0
+    assert economics["exit_filled"] == 4.0
+    assert economics["residual_inventory"] == 6.0
+    assert economics["fully_exitable_at_horizon"] is False
+    assert economics["residual_terminal_value_assumption"] == "ZERO_WORST_CASE"
+    assert math.isclose(economics["cash_pnl"], -2.8, abs_tol=1e-12)
+    # Future mid=.555; six unliquidated shares lose that entire executable-mark
+    # reference under the static zero-residual lower-bound target.
+    assert math.isclose(
+        economics["exit_liquidity_shortfall_cost"], 6.0 * .555,
+        abs_tol=1e-12)
+    reconstructed = (
+        economics["ideal_midpoint_alpha"]
+        - economics["decision_half_spread_cost"]
+        - economics["latency_price_drift_cost"]
+        - economics["exit_half_spread_cost"]
+        - economics["exit_liquidity_shortfall_cost"]
+        - economics["total_fees"]
+    )
+    assert math.isclose(reconstructed, economics["cash_pnl"], abs_tol=1e-12)
+
+
+def test_bilateral_exit_capacity_is_side_specific():
+    r = bilateral_row("m983", no_depth=3.0)
+    yes, yes_state = realized_action_economics(
+        r, size=5.0, horizon_ms=500, latency_ms=50, side="YES")
+    no, no_state = realized_action_economics(
+        r, size=5.0, horizon_ms=500, latency_ms=50, side="NO")
+    assert yes_state == no_state == "OBSERVED_FULL_FILL"
+    assert yes["exit_filled"] == 5.0
+    assert yes["residual_inventory"] == 0.0
+    assert no["exit_filled"] == 3.0
+    assert no["residual_inventory"] == 2.0
+    assert no["fully_exitable_at_horizon"] is False
