@@ -1312,6 +1312,8 @@ def test_effective_action_age_is_signal_age_plus_execution_latency():
     assert math.isclose(features["state.signal_age_ms"], 37.0, abs_tol=1e-12)
     assert math.isclose(
         features["system.effective_action_age_ms"], 87.0, abs_tol=1e-12)
+    assert math.isclose(action["signal_age_ms"], 37.0, abs_tol=1e-12)
+    assert math.isclose(action["effective_action_age_ms"], 87.0, abs_tol=1e-12)
     assert features["age::50_100"] == 1.0
     assert features["age::le50"] == 0.0
     assert features["age::100_250"] == 0.0
@@ -1381,4 +1383,50 @@ def test_latency_age_surface_is_diagnostic_and_preserves_gate():
         25, 50, 100, 250
     ]
     assert all(entry["state"] == "READY" for entry in surface["entries"])
+    assert surface["selection_warning"] == (
+        "LATENCY_AND_AGE_BUCKETS_ARE_DIAGNOSTIC_OOS_CELLS;"
+        "DO_NOT_PICK_A_GATE_FROM_THE_SAME_OUTER_OOS"
+    )
+    for entry in surface["entries"]:
+        assert "by_effective_age_bucket" in entry
+        assert entry["selected_effective_age_ms"]["count"] == (
+            entry["summary"]["selected_trades"])
+        total_bucket_trades = sum(
+            cell["selected_trades"]
+            for cell in entry["by_effective_age_bucket"].values()
+        )
+        assert total_bucket_trades == entry["summary"]["selected_trades"]
     assert model.maximum_effective_action_age_ms == 100.0
+
+
+
+def test_effective_age_bucket_surface_accounts_for_observed_and_censored_trades():
+    class Dummy:
+        maximum_effective_action_age_ms = None
+        train_latencies_ms = (50,)
+
+    # Exercise the summary helper indirectly through a real fitted model so
+    # action fields come from the policy itself.
+    rows = [
+        row("m9301", signal=2.0, exit_bid=.56, depth=20.0),
+        row("m9302", signal=2.0, exit_bid=.56, depth=20.0),
+    ]
+    for item in rows:
+        item["signal_age_ns"] = 20_000_000
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+        streaming_batch_size=8,
+    ).fit(rows * 12)
+    surface = evaluate_latency_age_surface(
+        model, rows, latencies_ms=(50,), capital_budget=1000.0)
+    entry = surface["entries"][0]
+    assert entry["latency_ms"] == 50
+    assert entry["state"] == "READY"
+    assert entry["selected_effective_age_ms"]["count"] == (
+        entry["summary"]["selected_trades"])
+    if entry["summary"]["selected_trades"]:
+        assert set(entry["by_effective_age_bucket"]).issubset(
+            {"LE50", "GT50_LE100", "GT100_LE250", "GT250", "UNAVAILABLE"})
