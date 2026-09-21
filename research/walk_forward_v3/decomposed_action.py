@@ -88,14 +88,31 @@ class DecomposedActionValueModel:
             return float(cell["multiplier"])
         return float(self.decomposed_calibration_multiplier)
 
-    def fit(self, rows):
+    def fit(self, rows, *, fitted_base=None):
         rows = list(rows)
         if not rows:
             raise ValueError("decomposed action training rows required")
 
-        # Fit the baseline object only for the common causal feature map,
-        # support diagnostics, portfolio friction contract and safe geometry.
-        self.base.fit(rows)
+        # Reuse an already-fitted Direct Action challenger when it was trained
+        # on this exact fold. This changes no mathematics: A2 needs the base
+        # feature/support/geometry contract, not a second independent refit.
+        base_fit_reused = fitted_base is not None
+        if fitted_base is not None:
+            if not isinstance(fitted_base, da.DirectActionValueModel):
+                raise TypeError("fitted_base must be DirectActionValueModel")
+            if not fitted_base.fitted:
+                raise ValueError("fitted_base must already be fitted")
+            receipt = fitted_base.training_receipt
+            expected_markets = len({str(row["market_id"]) for row in rows})
+            if (
+                int(receipt.get("training_states_total") or -1) != len(rows)
+                or int(receipt.get("training_markets_total") or -1)
+                    != expected_markets
+            ):
+                raise ValueError("fitted_base training fold mismatch")
+            self.base = fitted_base
+        else:
+            self.base.fit(rows)
         markets = self.base._market_order(rows)
         if not markets:
             raise ValueError("no admissible decomposed-action markets")
@@ -235,6 +252,7 @@ class DecomposedActionValueModel:
             "model": "LINEAR_FILL_PROBABILITY_X_CONDITIONAL_EXECUTABLE_CASH_PNL",
             "decomposed_research_only": True,
             "automatic_promotion": False,
+            "decomposed_base_fit_reused": bool(base_fit_reused),
             "fill_head_rows": int(self.fill_model.rows),
             "conditional_pnl_head_rows": int(
                 self.conditional_pnl_model.rows),
