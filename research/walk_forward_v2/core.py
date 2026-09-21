@@ -990,6 +990,63 @@ def asset_markout_predictors(train, test):
     return output, details
 
 
+def _with_asset_intercepts(rows, assets):
+    names = ["asset_intercept::" + asset for asset in assets]
+    output = []
+    for row in rows:
+        clone = dict(row)
+        features = dict(row["features"])
+        for asset, name in zip(assets, names):
+            features[name] = 1.0 if row["asset"] == asset else 0.0
+        clone["features"] = features
+        output.append(clone)
+    return output, names
+
+
+def partial_pool_markout_predictors(train, test):
+    """Common slopes plus ridge-shrunk asset intercepts.
+
+    This is a preregistered diagnostic challenger, not promotion-eligible.
+    Ridge remains 8.0 and the economic target is unchanged.
+    """
+    assets = sorted({row["asset"] for row in train + test})
+    base_names = feature_names(train)
+    aug_train, dummy_names = _with_asset_intercepts(train, assets)
+    aug_test, _ = _with_asset_intercepts(test, assets)
+    names = base_names + dummy_names
+    output = {str(h): [None] * len(test) for h in HORIZONS_MS}
+    details = {}
+    for horizon in HORIZONS_MS:
+        key = str(horizon)
+        eligible = [
+            row for row in aug_train
+            if row.get("targets", {}).get(key, {}).get("state") == "OBSERVED"
+        ]
+        if len(eligible) < 8:
+            details[key] = {
+                "state": "INSUFFICIENT_TRAINING_TARGETS",
+                "rows": len(eligible),
+                "ridge": 8.0,
+                "promotion_eligible": False,
+            }
+            continue
+        model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: executable_markout_target(row, h))
+        output[key] = model.predict_many(aug_test)
+        details[key] = {
+            "state": "READY",
+            "rows": len(eligible),
+            "unique_markets": len({row["market_id"] for row in eligible}),
+            "ridge": 8.0,
+            "feature_names": names,
+            "asset_intercepts": dummy_names,
+            "common_slopes": base_names,
+            "target": "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees",
+            "promotion_eligible": False,
+        }
+    return output, details
+
+
 def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                                 edge_threshold=.005, execution_reserve=.005,
                                 entry_cap=.75, shares=5.0,
@@ -1423,6 +1480,8 @@ def walk_forward(records, *, desired_folds=3):
             fold["train_repricing"], fold["test"])
         asset_markout, asset_markout_meta = asset_markout_predictors(
             fold["train_repricing"], fold["test"])
+        partial_pool_markout, partial_pool_meta = partial_pool_markout_predictors(
+            fold["train_repricing"], fold["test"])
         for index, row in enumerate(fold["test"]):
             evaluations.append({
                 "fold": fold["fold"], "cutoff_ns": fold["cutoff_ns"], "decision_id": row["decision_id"],
@@ -1432,6 +1491,9 @@ def walk_forward(records, *, desired_folds=3):
                 "repricing_predictions": {key: values[index] for key, values in repricing.items()},
                 "markout_predictions": {key: values[index] for key, values in markout.items()},
                 "asset_markout_predictions": {key: values[index] for key, values in asset_markout.items()},
+                "partial_pool_markout_predictions": {
+                    key: values[index] for key, values in partial_pool_markout.items()
+                },
             })
         settlement_ids = [row["decision_id"] for row in fold["train_settlement"]]
         repricing_ids = [row["decision_id"] for row in fold["train_repricing"]]
@@ -1448,6 +1510,7 @@ def walk_forward(records, *, desired_folds=3):
         fold["settlement"] = settlement_meta
         fold["repricing"] = repricing_meta
         fold["asset_markout"] = asset_markout_meta
+        fold["partial_pool_markout"] = partial_pool_meta
     return evaluations, {"schema": SCHEMA + "_folds_v1", **SAFETY, "receipt": receipt, "folds": all_folds,
                          "oos_predictions": len(evaluations)}
 
@@ -1552,7 +1615,7 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         return outcome
     funnel["simulated_order"] = True
     outcome["requested"] = requested
-    outcome["reserved_cost"] = min(3.75, requested * entry_cap)
+    outcome["reserved_cost"] = requested * entry_cap
     if ideal == "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND":
         book = {"ask": row["ask"], "bid": row["bid"], "quantity": requested, "time_ns": row["decision_ns"]}
     else:
@@ -1619,7 +1682,7 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
         row = event["row"]
         prediction, repricing = selector(event)
         available = row["market_id"] not in used_markets
-        capital_available = reserved + min(3.75, shares * entry_cap) <= capital_budget + 1e-12
+        capital_available = reserved + shares * entry_cap <= capital_budget + 1e-12
         outcome = replay_one(
             row, prediction, repricing, latency_ms=latency_ms,
             edge_threshold=edge_threshold, entry_cap=entry_cap, shares=shares,
@@ -1998,6 +2061,9 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
         variants["asset_markout_" + key + "ms"] = (
             lambda event, h=key: (event.get("asset_markout_predictions", {}).get(h), None),
             "EXECUTABLE_MARKOUT", horizon)
+        variants["partial_pool_markout_" + key + "ms"] = (
+            lambda event, h=key: (event.get("partial_pool_markout_predictions", {}).get(h), None),
+            "EXECUTABLE_MARKOUT", horizon)
 
     for name, (selector, valuation_mode, markout_horizon) in variants.items():
         outcomes = replay_policy(
@@ -2111,6 +2177,142 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
             }
         result["live_parity_horizon_latency"][hkey] = pooled_cells
         result["live_parity_asset_horizon_latency"][hkey] = asset_cells
+
+    # Diagnostic partial-pooling surface. This family is intentionally excluded
+    # from automatic promotion until fresh post-registration evidence exists.
+    result["live_parity_partial_pool_horizon_latency"] = {}
+    for horizon in (500, 1000, 2000):
+        hkey = str(horizon)
+        selector = lambda event, h=hkey: (
+            event.get("partial_pool_markout_predictions", {}).get(h), None)
+        cells = {}
+        for latency in latency_ms:
+            if latency >= horizon:
+                cells[str(latency)] = {
+                    "state": "LATENCY_NOT_BEFORE_MARKOUT_HORIZON",
+                    "horizon_ms": horizon, "latency_ms": latency,
+                }
+                continue
+            metrics = replay_policy_summary(
+                ordered, selector,
+                latency_ms=latency,
+                valuation_mode="EXECUTABLE_MARKOUT",
+                markout_horizon_ms=horizon,
+                assume_sorted=True,
+                entry_cap=.80,
+                shares=5.0,
+                minimum_tte_ns=105_000_000_000,
+                maximum_tte_ns=120_000_000_000,
+                require_full_visible_depth=True,
+            )
+            cells[str(latency)] = {"state": "READY", **metrics}
+        result["live_parity_partial_pool_horizon_latency"][hkey] = cells
+
+    # Diagnostics-only sensitivity grids. They never enter the promotion policy.
+    result["required_net_markout_sensitivity"] = {
+        "promotion_eligible": False,
+        "reference_latency_ms": 50,
+        "margins_per_share": [.0025, .005, .01, .02],
+        "families": {},
+    }
+    diagnostic_families = {
+        "POOLED": lambda event, h: event.get("markout_predictions", {}).get(h),
+        "PARTIAL_POOL": lambda event, h: event.get("partial_pool_markout_predictions", {}).get(h),
+    }
+    for family, getter in diagnostic_families.items():
+        family_rows = {}
+        for horizon in (500, 1000, 2000):
+            hkey = str(horizon)
+            margin_rows = {}
+            for margin in (.0025, .005, .01, .02):
+                selector = lambda event, h=hkey, g=getter: (g(event, h), None)
+                metrics = replay_policy_summary(
+                    ordered, selector,
+                    latency_ms=50,
+                    valuation_mode="EXECUTABLE_MARKOUT",
+                    markout_horizon_ms=horizon,
+                    assume_sorted=True,
+                    edge_threshold=margin,
+                    execution_reserve=0.0,
+                    entry_cap=.80,
+                    shares=5.0,
+                    minimum_tte_ns=105_000_000_000,
+                    maximum_tte_ns=120_000_000_000,
+                    require_full_visible_depth=True,
+                )
+                margin_rows[str(margin)] = metrics
+            family_rows[hkey] = margin_rows
+        result["required_net_markout_sensitivity"]["families"][family] = family_rows
+
+    result["size_capacity_sensitivity"] = {
+        "promotion_eligible": False,
+        "reference_latency_ms": 50,
+        "sizes_shares": [5.0, 10.0, 20.0],
+        "families": {},
+    }
+    for family, getter in diagnostic_families.items():
+        family_rows = {}
+        for horizon in (500, 1000, 2000):
+            hkey = str(horizon)
+            size_rows = {}
+            for size in (5.0, 10.0, 20.0):
+                selector = lambda event, h=hkey, g=getter: (g(event, h), None)
+                metrics = replay_policy_summary(
+                    ordered, selector,
+                    latency_ms=50,
+                    valuation_mode="EXECUTABLE_MARKOUT",
+                    markout_horizon_ms=horizon,
+                    assume_sorted=True,
+                    edge_threshold=.005,
+                    execution_reserve=.005,
+                    entry_cap=.80,
+                    shares=size,
+                    minimum_tte_ns=105_000_000_000,
+                    maximum_tte_ns=120_000_000_000,
+                    require_full_visible_depth=True,
+                )
+                size_rows[str(size)] = metrics
+            family_rows[hkey] = size_rows
+        result["size_capacity_sensitivity"]["families"][family] = family_rows
+
+    result["common_support_economics"] = {
+        "promotion_eligible": False,
+        "common_shock_floor_bp": 1.13,
+        "signal_age_caps_ms": [10, 25, 50, 100],
+        "reference_latency_ms": 50,
+        "families": {},
+    }
+    for family, getter in diagnostic_families.items():
+        family_rows = {}
+        for horizon in (500, 1000, 2000):
+            hkey = str(horizon)
+            age_rows = {}
+            for age_cap in (10, 25, 50, 100):
+                subset = []
+                for event in ordered:
+                    row = event["row"]
+                    shock = row.get("features", {}).get("binance_return_100ms_bp")
+                    if not finite(shock) or abs(float(shock)) + 1e-12 < 1.13:
+                        continue
+                    if float(row.get("signal_age_ns") or 0) / 1_000_000 > age_cap + 1e-12:
+                        continue
+                    subset.append(event)
+                selector = lambda event, h=hkey, g=getter: (g(event, h), None)
+                metrics = replay_policy_summary(
+                    subset, selector,
+                    latency_ms=50,
+                    valuation_mode="EXECUTABLE_MARKOUT",
+                    markout_horizon_ms=horizon,
+                    assume_sorted=True,
+                    entry_cap=.80,
+                    shares=5.0,
+                    minimum_tte_ns=105_000_000_000,
+                    maximum_tte_ns=120_000_000_000,
+                    require_full_visible_depth=True,
+                )
+                age_rows[str(age_cap)] = metrics
+            family_rows[hkey] = age_rows
+        result["common_support_economics"]["families"][family] = family_rows
 
     # Preregistered promotion candidate set evaluated under exact current
     # native PAPER geometry at one frozen reference latency. This avoids

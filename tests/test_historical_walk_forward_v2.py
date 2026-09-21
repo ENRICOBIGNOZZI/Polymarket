@@ -10,6 +10,7 @@ from research.walk_forward_v2.core import (
     asset_markout_predictors,
     asset_selection_diagnostics,
     live_parity_policy_diagnostics,
+    partial_pool_markout_predictors,
     common_signal_support_diagnostics,
     book_targets,
     build_dataset,
@@ -1062,3 +1063,92 @@ def test_existing_champion_is_refit_when_it_remains_best(tmp_path, monkeypatch):
     assert champion["training_window"]["decision_rows"] == 1200
     assert champion["training_window"]["maximum_decision_ns"] == 300
     assert champion["selection_action"] == "REFIT_CHAMPION"
+
+
+
+def test_partial_pool_uses_common_slopes_with_asset_intercepts():
+    train = []
+    base = 1_789_921_800_000_000_001
+    for asset, future_bid in (("BTC", .58), ("ETH", .42)):
+        for index in range(12):
+            row = record(f"pp-{asset.lower()}-{index}", decision_ns=base + len(train) * 1_000_000_000)
+            row["asset"] = asset
+            row["fee_rate"] = 0.0
+            row["features"]["x"] = float(index % 3)
+            row["targets"] = {}
+            for horizon in HORIZONS_MS:
+                row["targets"][str(horizon)] = {
+                    "state": "OBSERVED",
+                    "arrival_bid": future_bid,
+                    "mid_change": future_bid - .495,
+                    "observed_time_ns": row["decision_ns"] + horizon * 1_000_000,
+                }
+            train.append(row)
+
+    test = []
+    for asset in ("BTC", "ETH"):
+        row = record("pp-test-" + asset.lower(), decision_ns=base + 100_000_000_000 + len(test))
+        row["asset"] = asset
+        row["fee_rate"] = 0.0
+        row["features"]["x"] = 1.0
+        test.append(row)
+
+    predictions, meta = partial_pool_markout_predictors(train, test)
+    btc, eth = predictions["1000"]
+    assert btc is not None and eth is not None
+    assert btc > 0
+    assert eth < 0
+    assert meta["1000"]["ridge"] == 8.0
+    assert meta["1000"]["promotion_eligible"] is False
+    assert set(meta["1000"]["asset_intercepts"]) == {
+        "asset_intercept::BTC", "asset_intercept::ETH"
+    }
+
+
+def test_size_above_five_reserves_proportional_capital():
+    evaluations = []
+    base = 1_789_921_800_000_000_001
+    for index in range(2):
+        row = record("size-" + str(index), decision_ns=base + index * 1_000_000_000)
+        row["fee_rate"] = 0.0
+        row["ask"] = .50
+        row["bid"] = .49
+        row["quantity"] = 20.0
+        row["minimum"] = 5.0
+        row["arrivals"] = {
+            "50": {
+                "time_ns": row["decision_ns"] + 50_000_000,
+                "bid": .49, "ask": .50, "quantity": 20.0, "epoch": 7,
+            }
+        }
+        row["targets"] = {
+            "500": {
+                "state": "OBSERVED",
+                "arrival_bid": .55,
+                "observed_time_ns": row["decision_ns"] + 500_000_000,
+            }
+        }
+        evaluations.append({
+            "decision_ns": row["decision_ns"],
+            "decision_id": row["decision_id"],
+            "row": row,
+            "markout_predictions": {"500": .03},
+        })
+
+    outcomes = replay_policy(
+        evaluations,
+        lambda event: (event["markout_predictions"]["500"], None),
+        latency_ms=50,
+        valuation_mode="EXECUTABLE_MARKOUT",
+        markout_horizon_ms=500,
+        edge_threshold=.005,
+        execution_reserve=.005,
+        entry_cap=.50,
+        shares=10.0,
+        capital_budget=7.5,
+        require_full_visible_depth=True,
+    )
+    assert outcomes[0]["funnel"]["simulated_order"] is True
+    assert outcomes[0]["reserved_cost"] == 5.0
+    assert outcomes[1]["funnel"]["capital_admitted"] is False
+    assert sum(row["funnel"]["simulated_order"] for row in outcomes) == 1
