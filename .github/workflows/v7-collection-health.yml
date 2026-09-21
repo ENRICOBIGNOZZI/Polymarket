@@ -1,0 +1,46 @@
+name: V7 independent collection health
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-independent-collection-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: i-0fba2bac9fdc5cbeb
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-collection-health
+          aws-region: eu-west-2
+
+      - name: Verify collection liveness and real tape growth
+        run: |
+          set -euo pipefail
+          python3 ops/v7_collection_plane_health.py             --instance-id "$INSTANCE_ID"             --output collection-health.json
+          cat collection-health.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload health receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-collection-health-${{ github.run_id }}
+          path: collection-health.json
+          retention-days: 14
