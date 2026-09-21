@@ -1,8 +1,7 @@
 {
-  "schema": "polymarket_v7_grafana_london_hotfix_v1",
-  "target_sha": "291643b1dfe3c21c3516c4d70f122e5becdbbfb7",
-  "folder_uid": "afyms0c1xjabkf",
-  "paper_only": true,
-  "real_order_submission": false
+   "schema": "polymarket_v7_grafana_london_hotfix_v1",
+   "target_sha": "291643b1dfe3c21c3516c4d70f122e5becdbbfb7",
+   "folder_uid": "afyms0c1xjabkf",
+   "paper_only": true,
+   "real_order_submission": false
 }
-
