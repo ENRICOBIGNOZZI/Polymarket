@@ -32,6 +32,21 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
+      - name: Validate explicit read-only health request
+        if: github.event_name == 'push'
+        run: |
+          python3 - <<'PY'
+          import json
+          value=json.load(open('deploy/v7-collection-health-request.json',encoding='utf-8'))
+          assert value == {
+              'schema':'polymarket_v7_collection_health_request_v1',
+              'paper_only':True,
+              'authenticated_execution':False,
+              'real_order_submission':False,
+              'operation':'READ_ONLY_HEALTH',
+          }
+          PY
+
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
