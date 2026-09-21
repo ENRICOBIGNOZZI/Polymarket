@@ -1709,7 +1709,7 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
             lambda event, h=key: (event["markout_predictions"].get(h), None),
             "EXECUTABLE_MARKOUT", horizon)
         variants["asset_markout_" + key + "ms"] = (
-            lambda event, h=key: (event["asset_markout_predictions"].get(h), None),
+            lambda event, h=key: (event.get("asset_markout_predictions", {}).get(h), None),
             "EXECUTABLE_MARKOUT", horizon)
 
     for name, (selector, valuation_mode, markout_horizon) in variants.items():
@@ -1760,6 +1760,28 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
                 markout_horizon_ms=horizon, assume_sorted=True)
             cells[str(latency)] = {"state": "READY", **metrics}
         result["horizon_latency"][hkey] = cells
+
+    # Same latency surface for the asset-specific challenger. Hyperparameters,
+    # execution and costs are identical; only the coefficient pooling restriction changes.
+    result["asset_horizon_latency"] = {}
+    for horizon in (500, 1000, 2000):
+        hkey = str(horizon)
+        selector = lambda event, h=hkey: (
+            event.get("asset_markout_predictions", {}).get(h), None)
+        cells = {}
+        for latency in latency_ms:
+            if latency >= horizon:
+                cells[str(latency)] = {
+                    "state": "LATENCY_NOT_BEFORE_MARKOUT_HORIZON",
+                    "horizon_ms": horizon, "latency_ms": latency,
+                }
+                continue
+            metrics = replay_policy_summary(
+                ordered, selector, latency_ms=latency,
+                valuation_mode="EXECUTABLE_MARKOUT",
+                markout_horizon_ms=horizon, assume_sorted=True)
+            cells[str(latency)] = {"state": "READY", **metrics}
+        result["asset_horizon_latency"][hkey] = cells
 
     # Backward-compatible latency chart uses a declared reference horizon only.
     result["latency"] = result["horizon_latency"]["500"]
