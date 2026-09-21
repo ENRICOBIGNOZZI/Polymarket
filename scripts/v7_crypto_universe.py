@@ -535,6 +535,9 @@ def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | Non
             "no_token": tokens[no_index],
             "start_timestamp_ms": start_s * 1000,
             "end_timestamp_ms": close_s * 1000,
+            "fee_schedule": row.get("fee_schedule") if isinstance(row.get("fee_schedule"), dict) else {},
+            "fees_enabled": row.get("fees_enabled") is True,
+            "fees_enabled_explicit": row.get("fees_enabled_explicit") is True,
         })
     identity = json.dumps(markets, sort_keys=True, separators=(",", ":"))
     return {
