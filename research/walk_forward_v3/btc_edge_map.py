@@ -28,9 +28,11 @@ TARGET_SIZES=(5.0,10.0,20.0,40.0)
 MODES=("EVERY_DECISION","ONE_PER_SIGNAL_VERSION")
 
 SURFACE_LATENCIES=(0,5,10,15,25,35,50,75,100,150,250,350,500,750,1000)
-SURFACE_EXITS=(50,100,150,250,350,500,750,1000,1500,2000,3000,5000,7500,10000,15000,30000)
+SURFACE_EXITS=(50,100,150,250,350,500,750,1000,1500,2000,3000,4000,5000,7500,10000,15000,30000)
 SURFACE_TARGET_SIZE=5.0
 SURFACE_MODE="EVERY_DECISION"
+EQUITY_LATENCIES=(10,25,50,100,250)
+EQUITY_EXITS=(500,750,1000,1500,2000,3000,4000,5000)
 
 
 def finite(v):
@@ -138,6 +140,8 @@ def broad_entry_exit_surface(rows, split_hours):
     mode_rows=fixed_mode_rows(rows,SURFACE_MODE)
     table=defaultdict(fresh)
     unavailable=defaultdict(int)
+    cell_unavailable=defaultdict(lambda: defaultdict(int))
+    equity_events=defaultdict(list)
     size=float(SURFACE_TARGET_SIZE)
     for row in mode_rows:
         side=selected_action_side(row)
@@ -158,6 +162,7 @@ def broad_entry_exit_surface(rows, split_hours):
             for exit_ms in SURFACE_EXITS:
                 if exit_ms<=latency:
                     continue
+                cell=f"{latency}::{exit_ms}"
                 economics,why=realized_action_economics(
                     row,size=size,horizon_ms=exit_ms,
                     latency_ms=latency,side=side,
@@ -165,16 +170,49 @@ def broad_entry_exit_surface(rows, split_hours):
                     hard_order_notional=DEFAULT_HARD_ORDER_NOTIONAL,
                 )
                 if economics is None:
-                    unavailable[str(why or "UNAVAILABLE")]+=1
+                    reason=str(why or "UNAVAILABLE")
+                    unavailable[reason]+=1
+                    cell_unavailable[cell][reason]+=1
                     continue
-                add(table[f"{latency}::{exit_ms}"],economics,why,size,ask)
+                add(table[cell],economics,why,size,ask)
+                if (
+                    latency in EQUITY_LATENCIES
+                    and exit_ms in EQUITY_EXITS
+                    and float(economics.get("filled") or 0.0)>0
+                ):
+                    equity_events[cell].append({
+                        "decision_ns":int(row["decision_ns"]),
+                        "decision_id":str(row.get("decision_id") or ""),
+                        "market_id":str(row["market_id"]),
+                        "contract_horizon":str(row.get("horizon") or ""),
+                        "side":str(side),
+                        "cash_pnl":float(economics["cash_pnl"]),
+                        "filled":float(economics.get("filled") or 0.0),
+                        "exit_filled":float(economics.get("exit_filled") or 0.0),
+                        "residual_inventory":float(economics.get("residual_inventory") or 0.0),
+                        "entry_price":economics.get("entry_price"),
+                        "exit_bid":economics.get("exit_bid"),
+                        "execution_state":str(why or ""),
+                    })
+    for events in equity_events.values():
+        events.sort(key=lambda event:(event["decision_ns"],event["decision_id"]))
     return {
         "mode":SURFACE_MODE,
         "target_size_shares":SURFACE_TARGET_SIZE,
         "latencies_ms":list(SURFACE_LATENCIES),
         "exit_horizons_ms":list(SURFACE_EXITS),
+        "equity_latencies_ms":list(EQUITY_LATENCIES),
+        "equity_exit_horizons_ms":list(EQUITY_EXITS),
         "candidate_rows":len(mode_rows),
         "unavailable":dict(sorted(unavailable.items())),
+        "cell_unavailable":{
+            key:dict(sorted(value.items()))
+            for key,value in sorted(cell_unavailable.items())
+        },
+        "equity_events":{
+            key:value
+            for key,value in sorted(equity_events.items())
+        },
         "cells":{
             key:finish(value,split_hours)
             for key,value in sorted(table.items())
