@@ -90,3 +90,24 @@ def test_maker_challenger_source_archive_is_regular_files_only():
     payload = runner.source_archive(ROOT)
     assert isinstance(payload, bytes)
     assert len(payload) > 0
+
+
+
+def test_causal_value_evidence_has_priority_over_descriptive_screening():
+    causal = {
+        "schema": "polymarket_v7_maker_value_challenger_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+        "automatic_promotion": False,
+        "state": "READY",
+        "positive_lcb_actions_diagnostic_only": ["JOIN"],
+    }
+    result = build({"actions": []}, [], causal_value=causal)
+    assert result["state"] == "CAUSAL_VALUE_EVIDENCE_AVAILABLE"
+    assert result["causal_value_state"] == "READY"
+    assert result["causal_positive_lcb_actions_diagnostic_only"] == ["JOIN"]
+    assert result["profitability_proven"] is False
+    assert result["automatic_promotion"] is False

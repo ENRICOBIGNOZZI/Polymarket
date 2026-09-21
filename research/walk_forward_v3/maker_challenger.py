@@ -105,7 +105,7 @@ def toxicity_by_action(reports):
 
 
 def build(fillability, toxicity_reports, horse_race=None,
-          complete_set=None, forward_report=None):
+          complete_set=None, forward_report=None, causal_value=None):
     fills = fillability_actions(fillability)
     tox = toxicity_by_action(toxicity_reports)
     actions = {}
@@ -143,6 +143,9 @@ def build(fillability, toxicity_reports, horse_race=None,
     forward_state = (
         str((forward_report or {}).get("state") or "UNAVAILABLE")
     )
+    causal_value_state = (
+        str((causal_value or {}).get("state") or "UNAVAILABLE")
+    )
     complete_state = (
         str((complete_set or {}).get("state") or "UNAVAILABLE")
     )
@@ -154,6 +157,8 @@ def build(fillability, toxicity_reports, horse_race=None,
         "state": (
             "FORWARD_EVIDENCE_AVAILABLE"
             if forward_report is not None
+            else "CAUSAL_VALUE_EVIDENCE_AVAILABLE"
+            if causal_value_state in ("READY", "NO_MAKER_EPISODES")
             else "SCREENING_ONLY_NO_FROZEN_FORWARD_REPORT"
         ),
         "objective": (
@@ -172,6 +177,15 @@ def build(fillability, toxicity_reports, horse_race=None,
         "fillability_next_experiment": (fillability or {}).get("next_experiment"),
         "fillability_forward_exact_ws": (
             (fillability or {}).get("forward_exact_ws") or {}
+        ),
+        "causal_value_challenger": causal_value,
+        "causal_value_state": causal_value_state,
+        "causal_value_priority": (
+            "PRIMARY_BEFORE_DESCRIPTIVE_FILLABILITY_TIMES_MARKOUT_SCREENING"
+        ),
+        "causal_positive_lcb_actions_diagnostic_only": (
+            (causal_value or {}).get("positive_lcb_actions_diagnostic_only")
+            or []
         ),
         "cancel_overlay_horse_race": horse_race,
         "complete_set_shadow": complete_set,
@@ -192,6 +206,7 @@ def main(argv=None):
     parser.add_argument("--horse-race", type=Path)
     parser.add_argument("--complete-set", type=Path)
     parser.add_argument("--forward-report", type=Path)
+    parser.add_argument("--causal-value", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     result = build(
@@ -200,6 +215,7 @@ def main(argv=None):
         read(args.horse_race),
         read(args.complete_set),
         read(args.forward_report),
+        read(args.causal_value),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
