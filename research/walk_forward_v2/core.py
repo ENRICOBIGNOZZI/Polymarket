@@ -172,39 +172,50 @@ def book_from_row(row):
 
 
 def native_pair_l1(row):
-    """Causal bilateral L1 state when the producer captured both PM tokens."""
+    """Canonical causal two-token L1 state; missing depth is never imputed."""
     if row.get("repricing_pair_valid") is not True:
-        return None
+        return {"state": "UNAVAILABLE"}
     try:
         yes_bid = int(row["yes_bid_e4"]) / 10000
         yes_ask = int(row["yes_ask_e4"]) / 10000
         no_bid = int(row["no_bid_e4"]) / 10000
         no_ask = int(row["no_ask_e4"]) / 10000
-        yes_bid_quantity = float(row["yes_bid_quantity"]) / 1_000_000
-        yes_ask_quantity = float(row["yes_ask_quantity"]) / 1_000_000
-        no_bid_quantity = float(row["no_bid_quantity"]) / 1_000_000
-        no_ask_quantity = float(row["no_ask_quantity"]) / 1_000_000
     except (KeyError, TypeError, ValueError, OverflowError):
-        return None
-    if not (
-        0 < yes_bid < yes_ask < 1
-        and 0 < no_bid < no_ask < 1
-        and yes_bid_quantity >= 0
-        and yes_ask_quantity >= 0
-        and no_bid_quantity >= 0
-        and no_ask_quantity >= 0
+        return {"state": "UNAVAILABLE"}
+    if not (0 < yes_bid < yes_ask < 1 and 0 < no_bid < no_ask < 1):
+        return {"state": "UNAVAILABLE"}
+
+    quantities = {}
+    complete = True
+    for key in (
+        "yes_bid_quantity", "yes_ask_quantity",
+        "no_bid_quantity", "no_ask_quantity",
     ):
-        return None
+        value = row.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            quantities[key] = None
+            complete = False
+        else:
+            quantities[key] = float(value) / 1_000_000
+
+    ready = (
+        complete
+        and quantities["yes_bid_quantity"] > 0
+        and quantities["yes_ask_quantity"] > 0
+        and quantities["no_bid_quantity"] > 0
+        and quantities["no_ask_quantity"] > 0
+    )
     return {
-        "YES": {
+        "state": "BILATERAL_EXECUTABLE_READY" if ready else "PRICES_ONLY",
+        "yes": {
             "bid": yes_bid, "ask": yes_ask,
-            "bid_quantity": yes_bid_quantity,
-            "ask_quantity": yes_ask_quantity,
+            "bid_quantity": quantities["yes_bid_quantity"],
+            "ask_quantity": quantities["yes_ask_quantity"],
         },
-        "NO": {
+        "no": {
             "bid": no_bid, "ask": no_ask,
-            "bid_quantity": no_bid_quantity,
-            "ask_quantity": no_ask_quantity,
+            "bid_quantity": quantities["no_bid_quantity"],
+            "ask_quantity": quantities["no_ask_quantity"],
         },
     }
 
