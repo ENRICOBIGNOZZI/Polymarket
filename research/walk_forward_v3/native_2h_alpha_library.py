@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 from collections import Counter, defaultdict
 import json
 import math
 from pathlib import Path
 import statistics
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, finite
 from research.walk_forward_v3.direct_action import (
@@ -324,6 +329,88 @@ def evaluate_alpha(rows,rule):
     return {"cells":cells,"events":events}
 
 
+
+def cumulative(events):
+    total=0.0;xs=[];ys=[]
+    seq=sorted(events,key=lambda x:(x["decision_ns"],x["decision_id"]))
+    if not seq:return xs,ys
+    origin=int(seq[0]["decision_ns"])
+    for row in seq:
+        total+=float(row["cash_pnl"])
+        xs.append((int(row["decision_ns"])-origin)/60_000_000_000)
+        ys.append(total)
+    return xs,ys
+
+
+def plot_group(path,event_map,keys,title,legend=True):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    plt.figure(figsize=(10,5))
+    drawn=False
+    for key in keys:
+        x,y=cumulative(event_map.get(key,[]))
+        if not x:continue
+        plt.plot(x,y,linewidth=1.0,label=key)
+        drawn=True
+    if drawn:
+        plt.axhline(0,linewidth=.7)
+        if legend:plt.legend(fontsize=6,ncol=2)
+        plt.xlabel("minutes since first fill")
+        plt.ylabel("cumulative PnL")
+    else:
+        plt.text(.5,.5,"No observed fills",ha="center",va="center",transform=plt.gca().transAxes)
+        plt.xticks([]);plt.yticks([])
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(path,dpi=105,bbox_inches="tight")
+    plt.close()
+
+
+def write_equity_outputs(output,results):
+    gallery=output/"native_alpha_equity_gallery"
+    gallery.mkdir(parents=True,exist_ok=True)
+    files=[]
+    with gzip.open(output/"22_native_alpha_equity_paths.csv.gz","wt",newline="",encoding="utf-8") as handle:
+        fields=["alpha","cell","decision_ns","cash_pnl","cumulative_pnl","asset","contract_horizon","side"]
+        writer=csv.DictWriter(handle,fieldnames=fields);writer.writeheader()
+        for name,res in sorted(results.items()):
+            safe="".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
+            event_map=res["events"]
+            all_name=gallery/safe/"00_all_60_cells.png"
+            plot_group(
+                all_name,event_map,
+                [f"{l}::{h}" for l in LATENCIES for h in EXITS],
+                f"{name}: all 60 entry × exit equity lines",legend=False)
+            files.append(str(all_name.relative_to(output)))
+            for latency in LATENCIES:
+                path=gallery/safe/f"latency_{latency}ms_all_exits.png"
+                plot_group(
+                    path,event_map,[f"{latency}::{h}" for h in EXITS],
+                    f"{name}: entry {latency}ms, all exits",legend=True)
+                files.append(str(path.relative_to(output)))
+            for cell,events in sorted(event_map.items()):
+                total=0.0
+                for row in sorted(events,key=lambda x:(x["decision_ns"],x["decision_id"])):
+                    total+=float(row["cash_pnl"])
+                    writer.writerow({
+                        "alpha":name,"cell":cell,"decision_ns":row["decision_ns"],
+                        "cash_pnl":row["cash_pnl"],"cumulative_pnl":total,
+                        "asset":row["asset"],"contract_horizon":row["contract_horizon"],
+                        "side":row["side"],
+                    })
+    manifest={
+        "schema":"polymarket_v7_native_2h_alpha_equity_gallery_v1",
+        "alpha_count":len(results),
+        "cells_per_alpha":len(LATENCIES)*len(EXITS),
+        "figures_per_alpha":1+len(LATENCIES),
+        "figure_count":len(files),
+        "figures":files,
+        "raw_equity_paths":"22_native_alpha_equity_paths.csv.gz",
+        "grid_csv":"21_native_alpha_grid.csv",
+    }
+    atomic_json(gallery/"gallery_manifest.json",manifest)
+    return manifest
+
+
 def run(root,output,minimum_wall_ns):
     output.mkdir(parents=True,exist_ok=True)
     data=build_dataset(root,minimum_wall_ns=minimum_wall_ns,include_settlement_labels=False,use_compact_window_index=True)
@@ -337,11 +424,13 @@ def run(root,output,minimum_wall_ns):
     for name,rule in alphas.items():
         results[name]=evaluate_alpha(window_rows,rule)
 
+    gallery=write_equity_outputs(output,results)
     payload={
         "schema":SCHEMA,**SAFETY,"research_only":True,"automatic_promotion":False,
         "window":window,"thresholds_fit_on_first_60pct":th,
         "latencies_ms":list(LATENCIES),"exit_horizons_ms":list(EXITS),
-        "alphas":results,
+        "alphas":{name:{"cells":value["cells"]} for name,value in results.items()},
+        "equity_gallery":gallery,
     }
     atomic_json(output/"20_native_alpha_library.json",payload)
 
