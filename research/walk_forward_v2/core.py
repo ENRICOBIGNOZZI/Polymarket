@@ -246,36 +246,44 @@ def native_decision(row):
         return None, "invalid_decision_fields"
 
 
-def settlement_index(root):
+def settlement_index(roots):
     labels = {}
-    for path in sorted(Path(root).rglob("*.json")):
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+    if isinstance(roots, (str, Path)):
+        roots = [Path(roots)]
+    for root in roots:
+        root = Path(root)
+        if root.is_symlink() or not root.is_dir():
             continue
-        if value.get("schema") != "v7_public_settlement_evidence_v1" or value.get("resolution_status") != "resolved":
-            continue
-        market = str(value.get("market_id") or "")
-        information = value.get("information_ns")
-        outcomes = value.get("token_outcomes")
-        if not market or not isinstance(information, int) or not isinstance(outcomes, dict):
-            continue
-        provenance = (
-            "ARCHIVED_CAUSAL_RECEIVE_TIME"
-            if value.get("actual_receive_time_archived") is True else
-            "RETROSPECTIVE_REPORTED_RESOLUTION_TIME"
-        )
-        prior = labels.get(market)
-        if prior is None or information < prior["information_ns"]:
-            labels[market] = {
-                "information_ns": information, "outcomes": outcomes, "provenance": provenance,
-                "reported_resolution_ns": value.get("reported_resolution_ns"),
-            }
+        for path in sorted(root.rglob("*.json")):
+            if path.is_symlink():
+                continue
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if value.get("schema") != "v7_public_settlement_evidence_v1" or value.get("resolution_status") != "resolved":
+                continue
+            market = str(value.get("market_id") or "")
+            information = value.get("information_ns")
+            outcomes = value.get("token_outcomes")
+            if not market or not isinstance(information, int) or not isinstance(outcomes, dict):
+                continue
+            provenance = (
+                "ARCHIVED_CAUSAL_RECEIVE_TIME"
+                if value.get("actual_receive_time_archived") is True else
+                "RETROSPECTIVE_REPORTED_RESOLUTION_TIME"
+            )
+            prior = labels.get(market)
+            if prior is None or information < prior["information_ns"]:
+                labels[market] = {
+                    "information_ns": information, "outcomes": outcomes, "provenance": provenance,
+                    "reported_resolution_ns": value.get("reported_resolution_ns"),
+                }
     return labels
 
 
-def attach_labels(decisions, settlement_root):
-    labels = settlement_index(Path(settlement_root))
+def attach_labels(decisions, settlement_roots):
+    labels = settlement_index(settlement_roots)
     for record in decisions:
         label = labels.get(record["market_id"])
         if label is None or record["token_id"] not in label["outcomes"]:
@@ -344,9 +352,20 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
             if supplied_root.name == "hft_permanent"
             else supplied_root / "public_settlements"
         )
-    labels_root = Path(settlement_root) if settlement_root is not None else default_settlement_root
+    if settlement_root is not None:
+        label_roots = [Path(settlement_root)]
+    else:
+        label_roots = [default_settlement_root]
+        if run_layout.is_dir():
+            archives = supplied_root.parent / "paper_v7_london_archives"
+            if archives.is_dir() and not archives.is_symlink():
+                label_roots.extend(
+                    path / "research" / "public_settlements"
+                    for path in sorted(archives.glob("cutover-*"))
+                    if path.is_dir() and not path.is_symlink()
+                )
     result = {"schema": SCHEMA + "_data_v1", **SAFETY, "root": str(supplied_root),
-              "hft_root": str(hft_root), "settlement_root": str(labels_root),
+              "hft_root": str(hft_root), "settlement_roots": [str(path) for path in label_roots],
               "minimum_wall_ns": minimum_wall_ns, "sources": [], "decisions": [],
               "books": [], "exclusions": Counter(), "input_state": "READY"}
     compact = list((hft_root / "compact").glob("*.jsonl*")) + list((hft_root / "compact_closed").glob("*.jsonl*"))
@@ -393,7 +412,7 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
                     result["books"].append(book)
     result["decisions"].sort(key=lambda r: (r["decision_ns"], r["decision_id"]))
     result["books"].sort(key=lambda r: (r["time_ns"], r["market_id"], r["token_id"], r["sequence"]))
-    attach_labels(result["decisions"], labels_root)
+    attach_labels(result["decisions"], label_roots)
     book_targets(result["decisions"], result["books"])
     result["exclusions"] = dict(result["exclusions"])
     if not hft_root.is_dir():
@@ -425,14 +444,21 @@ def folds(records, *, desired_folds=3, embargo_ns=2_000_000_000):
         train_markets = {m for group in cutpoints[:index] for m in group}
         test_markets = set(cutpoints[index])
         cutoff = min(starts[m] for m in test_markets)
-        train = [
+        historical = [
             row for row in records
-            if row["market_id"] in train_markets and row["label"] is not None
-            and row["label_information_ns"] < cutoff and row["information_end_ns"] + embargo_ns < cutoff
+            if row["market_id"] in train_markets
+            and row["information_end_ns"] + embargo_ns < cutoff
         ]
+        train_settlement = [
+            row for row in historical
+            if row["label"] is not None and row["label_information_ns"] < cutoff
+        ]
+        train_repricing = historical
         test = [row for row in records if row["market_id"] in test_markets]
-        if train and test:
-            output.append({"fold": index, "cutoff_ns": cutoff, "train": train, "test": test,
+        if train_repricing and test:
+            output.append({"fold": index, "cutoff_ns": cutoff,
+                           "train_settlement": train_settlement,
+                           "train_repricing": train_repricing, "test": test,
                            "train_markets": sorted(train_markets), "test_markets": sorted(test_markets)})
     return output, {"state": "READY" if output else "INSUFFICIENT_PURGED_FOLDS",
                     "markets": len(markets), "embargo_ns": embargo_ns,
@@ -548,8 +574,8 @@ def walk_forward(records, *, desired_folds=3):
     all_folds, receipt = folds(records, desired_folds=desired_folds)
     evaluations = []
     for fold in all_folds:
-        settlement, settlement_meta = settlement_predictors(fold["train"], fold["test"])
-        repricing, repricing_meta = repricing_predictors(fold["train"], fold["test"])
+        settlement, settlement_meta = settlement_predictors(fold["train_settlement"], fold["test"])
+        repricing, repricing_meta = repricing_predictors(fold["train_repricing"], fold["test"])
         for index, row in enumerate(fold["test"]):
             evaluations.append({
                 "fold": fold["fold"], "cutoff_ns": fold["cutoff_ns"], "decision_id": row["decision_id"],
@@ -558,13 +584,17 @@ def walk_forward(records, *, desired_folds=3):
                 "settlement_predictions": {key: values[index] for key, values in settlement.items()},
                 "repricing_predictions": {key: values[index] for key, values in repricing.items()},
             })
-        train_ids = [row["decision_id"] for row in fold["train"]]
+        settlement_ids = [row["decision_id"] for row in fold["train_settlement"]]
+        repricing_ids = [row["decision_id"] for row in fold["train_repricing"]]
         test_ids = [row["decision_id"] for row in fold["test"]]
-        fold["train_rows"] = len(train_ids)
+        fold["train_settlement_rows"] = len(settlement_ids)
+        fold["train_repricing_rows"] = len(repricing_ids)
         fold["test_rows"] = len(test_ids)
-        fold["train_decision_sha256"] = digest(train_ids)
+        fold["train_settlement_sha256"] = digest(settlement_ids)
+        fold["train_repricing_sha256"] = digest(repricing_ids)
         fold["test_decision_sha256"] = digest(test_ids)
-        fold.pop("train")
+        fold.pop("train_settlement")
+        fold.pop("train_repricing")
         fold.pop("test")
         fold["settlement"] = settlement_meta
         fold["repricing"] = repricing_meta
