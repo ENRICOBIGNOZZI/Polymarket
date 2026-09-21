@@ -1,0 +1,109 @@
+name: V7 independent collection plane
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-collection-plane-request.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-independent-collection-plane
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Require explicit zero-authority collection request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-collection-plane-request.json
+          python3 - "$request" "$GITHUB_SHA" <<'PY'
+          import json,re,sys
+          value=json.load(open(sys.argv[1],encoding='utf-8'))
+          required={
+            'schema','version','request_id','instance_id','operation',
+            'collection_root','paper_only','authenticated_execution',
+            'real_order_submission','real_capital_at_risk',
+            'execution_authority','model_independent',
+          }
+          assert set(value)==required
+          assert value['schema']=='polymarket_v7_collection_plane_request_v1'
+          assert value['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',value['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',value['instance_id'])
+          assert value['operation']=='INSTALL_OR_REFRESH_COLLECTION_ONLY'
+          assert value['collection_root']=='/mnt/polymarket-data/polymarket_v7_collection'
+          assert value['paper_only'] is True
+          assert value['authenticated_execution'] is False
+          assert value['real_order_submission'] is False
+          assert value['real_capital_at_risk'] is False
+          assert value['execution_authority']=='ZERO_AUTHORITY_DATA_COLLECTION'
+          assert value['model_independent'] is True
+          PY
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+            test "$changed" = "$request"
+          fi
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-independent-collection
+          aws-region: eu-west-2
+
+      - name: Install or refresh independent collection plane
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance="$(python3 -c 'import json,os; print(json.load(open(os.environ["REQUEST"]))["instance_id"])')"
+          python3 ops/v7_collection_plane_ssm.py             --expected-sha "$GITHUB_SHA"             --instance-id "$instance"             --region eu-west-2             --output collection-plane-receipt.json
+
+      - name: Validate independent data growth and model isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          value=json.load(open('collection-plane-receipt.json',encoding='utf-8'))
+          assert value['schema']=='polymarket_v7_collection_plane_install_receipt_v1'
+          assert value['model_independent'] is True
+          assert value['paper_only'] is True
+          assert value['authenticated_execution'] is False
+          assert value['real_order_submission'] is False
+          assert value['real_capital_at_risk'] is False
+          assert value['execution_authority']=='ZERO_AUTHORITY_DATA_COLLECTION'
+          assert value['paper_service_pid_unchanged'] is True
+          assert int(value['growth_bytes_10s'])>0
+          print('collection_root='+value['collection_root'])
+          print('growth_bytes_10s='+str(value['growth_bytes_10s']))
+          print('paper_service_pid_unchanged=true')
+          PY
+
+      - name: Upload collection-plane evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-independent-collection-${{ github.run_id }}
+          path: collection-plane-receipt.json
+          retention-days: 30
