@@ -37,6 +37,7 @@ def test_collection_ssm_transport_cannot_be_confused_with_model_deploy():
     assert 'systemctl stop "$PAPER_UNIT"' not in source
     assert 'systemctl restart "$PAPER_UNIT"' not in source
     assert 'systemctl start "$PAPER_UNIT"' not in source
+    assert 'systemctl reset-failed "$COLLECTION_UNIT"' in source
 
 
 def test_collection_installer_requires_observed_tape_growth():
