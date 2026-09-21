@@ -1966,6 +1966,48 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
             cells[str(latency)] = {"state": "READY", **metrics}
         result["asset_horizon_latency"][hkey] = cells
 
+    # Exact current native-policy geometry: 105-120s TTE, 0.80 max entry,
+    # full visible 5-share depth. Economic threshold/reserve/model are unchanged.
+    result["live_parity_horizon_latency"] = {}
+    result["live_parity_asset_horizon_latency"] = {}
+    for horizon in (500, 1000, 2000):
+        hkey = str(horizon)
+        pooled_selector = lambda event, h=hkey: (
+            event.get("markout_predictions", {}).get(h), None)
+        asset_selector = lambda event, h=hkey: (
+            event.get("asset_markout_predictions", {}).get(h), None)
+        pooled_cells, asset_cells = {}, {}
+        for latency in latency_ms:
+            if latency >= horizon:
+                state = {
+                    "state": "LATENCY_NOT_BEFORE_MARKOUT_HORIZON",
+                    "horizon_ms": horizon, "latency_ms": latency,
+                }
+                pooled_cells[str(latency)] = dict(state)
+                asset_cells[str(latency)] = dict(state)
+                continue
+            common = dict(
+                latency_ms=latency,
+                valuation_mode="EXECUTABLE_MARKOUT",
+                markout_horizon_ms=horizon,
+                assume_sorted=True,
+                entry_cap=.80,
+                shares=5.0,
+                minimum_tte_ns=105_000_000_000,
+                maximum_tte_ns=120_000_000_000,
+                require_full_visible_depth=True,
+            )
+            pooled_cells[str(latency)] = {
+                "state": "READY",
+                **replay_policy_summary(ordered, pooled_selector, **common),
+            }
+            asset_cells[str(latency)] = {
+                "state": "READY",
+                **replay_policy_summary(ordered, asset_selector, **common),
+            }
+        result["live_parity_horizon_latency"][hkey] = pooled_cells
+        result["live_parity_asset_horizon_latency"][hkey] = asset_cells
+
     # Backward-compatible latency chart uses a declared reference horizon only.
     result["latency"] = result["horizon_latency"]["500"]
 
