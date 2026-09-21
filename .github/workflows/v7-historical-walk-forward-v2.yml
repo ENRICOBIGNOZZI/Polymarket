@@ -77,6 +77,6 @@ jobs:
           git commit -m "Publish London historical walk-forward V2 results"
           if ! git push origin HEAD:main; then
             branch="research/historical-walk-forward-v2-results-${GITHUB_RUN_ID}"
-            git push origin "HEAD:${branch}"
+            git push origin "HEAD:refs/heads/${branch}"
             gh pr create --base main --head "$branch" --title "research: publish London walk-forward V2 results" --body "Automated PAPER-only London historical walk-forward V2 results. Generated from exact main SHA ${GITHUB_SHA}; no runtime or execution authority changes."
           fi
