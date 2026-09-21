@@ -1382,3 +1382,104 @@ def test_latency_age_surface_is_diagnostic_and_preserves_gate():
     ]
     assert all(entry["state"] == "READY" for entry in surface["entries"])
     assert model.maximum_effective_action_age_ms == 100.0
+
+
+
+def test_partial_pooling_features_share_global_base_with_regime_deviations():
+    r = row("m9301", signal=2.0, depth=20.0)
+    r["asset"] = "BTC"
+    r["horizon"] = "M5"
+    r["signal_age_ns"] = 20_000_000
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(25, 50, 100, 250),
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+    action = model._action_record(
+        r, size=5.0, horizon_ms=500, latency_ms=50)
+    features = action["features"]
+    assert features["asset::BTC"] == 1.0
+    assert features["contract::M5"] == 1.0
+    assert features["asset_contract::BTC::M5"] == 1.0
+    assert math.isclose(
+        features["asset_contract_signal::BTC::M5"], 2.0, abs_tol=1e-12)
+    assert math.isclose(
+        features["asset_contract_size::BTC::M5"], 5.0, abs_tol=1e-12)
+    assert features["asset_contract_age::BTC::M5::50_100"] == 1.0
+
+
+def test_regime_support_gate_fails_closed_without_disabling_partial_pooling():
+    rows = []
+    for index in range(50):
+        item = row(
+            "m" + str(index + 9400),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        item["asset"] = "BTC"
+        item["horizon"] = "M5"
+        item["signal_age_ns"] = 10_000_000
+        rows.append(item)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_regime_action_targets=10,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+
+    supported = row("m9993", signal=2.0, exit_bid=.56, depth=20.0)
+    supported["asset"] = "BTC"
+    supported["horizon"] = "M5"
+    supported["signal_age_ns"] = 10_000_000
+    scored, state = model.score_actions(supported, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    assert scored[0]["regime_action_target_support"] >= 10
+
+    unsupported = row("m9994", signal=2.0, exit_bid=.56, depth=20.0)
+    unsupported["asset"] = "ETH"
+    unsupported["horizon"] = "M15"
+    unsupported["signal_age_ns"] = 10_000_000
+    scored, state = model.score_actions(unsupported, latency_ms=50)
+    assert scored == []
+    assert state == "INSUFFICIENT_REGIME_SUPPORT"
+    selected = model.select_action(unsupported, latency_ms=50)
+    assert selected["action"] == "NO_TRADE"
+    assert selected["reason"] == "INSUFFICIENT_REGIME_SUPPORT"
+
+
+def test_partial_pooling_receipt_exposes_training_support_without_outcome_tuning():
+    rows = []
+    for index in range(60):
+        item = row(
+            "m" + str(index + 9500),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        item["asset"] = "BTC" if index < 40 else "ETH"
+        item["horizon"] = "M5" if index % 3 else "M15"
+        item["signal_age_ns"] = (20 if index % 2 == 0 else 80) * 1_000_000
+        rows.append(item)
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_regime_action_targets=4,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["partial_pooling"] == (
+        "GLOBAL_BASE_PLUS_RIDGE_SHRUNK_ASSET_CONTRACT_AGE_DEVIATIONS")
+    assert receipt["minimum_regime_action_targets"] == 4
+    assert receipt["regime_action_target_counts"]
+    assert all(
+        isinstance(value, int) and value >= 0
+        for value in receipt["regime_action_target_counts"].values()
+    )
