@@ -199,6 +199,10 @@ class Tailer:
         self.scored = self.timely = self.late = self.invalid = 0
         self.started_ns = time.time_ns()
         self.active_run_id = ""
+        self._cached_files: list[Path] = []
+        self._next_file_refresh_ns = 0
+        self._active_until_ns: dict[str, int] = {}
+        self._known_sizes: dict[str, int] = {}
         self.output = args.output.open("a", encoding="utf-8", buffering=1)
         self._restore_seen()
         self._bootstrapped = False
@@ -229,23 +233,67 @@ class Tailer:
         return value
 
     def files(self) -> list[Path]:
-        status = self.manager_status()
-        run_id = str(status.get("run_id") or "")
-        if not run_id:
-            return []
-        self.active_run_id = run_id
-        root = self.args.run_root / "research/native_observations" / run_id
-        return sorted(root.glob("*.jsonl")) if root.is_dir() else []
+        """Return hot files cheaply; refresh the full directory at a bounded cadence."""
+        now_ns = time.monotonic_ns()
+        if now_ns >= self._next_file_refresh_ns:
+            status = self.manager_status()
+            run_id = str(status.get("run_id") or "")
+            if not run_id:
+                self._cached_files = []
+                self.active_run_id = ""
+                self._next_file_refresh_ns = now_ns + 20_000_000
+                return []
+            if run_id != self.active_run_id:
+                self.active_run_id = run_id
+                self._cached_files = []
+                self._active_until_ns.clear()
+                self._known_sizes.clear()
+            root = self.args.run_root / "research/native_observations" / run_id
+            self._cached_files = sorted(root.glob("*.jsonl")) if root.is_dir() else []
+            self._next_file_refresh_ns = now_ns + 20_000_000
+
+            # Promote only files that actually grew into the fast active set.
+            for path in self._cached_files:
+                key = str(path)
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                previous = self._known_sizes.get(key)
+                self._known_sizes[key] = size
+                offset = self.offsets.get(key)
+                if offset is None:
+                    # A genuinely new file after bootstrap is forward evidence.
+                    self._active_until_ns[key] = now_ns + 2_000_000_000
+                elif size > offset or (previous is not None and size > previous):
+                    self._active_until_ns[key] = now_ns + 2_000_000_000
+
+        hot = []
+        for path in self._cached_files:
+            key = str(path)
+            if self._active_until_ns.get(key, 0) >= now_ns:
+                hot.append(path)
+        return hot
 
     def bootstrap_existing_files(self) -> None:
         """Forward-only start: existing native bytes predate this shadow launch."""
         if self._bootstrapped:
             return
-        for path in self.files():
-            try:
-                self.offsets[str(path)] = path.stat().st_size
-            except OSError:
-                continue
+        status = self.manager_status()
+        run_id = str(status.get("run_id") or "")
+        if run_id:
+            self.active_run_id = run_id
+            root = self.args.run_root / "research/native_observations" / run_id
+            self._cached_files = sorted(root.glob("*.jsonl")) if root.is_dir() else []
+            for path in self._cached_files:
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                key = str(path)
+                self.offsets[key] = size
+                self._known_sizes[key] = size
+        self._next_file_refresh_ns = 0
         self._bootstrapped = True
 
     def process_file(self, path: Path) -> None:
@@ -257,6 +305,10 @@ class Tailer:
             return
         if size < offset:
             offset = 0
+        if size <= offset:
+            return
+        self._active_until_ns[key] = time.monotonic_ns() + 2_000_000_000
+        self._known_sizes[key] = size
         with path.open("rb") as handle:
             handle.seek(offset)
             while True:
