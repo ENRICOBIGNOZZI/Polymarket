@@ -70,12 +70,71 @@ def _max_drawdown(exit_events):
     return float(maximum), trough_event
 
 
-def scenario_risk_metrics(outcomes, *, block_ms=None, alpha_levels=(0.95, 0.99)):
-    """Measure OOS tail risk with empirical overlapping-risk scenarios.
+def _scenario_path(rows, *, block_ns, alpha_levels, pnl_getter):
+    exit_events = []
+    block_pnl = defaultdict(float)
+    by_asset_pnl = defaultdict(float)
+    by_side_pnl = defaultdict(float)
+    by_asset_notional = defaultdict(float)
+    by_side_notional = defaultdict(float)
 
-    A scenario block defaults to the largest modeled holding horizon among
-    selected trades, so positions that can overlap economically are clustered
-    instead of treated as independent rows.
+    for row in rows:
+        horizon_ms = int(row.get("exit_horizon_ms") or 0)
+        decision_ns = int(row.get("decision_ns") or 0)
+        pnl = pnl_getter(row)
+        if decision_ns <= 0 or horizon_ms <= 0 or pnl is None:
+            continue
+        pnl = float(pnl)
+        if not math.isfinite(pnl):
+            continue
+        exit_ns = decision_ns + horizon_ms * 1_000_000
+        block = exit_ns // block_ns
+        exit_events.append({
+            "exit_ns": exit_ns,
+            "market_id": str(row.get("market_id") or ""),
+            "pnl": pnl,
+        })
+        block_pnl[block] += pnl
+        asset = str(row.get("asset") or "UNKNOWN")
+        side = str(row.get("side") or "SELECTED")
+        notional = float(row.get("notional") or 0.0)
+        by_asset_pnl[asset] += pnl
+        by_side_pnl[side] += pnl
+        by_asset_notional[asset] += notional
+        by_side_notional[side] += notional
+
+    scenarios = [float(value) for _, value in sorted(block_pnl.items())]
+    losses = [-value for value in scenarios]
+    drawdown, trough = _max_drawdown(exit_events)
+    return {
+        "scenario_blocks": len(scenarios),
+        "positive_scenario_blocks": sum(value > 0 for value in scenarios),
+        "negative_scenario_blocks": sum(value < 0 for value in scenarios),
+        "total_pnl": sum(event["pnl"] for event in exit_events),
+        "mean_scenario_pnl": (
+            float(sum(scenarios) / len(scenarios)) if scenarios else None
+        ),
+        "worst_scenario_pnl": min(scenarios) if scenarios else None,
+        "best_scenario_pnl": max(scenarios) if scenarios else None,
+        "max_drawdown": drawdown if exit_events else None,
+        "max_drawdown_trough": trough,
+        "tail_loss": {
+            str(alpha): empirical_var_cvar_from_losses(losses, alpha)
+            for alpha in alpha_levels
+        },
+        "by_asset_pnl": dict(sorted(by_asset_pnl.items())),
+        "by_side_pnl": dict(sorted(by_side_pnl.items())),
+        "by_asset_selected_notional": dict(sorted(by_asset_notional.items())),
+        "by_side_selected_notional": dict(sorted(by_side_notional.items())),
+    }
+
+
+def scenario_risk_metrics(outcomes, *, block_ms=None, alpha_levels=(0.95, 0.99)):
+    """Measure empirical risk plus a causal worst-case censoring bound.
+
+    Observed metrics never impute missing PnL. Separately, censored selected
+    trades can contribute to a pessimistic lower-bound path only when the
+    decision policy recorded a causal maximum-loss bound.
     """
     trades = [row for row in outcomes if row.get("action") == "TRADE"]
     censored = [row for row in trades if row.get("realized_pnl") is None]
@@ -93,48 +152,66 @@ def scenario_risk_metrics(outcomes, *, block_ms=None, alpha_levels=(0.95, 0.99))
         raise ValueError("positive risk scenario block required")
     block_ns = block_ms * 1_000_000
 
-    exit_events = []
-    block_pnl = defaultdict(float)
-    block_trade_count = defaultdict(int)
-    by_asset_pnl = defaultdict(float)
-    by_side_pnl = defaultdict(float)
-    by_asset_notional = defaultdict(float)
-    by_side_notional = defaultdict(float)
+    observed_path = _scenario_path(
+        observed,
+        block_ns=block_ns,
+        alpha_levels=alpha_levels,
+        pnl_getter=lambda row: row.get("realized_pnl"),
+    )
 
-    for row in observed:
-        horizon_ms = int(row.get("exit_horizon_ms") or 0)
-        decision_ns = int(row.get("decision_ns") or 0)
-        if decision_ns <= 0 or horizon_ms <= 0:
-            continue
-        pnl = float(row["realized_pnl"])
-        exit_ns = decision_ns + horizon_ms * 1_000_000
-        block = exit_ns // block_ns
-        exit_events.append({
-            "exit_ns": exit_ns,
-            "market_id": str(row.get("market_id") or ""),
-            "pnl": pnl,
-        })
-        block_pnl[block] += pnl
-        block_trade_count[block] += 1
-        asset = str(row.get("asset") or "UNKNOWN")
-        side = str(row.get("side") or "SELECTED")
-        notional = float(row.get("notional") or 0.0)
-        by_asset_pnl[asset] += pnl
-        by_side_pnl[side] += pnl
-        by_asset_notional[asset] += notional
-        by_side_notional[side] += notional
-
-    scenarios = [float(value) for _, value in sorted(block_pnl.items())]
-    losses = [-value for value in scenarios]
-    drawdown, trough = _max_drawdown(exit_events)
-    total_pnl = sum(float(row["realized_pnl"]) for row in observed)
-    positive_blocks = sum(value > 0 for value in scenarios)
-    negative_blocks = sum(value < 0 for value in scenarios)
-
-    tails = {
-        str(alpha): empirical_var_cvar_from_losses(losses, alpha)
-        for alpha in alpha_levels
-    }
+    robust_missing = [
+        row for row in censored
+        if not isinstance(row.get("censored_worst_case_pnl"), (int, float))
+        or isinstance(row.get("censored_worst_case_pnl"), bool)
+        or not math.isfinite(float(row.get("censored_worst_case_pnl")))
+    ]
+    if robust_missing:
+        robust = {
+            "state": "UNAVAILABLE_MISSING_CAUSAL_LOSS_BOUND",
+            "missing_bound_trades": len(robust_missing),
+            "bounded_censored_trades": len(censored) - len(robust_missing),
+            "assumption": (
+                "CENSORED_TRADES_REQUIRE_CAUSAL_ENTRY_COST_PLUS_FEE_BOUND"
+            ),
+            "total_net_pnl_lower_bound": None,
+            "tail_loss": {
+                str(alpha): {"var": None, "cvar": None, "tail_count": 0}
+                for alpha in alpha_levels
+            },
+            "max_drawdown": None,
+        }
+    else:
+        robust_path = _scenario_path(
+            trades,
+            block_ns=block_ns,
+            alpha_levels=alpha_levels,
+            pnl_getter=lambda row: (
+                row.get("realized_pnl")
+                if row.get("realized_pnl") is not None
+                else row.get("censored_worst_case_pnl")
+            ),
+        )
+        robust = {
+            "state": "READY",
+            "assumption": (
+                "CENSORED_SELECTED_TRADE_FILLED_AT_DECISION_LIMIT;"
+                "ENTRY_FEE_BOUND_INCLUDED;TERMINAL_VALUE_ZERO"
+            ),
+            "bounded_censored_trades": len(censored),
+            "missing_bound_trades": 0,
+            "total_net_pnl_lower_bound": float(robust_path["total_pnl"]),
+            "scenario_blocks": robust_path["scenario_blocks"],
+            "positive_scenario_blocks": robust_path["positive_scenario_blocks"],
+            "negative_scenario_blocks": robust_path["negative_scenario_blocks"],
+            "mean_scenario_pnl": robust_path["mean_scenario_pnl"],
+            "worst_scenario_pnl": robust_path["worst_scenario_pnl"],
+            "best_scenario_pnl": robust_path["best_scenario_pnl"],
+            "max_drawdown": robust_path["max_drawdown"],
+            "max_drawdown_trough": robust_path["max_drawdown_trough"],
+            "tail_loss": robust_path["tail_loss"],
+            "by_asset_pnl_lower_bound": robust_path["by_asset_pnl"],
+            "by_side_pnl_lower_bound": robust_path["by_side_pnl"],
+        }
 
     state = (
         "NO_TRADES"
@@ -152,18 +229,19 @@ def scenario_risk_metrics(outcomes, *, block_ms=None, alpha_levels=(0.95, 0.99))
         "selected_trades": len(trades),
         "observed_selected_trades": len(observed),
         "censored_selected_trades": len(censored),
-        "scenario_blocks": len(scenarios),
-        "positive_scenario_blocks": positive_blocks,
-        "negative_scenario_blocks": negative_blocks,
-        "total_observed_net_pnl": float(total_pnl) if observed else None,
-        "mean_scenario_pnl": (
-            float(sum(scenarios) / len(scenarios)) if scenarios else None
+        "scenario_blocks": observed_path["scenario_blocks"],
+        "positive_scenario_blocks": observed_path["positive_scenario_blocks"],
+        "negative_scenario_blocks": observed_path["negative_scenario_blocks"],
+        "total_observed_net_pnl": (
+            float(observed_path["total_pnl"]) if observed else None
         ),
-        "worst_scenario_pnl": min(scenarios) if scenarios else None,
-        "best_scenario_pnl": max(scenarios) if scenarios else None,
-        "max_drawdown": drawdown if exit_events else None,
-        "max_drawdown_trough": trough,
-        "tail_loss": tails,
+        "mean_scenario_pnl": observed_path["mean_scenario_pnl"],
+        "worst_scenario_pnl": observed_path["worst_scenario_pnl"],
+        "best_scenario_pnl": observed_path["best_scenario_pnl"],
+        "max_drawdown": observed_path["max_drawdown"],
+        "max_drawdown_trough": observed_path["max_drawdown_trough"],
+        "tail_loss": observed_path["tail_loss"],
+        "censored_worst_case": robust,
         "max_active_positions": max(
             (int(row.get("replay_max_active_positions") or 0) for row in outcomes),
             default=0,
@@ -172,10 +250,10 @@ def scenario_risk_metrics(outcomes, *, block_ms=None, alpha_levels=(0.95, 0.99))
             (float(row.get("replay_max_gross_notional") or 0.0) for row in outcomes),
             default=0.0,
         ),
-        "by_asset_pnl": dict(sorted(by_asset_pnl.items())),
-        "by_side_pnl": dict(sorted(by_side_pnl.items())),
-        "by_asset_selected_notional": dict(sorted(by_asset_notional.items())),
-        "by_side_selected_notional": dict(sorted(by_side_notional.items())),
+        "by_asset_pnl": observed_path["by_asset_pnl"],
+        "by_side_pnl": observed_path["by_side_pnl"],
+        "by_asset_selected_notional": observed_path["by_asset_selected_notional"],
+        "by_side_selected_notional": observed_path["by_side_selected_notional"],
     }
 
 
@@ -216,6 +294,45 @@ def pareto_frontier(entries):
     for candidate in admissible:
         if any(
             other is not candidate and _dominates(other, candidate)
+            for other in admissible
+        ):
+            continue
+        output.append(str(candidate["policy_id"]))
+    return output
+
+
+
+def _robust_dominates(left, right):
+    lm = (left.get("risk") or {}).get("censored_worst_case") or {}
+    rm = (right.get("risk") or {}).get("censored_worst_case") or {}
+    if lm.get("state") != "READY" or rm.get("state") != "READY":
+        return False
+    lp, rp = lm.get("total_net_pnl_lower_bound"), rm.get("total_net_pnl_lower_bound")
+    ld, rd = lm.get("max_drawdown"), rm.get("max_drawdown")
+    lc = ((lm.get("tail_loss") or {}).get("0.95") or {}).get("cvar")
+    rc = ((rm.get("tail_loss") or {}).get("0.95") or {}).get("cvar")
+    if any(value is None for value in (lp, rp, ld, rd, lc, rc)):
+        return False
+    better_or_equal = lp >= rp and lc <= rc and ld <= rd
+    strictly_better = lp > rp or lc < rc or ld < rd
+    return better_or_equal and strictly_better
+
+
+def robust_pareto_frontier(entries):
+    """Diagnostic Pareto set under causal worst-case censoring bounds.
+
+    This is not an automatic promotion set; observed censoring state remains
+    authoritative for promotion claims.
+    """
+    admissible = [
+        entry for entry in entries
+        if ((entry.get("risk") or {}).get("censored_worst_case") or {}).get(
+            "state") == "READY"
+    ]
+    output = []
+    for candidate in admissible:
+        if any(
+            other is not candidate and _robust_dominates(other, candidate)
             for other in admissible
         ):
             continue
@@ -357,6 +474,10 @@ def evaluate_empirical_risk_frontier(
         "gaussian_risk_assumption": False,
         "policy_count": len(entries),
         "pareto_policy_ids": pareto_frontier(entries),
+        "robust_worst_case_pareto_policy_ids": robust_pareto_frontier(entries),
+        "robust_worst_case_semantics": (
+            "DIAGNOSTIC_ONLY_CENSORED_PROMOTION_STATE_REMAINS_FAIL_CLOSED"
+        ),
         "entries": entries,
     }
 
