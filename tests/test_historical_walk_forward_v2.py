@@ -9,6 +9,8 @@ from research.walk_forward_v2.core import (
     build_dataset,
     folds,
     fit_full_repricing,
+    economic_evaluation,
+    executable_markout_target,
     replay_one,
     replay_policy,
     settlement_predictors,
@@ -310,16 +312,20 @@ def test_full_window_repricing_fit_uses_all_observed_history_without_promotion()
                 "source": "NATIVE_REPRICING_KIND6_ASOF_HORIZON",
                 "observed_time_ns": row["decision_ns"] + horizon * 1_000_000,
                 "mid_change": .001 * (index + 1),
+                "arrival_bid": .51 + .001 * index,
             }
         rows.append(row)
     artifact = fit_full_repricing(rows)
     assert artifact["automatic_promotion"] is False
     for horizon in HORIZONS_MS:
         model = artifact["models"][str(horizon)]
+        markout = artifact["executable_markout_models"][str(horizon)]
         assert model["state"] == "READY"
-        assert model["rows"] == 10
-        assert model["unique_markets"] == 10
+        assert markout["state"] == "READY"
+        assert model["rows"] == markout["rows"] == 10
+        assert model["unique_markets"] == markout["unique_markets"] == 10
         assert model["label_sources"] == {"NATIVE_REPRICING_KIND6_ASOF_HORIZON": 10}
+        assert markout["target"] == "future_executable_bid_minus_decision_ask_minus_taker_fee"
         assert model["training_start_ns"] == rows[0]["decision_ns"]
         assert model["training_end_ns"] == rows[-1]["decision_ns"]
 
@@ -355,3 +361,79 @@ def test_native_kind6_streaming_attaches_without_materializing_label_corpus(tmp_
     assert proof["short_horizon_observed_pairs"] == 1
     assert origin["targets"]["250"]["state"] == "OBSERVED"
     assert origin["arrivals"]["250"]["quantity"] == 6.0
+
+
+
+def test_executable_markout_target_uses_future_bid_current_ask_and_fee():
+    row = record("econ")
+    row["fee_rate"] = 0.0
+    row["targets"] = {
+        "500": {
+            "state": "OBSERVED",
+            "arrival_bid": .53,
+            "observed_time_ns": row["decision_ns"] + 500_000_000,
+        }
+    }
+    assert math.isclose(executable_markout_target(row, "500"), .03, abs_tol=1e-12)
+
+
+def test_executable_markout_replay_marks_matching_horizon():
+    row = record("markout")
+    row["fee_rate"] = 0.0
+    row["arrivals"] = {
+        "100": {"time_ns": row["decision_ns"] + 100_000_000,
+                "bid": .49, "ask": .50, "quantity": 5.0, "epoch": 7}
+    }
+    row["targets"] = {
+        "500": {"state": "OBSERVED", "arrival_bid": .55},
+        "250": {"state": "OBSERVED", "arrival_bid": .45},
+    }
+    outcome = replay_one(
+        row, .03, None, latency_ms=100,
+        valuation_mode="EXECUTABLE_MARKOUT", markout_horizon_ms=500,
+        edge_threshold=.005, execution_reserve=.005)
+    assert outcome["filled"] == 5.0
+    assert outcome["markout"] > 0
+    assert math.isclose(outcome["markout_before_fee"], .25, abs_tol=1e-12)
+
+
+def test_horizon_latency_matrix_never_scores_exit_before_arrival():
+    rows = []
+    base = 1_789_921_800_000_000_001
+    for index in range(12):
+        row = record("hl" + str(index), decision_ns=base + index * 10_000_000_000)
+        row["label"] = None
+        row["label_information_ns"] = None
+        row["fee_rate"] = 0.0
+        row["features"]["x"] = float(index)
+        row["arrivals"] = {}
+        row["targets"] = {}
+        for horizon in HORIZONS_MS:
+            key = str(horizon)
+            row["targets"][key] = {
+                "state": "OBSERVED",
+                "arrival_bid": .55,
+                "mid_change": .03,
+                "observed_time_ns": row["decision_ns"] + horizon * 1_000_000,
+            }
+            if horizon in (25, 50, 100, 250, 500):
+                row["arrivals"][key] = {
+                    "time_ns": row["decision_ns"] + horizon * 1_000_000,
+                    "bid": .49, "ask": .50, "quantity": 5.0, "epoch": 7,
+                }
+        rows.append(row)
+    evaluations = []
+    for row in rows:
+        evaluations.append({
+            "fold": 1, "cutoff_ns": base, "decision_id": row["decision_id"],
+            "market_id": row["market_id"], "asset": row["asset"],
+            "horizon": row["horizon"], "decision_ns": row["decision_ns"],
+            "row": row,
+            "settlement_predictions": {"pm": .495, "logistic_offset": None, "boosted_offset": None},
+            "repricing_predictions": {str(h): .03 for h in HORIZONS_MS},
+            "markout_predictions": {str(h): .05 for h in HORIZONS_MS},
+        })
+    economics = economic_evaluation(evaluations)
+    assert economics["horizon_latency"]["25"]["25"]["state"] == "LATENCY_NOT_BEFORE_MARKOUT_HORIZON"
+    assert economics["horizon_latency"]["25"]["10"]["state"] == "READY"
+    assert economics["horizon_latency"]["500"]["100"]["state"] == "READY"

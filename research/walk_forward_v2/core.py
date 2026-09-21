@@ -872,31 +872,76 @@ def settlement_predictors(train, test):
     }
 
 
+def executable_markout_target(row, horizon_key):
+    """Future executable bid minus causal decision ask and taker fee, per share."""
+    target = row.get("targets", {}).get(str(horizon_key), {})
+    if target.get("state") != "OBSERVED":
+        return None
+    fee = cash_fee(
+        1_000_000, round(row["ask"] * 10000),
+        row["fee_rate"], row["fee_exponent"])
+    return float(target["arrival_bid"]) - float(row["ask"]) - float(fee)
+
+
 def repricing_predictors(train, test):
     names = feature_names(train)
-    out = {str(h): [None] * len(test) for h in HORIZONS_MS}
+    midpoint = {str(h): [None] * len(test) for h in HORIZONS_MS}
+    markout = {str(h): [None] * len(test) for h in HORIZONS_MS}
     details = {}
     for horizon in HORIZONS_MS:
-        eligible = [row for row in train if row.get("targets", {}).get(str(horizon), {}).get("state") == "OBSERVED"]
+        key = str(horizon)
+        eligible = [
+            row for row in train
+            if row.get("targets", {}).get(key, {}).get("state") == "OBSERVED"
+        ]
         if len(eligible) < 8:
-            details[str(horizon)] = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
+            details[key] = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
             continue
-        model = Ridge(names, ridge=8.0).fit(eligible, lambda row: row["targets"][str(horizon)]["mid_change"])
-        out[str(horizon)] = model.predict_many(test)
-        details[str(horizon)] = {"state": "READY", "rows": len(eligible), "feature_names": names,
-                                 "target": "future_observed_pm_midpoint_change"}
-    return out, details
+        midpoint_model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: row["targets"][h]["mid_change"])
+        markout_model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: executable_markout_target(row, h))
+        midpoint[key] = midpoint_model.predict_many(test)
+        markout[key] = markout_model.predict_many(test)
+        details[key] = {
+            "state": "READY", "rows": len(eligible), "feature_names": names,
+            "midpoint_target": "future_observed_pm_midpoint_change",
+            "economic_target": "future_executable_bid_minus_decision_ask_minus_taker_fee",
+        }
+    return midpoint, markout, details
+
+
+def _serialize_ridge(model, eligible, names, key, target_name):
+    model.beta = [float(value) for value in model.beta]
+    return {
+        "state": "READY",
+        "rows": len(eligible),
+        "unique_markets": len({row["market_id"] for row in eligible}),
+        "feature_names": list(names),
+        "ridge": 8.0,
+        "target": target_name,
+        "training_start_ns": min(row["decision_ns"] for row in eligible),
+        "training_end_ns": max(row["decision_ns"] for row in eligible),
+        "label_information_end_ns": max(
+            int(row["targets"][key]["observed_time_ns"]) for row in eligible),
+        "training_decision_sha256": digest([row["decision_id"] for row in eligible]),
+        "center": {name: float(model.center[name]) for name in names},
+        "scale": {name: float(model.scale[name]) for name in names},
+        "beta": model.beta,
+        "label_sources": dict(Counter(
+            row["targets"][key].get("source", "UNKNOWN") for row in eligible)),
+    }
 
 
 def fit_full_repricing(records):
-    """Freeze research-only repricing models on the full available historical window.
+    """Freeze midpoint and executable-markout models on all available history.
 
-    These fits are intentionally NOT used for historical OOS evaluation. They
-    are the post-evaluation artifacts intended for the next forward PAPER
-    experiment after an explicit promotion decision.
+    These post-OOS fits are never used to score the historical folds and are
+    never automatically promoted. The executable-markout family is the next
+    forward-PAPER candidate because its target matches tradable exit economics.
     """
     names = feature_names(records)
-    models = {}
+    midpoint_models, markout_models = {}, {}
     for horizon in HORIZONS_MS:
         key = str(horizon)
         eligible = [
@@ -905,35 +950,27 @@ def fit_full_repricing(records):
             and row.get("features") is not None
         ]
         if len(eligible) < 8:
-            models[key] = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
+            missing = {"state": "INSUFFICIENT_TRAINING_TARGETS", "rows": len(eligible)}
+            midpoint_models[key] = dict(missing)
+            markout_models[key] = dict(missing)
             continue
-        model = Ridge(names, ridge=8.0).fit(
+        midpoint_model = Ridge(names, ridge=8.0).fit(
             eligible, lambda row, h=key: row["targets"][h]["mid_change"])
-        model.beta = [float(value) for value in model.beta]
-        models[key] = {
-            "state": "READY",
-            "rows": len(eligible),
-            "unique_markets": len({row["market_id"] for row in eligible}),
-            "feature_names": list(names),
-            "ridge": 8.0,
-            "target": "selected_token_pm_midpoint_change_asof_horizon",
-            "training_start_ns": min(row["decision_ns"] for row in eligible),
-            "training_end_ns": max(row["decision_ns"] for row in eligible),
-            "label_information_end_ns": max(
-                int(row["targets"][key]["observed_time_ns"]) for row in eligible),
-            "training_decision_sha256": digest([row["decision_id"] for row in eligible]),
-            "center": {name: float(model.center[name]) for name in names},
-            "scale": {name: float(model.scale[name]) for name in names},
-            "beta": model.beta,
-            "label_sources": dict(Counter(
-                row["targets"][key].get("source", "UNKNOWN") for row in eligible)),
-        }
+        markout_model = Ridge(names, ridge=8.0).fit(
+            eligible, lambda row, h=key: executable_markout_target(row, h))
+        midpoint_models[key] = _serialize_ridge(
+            midpoint_model, eligible, names, key,
+            "selected_token_pm_midpoint_change_asof_horizon")
+        markout_models[key] = _serialize_ridge(
+            markout_model, eligible, names, key,
+            "future_executable_bid_minus_decision_ask_minus_taker_fee")
     return {
-        "schema": SCHEMA + "_full_window_repricing_models_v1",
+        "schema": SCHEMA + "_full_window_repricing_models_v2",
         **SAFETY,
         "automatic_promotion": False,
         "evaluation_role": "POST_OOS_FIT_FOR_NEXT_FORWARD_PAPER_ONLY",
-        "models": models,
+        "models": midpoint_models,
+        "executable_markout_models": markout_models,
     }
 
 
@@ -942,7 +979,8 @@ def walk_forward(records, *, desired_folds=3):
     evaluations = []
     for fold in all_folds:
         settlement, settlement_meta = settlement_predictors(fold["train_settlement"], fold["test"])
-        repricing, repricing_meta = repricing_predictors(fold["train_repricing"], fold["test"])
+        repricing, markout, repricing_meta = repricing_predictors(
+            fold["train_repricing"], fold["test"])
         for index, row in enumerate(fold["test"]):
             evaluations.append({
                 "fold": fold["fold"], "cutoff_ns": fold["cutoff_ns"], "decision_id": row["decision_id"],
@@ -950,6 +988,7 @@ def walk_forward(records, *, desired_folds=3):
                 "decision_ns": row["decision_ns"], "row": row,
                 "settlement_predictions": {key: values[index] for key, values in settlement.items()},
                 "repricing_predictions": {key: values[index] for key, values in repricing.items()},
+                "markout_predictions": {key: values[index] for key, values in markout.items()},
             })
         settlement_ids = [row["decision_id"] for row in fold["train_settlement"]]
         repricing_ids = [row["decision_id"] for row in fold["train_repricing"]]
@@ -997,7 +1036,7 @@ def arrival(row, latency_ms):
 
 def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, entry_cap=.75, shares=5.0,
                execution_reserve=.005, ideal="REALISTIC", valuation_mode="SETTLEMENT",
-               market_available=True, capital_available=True):
+               markout_horizon_ms=250, market_available=True, capital_available=True):
     """Same L1 taker economics for every candidate; unavailable is never a nonfill."""
     funnel = {stage: False for stage in FUNNEL_STAGES}
     funnel["native_decision_rows"] = True
@@ -1014,22 +1053,34 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         return outcome
     funnel["forecast_available"] = True
     midpoint = (row["bid"] + row["ask"]) / 2
+    decision_price = midpoint if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else row["ask"]
+    fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, decision_price)
     if valuation_mode == "REPRICING":
         if repricing is None:
             return outcome
         expected = min(.9999, max(.0001, midpoint + repricing))
+        gross = expected - decision_price
+        after_fee = gross - fee
+        predicted_positive = repricing > 0
+    elif valuation_mode == "EXECUTABLE_MARKOUT":
+        # prediction is already future executable bid - causal ask - taker fee.
+        after_fee = float(prediction)
+        gross = after_fee + fee
+        predicted_positive = after_fee > 0
     elif valuation_mode == "SETTLEMENT_WITH_REPRICING_CONFIRMATION":
         if repricing is None:
             return outcome
         expected = prediction
+        gross = expected - decision_price
+        after_fee = gross - fee
+        predicted_positive = repricing > 0
     else:
         expected = prediction
-    decision_price = midpoint if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else row["ask"]
-    fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, decision_price)
-    gross = expected - decision_price
-    after_fee = gross - fee
+        gross = expected - decision_price
+        after_fee = gross - fee
+        predicted_positive = True
     after_reserve = after_fee - execution_reserve
-    funnel["predicted_repricing_positive"] = repricing is None or repricing > 0
+    funnel["predicted_repricing_positive"] = predicted_positive
     funnel["gross_edge_positive"] = gross > 0
     funnel["spread_adjusted_edge_positive"] = gross > 0
     funnel["fee_adjusted_edge_positive"] = after_fee > 0
@@ -1070,9 +1121,10 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
     execution_price = (book["bid"] + book["ask"]) / 2 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else book["ask"]
     cost_fee = 0.0 if ideal == "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND" else fee_per_share(row, execution_price) * filled
     turnover = filled * execution_price
-    target = row.get("targets", {}).get("250", {})
+    target = row.get("targets", {}).get(str(int(markout_horizon_ms)), {})
     if target.get("state") == "OBSERVED":
-        outcome["markout"] = filled * target["arrival_bid"] - turnover - cost_fee
+        outcome["markout_before_fee"] = filled * target["arrival_bid"] - turnover
+        outcome["markout"] = outcome["markout_before_fee"] - cost_fee
         funnel["positive_markout"] = outcome["markout"] > 0
     if row["label"] is not None:
         outcome["pnl"] = filled * row["label"] - turnover - cost_fee
@@ -1087,7 +1139,7 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
 def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
                   edge_threshold=.005, entry_cap=.75, shares=5.0,
                   execution_reserve=.005, ideal="REALISTIC",
-                  capital_budget=1000.0):
+                  markout_horizon_ms=250, capital_budget=1000.0):
     """Sequential one-entry-per-market PAPER replay with bounded capital reservation.
 
     A market is consumed when an order is actually simulated, matching the
@@ -1107,8 +1159,8 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
             row, prediction, repricing, latency_ms=latency_ms,
             edge_threshold=edge_threshold, entry_cap=entry_cap, shares=shares,
             execution_reserve=execution_reserve, ideal=ideal,
-            valuation_mode=valuation_mode, market_available=available,
-            capital_available=capital_available,
+            valuation_mode=valuation_mode, markout_horizon_ms=markout_horizon_ms,
+            market_available=available, capital_available=capital_available,
         )
         outcome["market_id"], outcome["asset"], outcome["horizon"] = (
             row["market_id"], row["asset"], row["horizon"])
@@ -1120,9 +1172,27 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
     return outcomes
 
 
+def _group_markout(outcomes, field):
+    groups = {}
+    for value in sorted({row.get(field) for row in outcomes if row.get(field) is not None}):
+        cell = [row for row in outcomes if row.get(field) == value]
+        fills = [row for row in cell if row.get("filled", 0) > 0]
+        marked = [row for row in fills if row.get("markout") is not None]
+        groups[str(value)] = {
+            "opportunities": len(cell),
+            "fills": len(fills),
+            "marked_fills": len(marked),
+            "positive_markout_fills": sum(row["markout"] > 0 for row in marked),
+            "markout_pnl": sum(row["markout"] for row in marked) if marked else None,
+            "markout_per_fill": sum(row["markout"] for row in marked) / len(marked) if marked else None,
+        }
+    return groups
+
+
 def summarize(outcomes):
     fills = [row for row in outcomes if row["filled"] > 0]
     known = [row for row in fills if row["pnl"] is not None]
+    marked = [row for row in fills if row.get("markout") is not None]
     censored = [row for row in outcomes if row["status"].startswith("UNAVAILABLE")]
     funnel = {stage: sum(bool(row["funnel"][stage]) for row in outcomes) for stage in FUNNEL_STAGES}
     return {
@@ -1131,10 +1201,16 @@ def summarize(outcomes):
         "censored_execution": len(censored), "fill_rate": len(fills) / funnel["simulated_order"] if funnel["simulated_order"] else None,
         "settled_fills": len(known), "net_pnl": sum(row["pnl"] for row in known) if len(known) == len(fills) else None,
         "observed_net_pnl": sum(row["pnl"] for row in known) if known else None,
-        "markout_pnl": sum(row["markout"] for row in fills if row["markout"] is not None) if any(row["markout"] is not None for row in fills) else None,
+        "marked_fills": len(marked),
+        "positive_markout_fills": sum(row["markout"] > 0 for row in marked),
+        "markout_before_fee": sum(row.get("markout_before_fee", 0) for row in marked) if marked else None,
+        "markout_pnl": sum(row["markout"] for row in marked) if marked else None,
+        "markout_per_fill": sum(row["markout"] for row in marked) / len(marked) if marked else None,
         "fees": sum(row.get("fees", 0) for row in fills), "turnover": sum(row.get("turnover", 0) for row in fills),
         "pnl_per_fill": sum(row["pnl"] for row in known) / len(known) if known else None,
         "funnel": funnel, "status_counts": dict(Counter(row["status"] for row in outcomes)),
+        "by_asset": _group_markout(outcomes, "asset"),
+        "by_contract_horizon": _group_markout(outcomes, "horizon"),
     }
 
 
@@ -1151,8 +1227,16 @@ def pm_edge_distribution(evaluations, execution_reserve=.005):
                                     "after_reserve": value - row["ask"] - fee - execution_reserve})
         for horizon, value in evaluation["repricing_predictions"].items():
             if value is not None:
-                by_model["repricing_" + horizon].append({"before_cost": value, "after_fee": value - fee_per_share(row, row["ask"]),
-                                                          "after_reserve": value - fee_per_share(row, row["ask"]) - execution_reserve})
+                fee = fee_per_share(row, row["ask"])
+                by_model["repricing_" + horizon].append({
+                    "before_cost": value, "after_fee": value - fee,
+                    "after_reserve": value - fee - execution_reserve})
+        for horizon, value in evaluation.get("markout_predictions", {}).items():
+            if value is not None:
+                fee = fee_per_share(row, row["ask"])
+                by_model["markout_" + horizon].append({
+                    "before_cost": value + fee, "after_fee": value,
+                    "after_reserve": value - execution_reserve})
     thresholds = (0, .001, .0025, .005, .01, .02)
     result = {}
     for model, values in by_model.items():
@@ -1171,11 +1255,12 @@ def quantile(values):
     return {str(q): ordered[round((len(ordered) - 1) * q)] for q in (.01, .05, .5, .95, .99)}
 
 
-def market_bootstrap(outcomes, *, seed=20260920, draws=256):
+def _bootstrap_field(outcomes, field, *, seed, draws):
     groups = defaultdict(list)
     for row in outcomes:
-        if row["pnl"] is not None:
-            groups[row.get("market_id", "")].append(row["pnl"])
+        value = row.get(field)
+        if value is not None:
+            groups[row.get("market_id", "")].append(float(value))
     keys = sorted(key for key, value in groups.items() if value)
     if len(keys) < 4:
         return {"state": "INSUFFICIENT_MARKET_BLOCKS", "markets": len(keys), "interval": None}
@@ -1183,11 +1268,25 @@ def market_bootstrap(outcomes, *, seed=20260920, draws=256):
     samples = []
     for _ in range(draws):
         chosen = [keys[rng.randrange(len(keys))] for _ in keys]
-        pnl = sum(sum(groups[key]) for key in chosen)
-        fills = sum(len(groups[key]) for key in chosen)
-        samples.append(pnl / fills if fills else 0.0)
-    return {"state": "READY", "markets": len(keys), "draws": draws,
-            "pnl_per_fill_interval": [sorted(samples)[int(.025 * draws)], sorted(samples)[int(.975 * draws)]]}
+        total = sum(sum(groups[key]) for key in chosen)
+        count = sum(len(groups[key]) for key in chosen)
+        samples.append(total / count if count else 0.0)
+    ordered = sorted(samples)
+    return {
+        "state": "READY", "markets": len(keys), "draws": draws,
+        "interval": [ordered[int(.025 * draws)], ordered[int(.975 * draws)]],
+    }
+
+
+def market_bootstrap(outcomes, *, seed=20260920, draws=256):
+    settlement = _bootstrap_field(outcomes, "pnl", seed=seed, draws=draws)
+    markout = _bootstrap_field(outcomes, "markout", seed=seed + 1, draws=draws)
+    return {
+        "settlement": settlement,
+        "markout": markout,
+        "pnl_per_fill_interval": settlement.get("interval"),
+        "markout_per_fill_interval": markout.get("interval"),
+    }
 
 
 def prediction_quality(evaluations):
@@ -1228,40 +1327,102 @@ def prediction_quality(evaluations):
             "actual_mean_move": sum(y for _, y in pairs) / len(pairs),
             "predicted_mean_move": sum(p for p, _ in pairs) / len(pairs),
         }
-    return {"settlement": settlement, "repricing": repricing}
+    markout = {}
+    for horizon in HORIZONS_MS:
+        pairs = []
+        key = str(horizon)
+        for event in evaluations:
+            predicted = event.get("markout_predictions", {}).get(key)
+            target = executable_markout_target(event["row"], key)
+            if predicted is None or target is None:
+                continue
+            pairs.append((float(predicted), float(target)))
+        if not pairs:
+            markout[key] = {"state": "INSUFFICIENT_OOS_TARGETS", "rows": 0}
+            continue
+        errors = [p-y for p, y in pairs]
+        markout[key] = {
+            "state": "READY", "rows": len(pairs),
+            "mae": sum(abs(e) for e in errors) / len(errors),
+            "mse": sum(e*e for e in errors) / len(errors),
+            "directional_accuracy": sum((p > 0) == (y > 0) for p, y in pairs) / len(pairs),
+            "actual_mean_net_markout": sum(y for _, y in pairs) / len(pairs),
+            "predicted_mean_net_markout": sum(p for p, _ in pairs) / len(pairs),
+            "actual_positive_fraction": sum(y > 0 for _, y in pairs) / len(pairs),
+            "predicted_positive_fraction": sum(p > 0 for p, _ in pairs) / len(pairs),
+        }
+    return {"settlement": settlement, "repricing": repricing, "executable_markout": markout}
 
 
 def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
-    """Apply identical replay to every OOS candidate and diagnostic upper bound."""
-    result = {"schema": SCHEMA + "_economics_v1", **SAFETY, "models": {}, "latency": {},
-              "pm_edge_distribution": pm_edge_distribution(evaluations),
-              "prediction_metrics": prediction_quality(evaluations)}
-    variants = {
-        "pm": (lambda event: (event["settlement_predictions"]["pm"], None), "SETTLEMENT"),
-        "logistic_offset": (lambda event: (event["settlement_predictions"]["logistic_offset"], None), "SETTLEMENT"),
-        "boosted_offset": (lambda event: (event["settlement_predictions"]["boosted_offset"], None), "SETTLEMENT"),
-        "repricing_250ms": (lambda event: ((event["row"]["bid"] + event["row"]["ask"]) / 2,
-                                           event["repricing_predictions"].get("250")), "REPRICING"),
-        "combined_settlement_repricing": (lambda event: (event["settlement_predictions"]["logistic_offset"],
-                                                          event["repricing_predictions"].get("250")),
-                                           "SETTLEMENT_WITH_REPRICING_CONFIRMATION"),
+    """OOS economics for settlement, midpoint and direct executable-markout targets."""
+    result = {
+        "schema": SCHEMA + "_economics_v2", **SAFETY,
+        "models": {}, "latency": {}, "horizon_latency": {},
+        "pm_edge_distribution": pm_edge_distribution(evaluations),
+        "prediction_metrics": prediction_quality(evaluations),
+        "latency_reference_horizon_ms": 500,
     }
-    for name, (selector, valuation_mode) in variants.items():
-        outcomes = replay_policy(evaluations, selector, latency_ms=100,
-                                 valuation_mode=valuation_mode)
-        result["models"][name] = {"metrics": summarize(outcomes), "uncertainty": market_bootstrap(outcomes), "outcomes": outcomes}
-    combined_selector = variants["combined_settlement_repricing"][0]
-    for latency in latency_ms:
+    variants = {
+        "pm": (lambda event: (event["settlement_predictions"]["pm"], None), "SETTLEMENT", 250),
+        "logistic_offset": (lambda event: (event["settlement_predictions"]["logistic_offset"], None), "SETTLEMENT", 250),
+        "boosted_offset": (lambda event: (event["settlement_predictions"]["boosted_offset"], None), "SETTLEMENT", 250),
+        "repricing_midpoint_250ms": (
+            lambda event: ((event["row"]["bid"] + event["row"]["ask"]) / 2,
+                           event["repricing_predictions"].get("250")), "REPRICING", 250),
+        "combined_settlement_repricing": (
+            lambda event: (event["settlement_predictions"]["logistic_offset"],
+                           event["repricing_predictions"].get("250")),
+            "SETTLEMENT_WITH_REPRICING_CONFIRMATION", 250),
+    }
+    # Fixed 100ms execution reference for horizons strictly after arrival.
+    for horizon in (250, 500, 1000, 2000):
+        key = str(horizon)
+        variants["markout_" + key + "ms"] = (
+            lambda event, h=key: (event["markout_predictions"].get(h), None),
+            "EXECUTABLE_MARKOUT", horizon)
+
+    for name, (selector, valuation_mode, markout_horizon) in variants.items():
         outcomes = replay_policy(
-            evaluations, combined_selector, latency_ms=latency,
-            valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION")
-        result["latency"][str(latency)] = summarize(outcomes)
+            evaluations, selector, latency_ms=100, valuation_mode=valuation_mode,
+            markout_horizon_ms=markout_horizon)
+        result["models"][name] = {
+            "metrics": summarize(outcomes),
+            "uncertainty": market_bootstrap(outcomes),
+            "outcomes": outcomes,
+        }
+
+    # Full prespecified horizon x latency surface. Never evaluate an exit horizon
+    # at or before assumed order arrival.
+    for horizon in HORIZONS_MS:
+        hkey = str(horizon)
+        selector = lambda event, h=hkey: (event["markout_predictions"].get(h), None)
+        cells = {}
+        for latency in latency_ms:
+            if latency >= horizon:
+                cells[str(latency)] = {
+                    "state": "LATENCY_NOT_BEFORE_MARKOUT_HORIZON",
+                    "horizon_ms": horizon, "latency_ms": latency,
+                }
+                continue
+            outcomes = replay_policy(
+                evaluations, selector, latency_ms=latency,
+                valuation_mode="EXECUTABLE_MARKOUT",
+                markout_horizon_ms=horizon)
+            cells[str(latency)] = {"state": "READY", **summarize(outcomes)}
+        result["horizon_latency"][hkey] = cells
+
+    # Backward-compatible latency chart uses a declared reference horizon only.
+    result["latency"] = result["horizon_latency"]["500"]
+
     upper = {}
+    reference_selector = lambda event: (event["markout_predictions"].get("500"), None)
     for kind in ("ZERO_LATENCY_EXECUTION_UPPER_BOUND", "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND",
                  "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND"):
         outcomes = replay_policy(
-            evaluations, combined_selector, latency_ms=100,
-            valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION", ideal=kind)
+            evaluations, reference_selector, latency_ms=100,
+            valuation_mode="EXECUTABLE_MARKOUT", markout_horizon_ms=500,
+            ideal=kind)
         upper[kind] = summarize(outcomes)
     result["idealized_upper_bounds"] = upper
     return result
