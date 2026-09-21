@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
     paths: [deploy/v7-historical-walk-forward-v2-request.json]
+  workflow_dispatch:
+  schedule:
+    - cron: '15 22 * * *'
+    - cron: '15 23 * * *'
 
 permissions:
   contents: write
@@ -21,14 +25,58 @@ jobs:
     env:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
-      REQUEST: deploy/v7-historical-walk-forward-v2-request.json
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.sha }}
           fetch-depth: 2
 
+      - name: Prepare push/manual/nightly request
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$GITHUB_EVENT_NAME" "$GITHUB_OUTPUT" <<'PY'
+          import json,sys
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          event=sys.argv[1]
+          out=Path(sys.argv[2])
+          now=datetime.now(ZoneInfo("Europe/Zurich"))
+          should_run=True
+          if event=="schedule":
+              should_run=(now.hour==0 and 5 <= now.minute <= 40)
+          if event=="push":
+              request=Path("deploy/v7-historical-walk-forward-v2-request.json")
+          else:
+              request=Path(".nightly-v2-request.json")
+              value={
+                  "schema":"polymarket_v7_historical_walk_forward_v2_ssm_request_v1",
+                  "version":1,
+                  "request_id":"nightly-v2-"+now.strftime("%Y%m%d"),
+                  "instance_id":"i-0fba2bac9fdc5cbeb",
+                  "minimum_wall_ns":1789921800000000000,
+                  "folds":3,
+                  "output_directory":"docs/research/historical-walk-forward-v2-"+now.strftime("%Y-%m-%d"),
+                  "paper_only":True,
+                  "authenticated_execution":False,
+                  "real_order_submission":False,
+                  "real_capital_at_risk":False,
+              }
+              request.write_text(json.dumps(value,indent=2,sort_keys=True)+"\n",encoding="utf-8")
+          with out.open("a",encoding="utf-8") as h:
+              h.write("should_run="+("true" if should_run else "false")+"\n")
+              h.write("request="+str(request)+"\n")
+          print(json.dumps({
+              "event":event,"zurich_now":now.isoformat(),
+              "should_run":should_run,"request":str(request)
+          },sort_keys=True))
+          PY
+
       - name: Configure AWS credentials through OIDC
+        if: steps.prepare.outputs.should_run == 'true'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
@@ -36,9 +84,15 @@ jobs:
           aws-region: eu-west-2
 
       - name: Run V2 against active London PAPER evidence
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          REQUEST: ${{ steps.prepare.outputs.request }}
         run: python3 ops/v7_historical_walk_forward_v2_ssm.py "$REQUEST" "$GITHUB_SHA"
 
       - name: Require real admissible evidence
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          REQUEST: ${{ steps.prepare.outputs.request }}
         run: |
           python3 - "$REQUEST" <<'PY'
           import json,sys
@@ -60,23 +114,48 @@ jobs:
                             'oos_predictions':folds['oos_predictions']},sort_keys=True))
           PY
 
-      - name: Publish research report and PNGs
+      - name: Fail-closed PAPER research champion promotion
+        if: steps.prepare.outputs.should_run == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          REQUEST: ${{ steps.prepare.outputs.request }}
         run: |
           set -euo pipefail
-          output="$(python3 -c 'import json;print(json.load(open("deploy/v7-historical-walk-forward-v2-request.json"))["output_directory"])')"
+          output="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          python3 -m research.walk_forward_v2.promotion \
+            --report-dir "$output" \
+            --registry config/v7_executable_markout_research_champion.json \
+            --receipt "$output/promotion_receipt.json"
+
+      - name: Publish research report, PNGs and PAPER research champion
+        if: steps.prepare.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST: ${{ steps.prepare.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f "$output"
+          if test -f config/v7_executable_markout_research_champion.json; then
+            git add config/v7_executable_markout_research_champion.json
+          fi
           git diff --cached --check
           if git diff --cached --quiet; then
             echo "Research results unchanged."
             exit 0
           fi
-          git commit -m "Publish London historical walk-forward V2 results"
+          git commit -m "Publish nightly London V2 research and champion receipt"
           if ! git push origin HEAD:main; then
-            branch="research/historical-walk-forward-v2-results-${GITHUB_RUN_ID}"
-            git push origin "HEAD:refs/heads/${branch}"
-            gh pr create --base main --head "$branch" --title "research: publish London walk-forward V2 results" --body "Automated PAPER-only London historical walk-forward V2 results. Generated from exact main SHA ${GITHUB_SHA}; no runtime or execution authority changes."
+            echo "main advanced during research; rebasing generated research commit"
+            git fetch origin main
+            if git rebase origin/main && git push origin HEAD:main; then
+              echo "Published after clean rebase."
+            else
+              git rebase --abort || true
+              branch="research/historical-walk-forward-v2-results-${GITHUB_RUN_ID}"
+              git push origin "HEAD:refs/heads/${branch}"
+              echo "Published fallback branch ${branch}; manual merge required."
+              exit 1
+            fi
           fi
