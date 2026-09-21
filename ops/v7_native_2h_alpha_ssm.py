@@ -24,15 +24,10 @@ CHUNK=14000
 SOURCE_PATHS=(
     "research/walk_forward_v3/__init__.py",
     "research/walk_forward_v3/native_2h_alpha_library.py",
-    "research/walk_forward_v3/multi_alpha_2h.py",
-    "research/walk_forward_v3/btc_compact_equity.py",
     "research/walk_forward_v3/direct_action.py",
-    "research/walk_forward_v3/dynamic_exit.py",
     "research/walk_forward_v2/__init__.py",
     "research/walk_forward_v2/core.py",
     "research/economic/causal_replay.py",
-    "scripts/v7_multi_crypto_compact_pm_tape.py",
-    "research/requirements-learning.txt",
 )
 
 def archive(repo):
@@ -137,11 +132,9 @@ print("NATIVE_ALPHA_COMPACT_FILES="+str(len(files)))
 print("NATIVE_ALPHA_COMPACT_BYTES="+str(sum(p.stat().st_size for p in files)))
 PY
 tar -xzf source.tgz -C src
-python3 -m venv venv
-venv/bin/pip install --disable-pip-version-check --quiet -r src/research/requirements-learning.txt
 POLYMARKET_RESEARCH_HORIZONS_MS=5,10,25,50,100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000 \
 POLYMARKET_RESEARCH_EXECUTION_LATENCIES_MS=5,10,25,50,100,250 \
-PYTHONPATH={remote}/src nice -n 18 venv/bin/python -m research.walk_forward_v3.native_2h_alpha_library \
+PYTHONPATH={remote}/src nice -n 18 python3 -m research.walk_forward_v3.native_2h_alpha_library \
   --root "$RUN_ROOT" \
   --output-dir {remote}/output \
   --minimum-wall-ns {a.minimum_wall_ns} \
@@ -159,12 +152,13 @@ assert len(j['alphas'])>=20
 assert j['latencies_ms']==[5,10,25,50,100,250]
 assert j['exit_horizons_ms']==[500,750,1000,1500,2000,3000,4000,5000,7500,10000]
 assert (root/'21_native_alpha_grid.csv').is_file()
-assert (root/'22_native_alpha_equity_paths.csv.gz').is_file()
+assert (root/'22_native_alpha_equity_1m.csv.gz').is_file()
 manifest=json.load(open(root/'native_alpha_equity_gallery/gallery_manifest.json'))
 assert manifest['alpha_count']>=20
 assert manifest['cells_per_alpha']==60
 assert manifest['generation_deferred'] is True
-assert manifest['figure_count']==0
+assert manifest['sample_seconds']==60
+assert manifest['points_per_cell']==121
 print('NATIVE_ALPHA_EQUITY_READY')
 PY
 tar -C {remote}/output -czf {remote}/results.tgz .
