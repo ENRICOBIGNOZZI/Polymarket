@@ -72,7 +72,7 @@ jobs:
               raise RuntimeError("SSM timeout")
 
           marker=run_remote(
-              "set -euo pipefail; "
+              "set -eu; "
               f"test -f {remote}/output/20_native_alpha_library.json; "
               f"test -f {remote}/output/21_native_alpha_grid.csv; "
               f"tar -C {remote}/output -czf {remote}/summary.tgz "
