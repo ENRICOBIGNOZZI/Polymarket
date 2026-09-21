@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_decomposed_benchmark_ssm_request_v1",
   "version": 1,
-  "request_id": "decomposed-horse-race-20260921T1950CEST",
+  "request_id": "decomposed-horse-race-fast-20260921T2028CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "ff9a4fcd5987d8fd50dbfb441547dea7c8ebf42e",
+  "expected_research_sha": "4edfa07abf712fd1386f000e57ddfbfcaad94c8f",
   "minimum_wall_ns": 1789921800000000000,
   "folds": 3,
   "latency_ms": 50,
