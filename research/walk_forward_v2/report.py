@@ -84,12 +84,18 @@ def public_economics(economics):
             for name, value in economics.get("models", {}).items()
         },
         "latency": economics.get("latency", {}),
+        "horizon_latency": economics.get("horizon_latency", {}),
+        "latency_reference_horizon_ms": economics.get("latency_reference_horizon_ms"),
         "idealized_upper_bounds": economics.get("idealized_upper_bounds", {}),
     }
 
 
 def _point_pnl(metrics):
-    return metrics.get("net_pnl") if metrics.get("net_pnl") is not None else metrics.get("observed_net_pnl")
+    if metrics.get("net_pnl") is not None:
+        return metrics.get("net_pnl")
+    if metrics.get("observed_net_pnl") is not None:
+        return metrics.get("observed_net_pnl")
+    return metrics.get("markout_pnl")
 
 
 def _sample(rows, maximum=5000):
@@ -130,7 +136,7 @@ def chart(output, state, economics):
 
     files = []
     models = economics.get("models", {})
-    selected = models.get("combined_settlement_repricing") or models.get("logistic_offset") or {}
+    selected = models.get("markout_500ms") or models.get("markout_250ms") or {}
     selected_outcomes = selected.get("outcomes", [])
 
     def save(name, draw):
@@ -144,22 +150,22 @@ def chart(output, state, economics):
         files.append(path.name)
 
     def cumulative(axis):
-        rows = sorted((r for r in selected_outcomes if r.get("pnl") is not None),
+        rows = sorted((r for r in selected_outcomes if r.get("markout") is not None),
                       key=lambda r: r.get("decision_ns", 0))
         total = 0.0; x=[]; y=[]
         for row in rows:
-            total += row["pnl"]; x.append(row.get("decision_ns", 0) / 1e9); y.append(total)
+            total += row["markout"]; x.append(row.get("decision_ns", 0) / 1e9); y.append(total)
         if x:
-            axis.plot(x, y); axis.axhline(0, linewidth=.8); axis.set_xlabel("decision epoch seconds"); axis.set_ylabel("PAPER PnL")
-        else: axis.text(.5,.5,"No settled fills",ha="center",va="center",transform=axis.transAxes)
+            axis.plot(x, y); axis.axhline(0, linewidth=.8); axis.set_xlabel("decision epoch seconds"); axis.set_ylabel("OOS executable markout")
+        else: axis.text(.5,.5,"No marked fills",ha="center",va="center",transform=axis.transAxes)
 
     def pnl_models(axis):
         labels=[]; values=[]
         for name,value in models.items():
             p=_point_pnl(value.get("metrics",{}))
             if p is not None: labels.append(name);values.append(p)
-        if values: axis.bar(range(len(values)),values);axis.set_xticks(range(len(labels)),labels,rotation=25,ha="right");axis.axhline(0,linewidth=.8);axis.set_ylabel("PAPER PnL")
-        else: axis.text(.5,.5,"PnL unavailable",ha="center",va="center",transform=axis.transAxes)
+        if values: axis.bar(range(len(values)),values);axis.set_xticks(range(len(labels)),labels,rotation=25,ha="right");axis.axhline(0,linewidth=.8);axis.set_ylabel("settlement PnL or executable markout")
+        else: axis.text(.5,.5,"Economic outcome unavailable",ha="center",va="center",transform=axis.transAxes)
 
     def pnl_latency(axis):
         rows=[]
@@ -167,8 +173,8 @@ def chart(output, state, economics):
             p=_point_pnl(value)
             if p is not None: rows.append((int(key),p))
         rows.sort()
-        if rows: axis.plot([x for x,_ in rows],[y for _,y in rows],marker="o");axis.axhline(0,linewidth=.8);axis.set_xlabel("latency ms");axis.set_ylabel("PAPER PnL")
-        else: axis.text(.5,.5,"Latency PnL unavailable",ha="center",va="center",transform=axis.transAxes)
+        if rows: axis.plot([x for x,_ in rows],[y for _,y in rows],marker="o");axis.axhline(0,linewidth=.8);axis.set_xlabel("latency ms");axis.set_ylabel("500ms-reference executable markout")
+        else: axis.text(.5,.5,"Latency markout unavailable",ha="center",va="center",transform=axis.transAxes)
 
     def edge_decay(axis):
         rows=[]
@@ -218,10 +224,11 @@ def chart(output, state, economics):
     def grouped_pnl(axis, field):
         totals={}
         for row in selected_outcomes:
-            if row.get("pnl") is not None: totals[row.get(field,"UNKNOWN")]=totals.get(row.get(field,"UNKNOWN"),0.0)+row["pnl"]
+            if row.get("markout") is not None:
+                totals[row.get(field,"UNKNOWN")]=totals.get(row.get(field,"UNKNOWN"),0.0)+row["markout"]
         rows=sorted(totals.items())
-        if rows: axis.bar(range(len(rows)),[v for _,v in rows]);axis.set_xticks(range(len(rows)),[k for k,_ in rows],rotation=20,ha="right");axis.axhline(0,linewidth=.8);axis.set_ylabel("PAPER PnL")
-        else: axis.text(.5,.5,"PnL unavailable",ha="center",va="center",transform=axis.transAxes)
+        if rows: axis.bar(range(len(rows)),[v for _,v in rows]);axis.set_xticks(range(len(rows)),[k for k,_ in rows],rotation=20,ha="right");axis.axhline(0,linewidth=.8);axis.set_ylabel("OOS executable markout")
+        else: axis.text(.5,.5,"Markout unavailable",ha="center",va="center",transform=axis.transAxes)
 
     def friction(axis):
         labels=["realistic"];values=[_point_pnl(selected.get("metrics",{}))]
@@ -258,16 +265,18 @@ def chart(output, state, economics):
 
 
 def _support_statement(metrics, uncertainty):
-    pnl = _point_pnl(metrics)
-    if pnl is None:
+    value = _point_pnl(metrics)
+    if value is None:
         return "UNKNOWN / INSUFFICIENT EVIDENCE"
-    interval = uncertainty.get("pnl_per_fill_interval") if isinstance(uncertainty, dict) else None
+    interval = None
+    if isinstance(uncertainty, dict):
+        interval = uncertainty.get("markout_per_fill_interval") or uncertainty.get("pnl_per_fill_interval")
     if interval and interval[0] > 0:
         return "POSITIVE WITH MARKET-BLOCK SUPPORT"
     if interval and interval[1] < 0:
         return "NEGATIVE WITH MARKET-BLOCK SUPPORT"
-    return ("POSITIVE POINT ESTIMATE / UNCERTAIN" if pnl > 0
-            else "NEGATIVE POINT ESTIMATE / UNCERTAIN" if pnl < 0
+    return ("POSITIVE POINT ESTIMATE / UNCERTAIN" if value > 0
+            else "NEGATIVE POINT ESTIMATE / UNCERTAIN" if value < 0
             else "ZERO POINT ESTIMATE / INSUFFICIENT EVIDENCE")
 
 
@@ -294,8 +303,11 @@ def publish(output, *, root, start_sha, data, folds, economics, final_models):
         "economic_metrics.json": public,
         "funnel.json": {"schema": SCHEMA + "_funnel_v1", **SAFETY, "models": funnel},
         "execution_parity.json": parity,
-        "latency_analysis.json": {"schema": SCHEMA + "_latency_v1", **SAFETY,
-                                  "primary": methodology["primary_latency"], "fixed": public.get("latency", {})},
+        "latency_analysis.json": {"schema": SCHEMA + "_latency_v2", **SAFETY,
+                                  "primary": methodology["primary_latency"],
+                                  "reference_horizon_ms": public.get("latency_reference_horizon_ms"),
+                                  "fixed": public.get("latency", {}),
+                                  "horizon_latency": public.get("horizon_latency", {})},
         "uncertainty.json": {"schema": SCHEMA + "_uncertainty_v1", **SAFETY,
                               "models": {key: value["uncertainty"] for key, value in public.get("models", {}).items()}},
         "full_window_repricing_models.json": final_models,
@@ -308,8 +320,10 @@ def publish(output, *, root, start_sha, data, folds, economics, final_models):
         atomic_json(output / name, value)
     charts = chart(output, data_manifest["input_state"], economics)
 
-    selected = public.get("models", {}).get("combined_settlement_repricing") or {}
-    direct = _support_statement(selected.get("metrics", {}), selected.get("uncertainty", {})) if data_manifest["input_state"] == "READY" else "UNKNOWN / INSUFFICIENT EVIDENCE"
+    selected = public.get("models", {}).get("markout_500ms") or {}
+    direct = _support_statement(
+        selected.get("metrics", {}), selected.get("uncertainty", {})
+    ) if data_manifest["input_state"] == "READY" else "UNKNOWN / INSUFFICIENT EVIDENCE"
     repricing = prediction.get("repricing", {}).get("250", {})
     lag = ("POSITIVE DESCRIPTIVE 250MS MOVE" if repricing.get("state") == "READY" and repricing.get("actual_mean_move",0) > 0
            else "NONPOSITIVE DESCRIPTIVE 250MS MOVE" if repricing.get("state") == "READY"
@@ -317,9 +331,10 @@ def publish(output, *, root, start_sha, data, folds, economics, final_models):
     selected_metrics = selected.get("metrics", {})
     lines = [
         "# HISTORICAL WALK-FORWARD V2", "", "## Direct answers", "",
-        "- Positive gross/net executable alpha: **" + direct + "**",
+        "- 500ms-reference OOS executable markout: **" + direct + "**",
+        "- Settlement alpha: **UNKNOWN / INSUFFICIENT CAUSAL SETTLEMENT LABELS**",
         "- PM lag after causal external signal: **" + lag + "**",
-        "- Prior zero-trade diagnosis: **see PM executable-edge distribution and funnel below.**",
+        "- Prior zero-trade diagnosis: **PM midpoint baseline cannot cross executable ask plus costs.**",
         "- Principal bottleneck: **" + ("ADMISSIBLE_HFT_INPUT_UNAVAILABLE" if data_manifest["input_state"] != "READY" else "SEE_FUNNEL_AND_FRICTION_DECOMPOSITION") + "**",
         "", "## Identity", "",
         "- Starting SHA: " + start_sha,
@@ -329,13 +344,17 @@ def publish(output, *, root, start_sha, data, folds, economics, final_models):
         "- Markets: " + str(data_manifest["unique_markets"]),
         "- Short-horizon pairs: " + str(data_manifest["short_horizon_observed_pairs"]),
         "- OOS predictions: " + str(folds.get("oos_predictions",0)),
-        "- Full-window repricing models ready: " + str(sum(
+        "- Full-window midpoint models ready: " + str(sum(
             value.get("state") == "READY" for value in final_models.get("models", {}).values())),
-        "", "## Selected combined-policy economics", "",
+        "- Full-window executable-markout models ready: " + str(sum(
+            value.get("state") == "READY" for value in final_models.get("executable_markout_models", {}).values())),
+        "", "## 500ms reference executable-markout economics", "",
         "- Simulated orders: " + str(selected_metrics.get("simulated_orders")),
         "- Fills: " + str(selected_metrics.get("fills")),
-        "- Settled fills: " + str(selected_metrics.get("settled_fills")),
-        "- Net/observed PnL: " + str(_point_pnl(selected_metrics)),
+        "- Marked fills: " + str(selected_metrics.get("marked_fills")),
+        "- Positive marked fills: " + str(selected_metrics.get("positive_markout_fills")),
+        "- Net executable markout: " + str(selected_metrics.get("markout_pnl")),
+        "- Markout/fill: " + str(selected_metrics.get("markout_per_fill")),
         "- Fill rate: " + str(selected_metrics.get("fill_rate")),
         "", "The report never converts unavailable books, labels, forecasts, or fills into zero.",
     ]
