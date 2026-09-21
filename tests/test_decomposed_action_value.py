@@ -184,3 +184,30 @@ def test_decomposed_model_runs_through_existing_sequential_replay():
             assert outcome["notional"] <= 20.0 + 1e-12
             assert outcome["value_model"] == (
                 "DECOMPOSED_FILL_X_CONDITIONAL_CASH")
+
+
+def test_decomposed_fit_can_reuse_identical_fitted_direct_base():
+    rows = training_rows()
+    kwargs = dict(
+        size_grid=(1.0, 5.0, 10.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        hard_order_notional=20.0,
+        max_sizes_per_state=3,
+        streaming_batch_size=32,
+        selection_calibration_mode="OFF",
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+        conditional_calibration=True,
+        conditional_calibration_min_markets=4,
+        conditional_calibration_shrinkage=4.0,
+    )
+    from research.walk_forward_v3.direct_action import DirectActionValueModel
+    base = DirectActionValueModel(**kwargs).fit(rows)
+    reused = DecomposedActionValueModel(**kwargs).fit(
+        rows, fitted_base=base)
+    assert reused.base is base
+    assert reused.training_receipt["decomposed_base_fit_reused"] is True
+    probe = row(3000, signal=2.0, fill=True, exit_bid=.56)
+    selected = reused.select_action(
+        probe, latency_ms=50, capital_budget=1000.0)
+    assert selected["action"] in {"TRADE", "NO_TRADE"}
