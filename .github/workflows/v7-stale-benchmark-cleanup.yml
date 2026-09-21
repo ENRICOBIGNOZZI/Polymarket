@@ -1,0 +1,65 @@
+name: V7 stale decomposed benchmark cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-stale-benchmark-cleanup-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+      - name: Validate exact stale benchmark request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,re
+          v=json.load(open('deploy/v7-stale-benchmark-cleanup-request.json'))
+          assert set(v)=={'schema','version','request_id','instance_id','stale_prefix','active_prefix','paper_only','real_order_submission','authenticated_execution'}
+          assert v['schema']=='polymarket_v7_stale_benchmark_cleanup_request_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',v['instance_id'])
+          pat=r'/tmp/polymarket-decomposed-benchmark-[0-9a-f]{12}'
+          assert re.fullmatch(pat,v['stale_prefix'])
+          assert re.fullmatch(pat,v['active_prefix'])
+          assert v['stale_prefix']!=v['active_prefix']
+          assert v['paper_only'] is True
+          assert v['real_order_submission'] is False
+          assert v['authenticated_execution'] is False
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "deploy/v7-stale-benchmark-cleanup-request.json"
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-stale-benchmark-cleanup
+          aws-region: eu-west-2
+      - name: Kill only stale research generation
+        run: |
+          set -euo pipefail
+          instance="$(python3 -c 'import json; print(json.load(open("deploy/v7-stale-benchmark-cleanup-request.json"))["instance_id"])')"
+          stale="$(python3 -c 'import json; print(json.load(open("deploy/v7-stale-benchmark-cleanup-request.json"))["stale_prefix"])')"
+          active="$(python3 -c 'import json; print(json.load(open("deploy/v7-stale-benchmark-cleanup-request.json"))["active_prefix"])')"
+          python3 ops/v7_stale_benchmark_cleanup_ssm.py --instance-id "$instance" --stale-prefix "$stale" --active-prefix "$active" --output stale-cleanup.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-stale-benchmark-cleanup-${{ github.run_id }}
+          path: stale-cleanup.json
+          retention-days: 7
