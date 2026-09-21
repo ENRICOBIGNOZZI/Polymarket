@@ -1549,3 +1549,161 @@ def test_effective_age_bucket_summary_separates_observed_and_censored():
     assert result["50_100"]["censored_selected_trades"] == 1
     assert result["100_250"]["observed_selected_trades"] == 1
     assert math.isclose(result["100_250"]["total_observed_net_pnl"], -.1)
+
+
+
+def test_evidence_support_target_counts_observed_no_fill_as_supported():
+    r = row("m9200", exit_bid=.55, depth=20.0)
+    r["arrivals"]["50"]["ask"] = .51
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+    records = list(model._iter_support_records([r]))
+    assert records
+    assert all(record["target"] == 1.0 for record in records)
+    assert all(
+        record["support_state"] == "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED"
+        for record in records
+    )
+
+
+def test_evidence_support_target_marks_missing_exit_as_censored_not_zero_pnl():
+    r = row("m9201", exit_bid=.55, depth=20.0)
+    r["targets"].pop("500")
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+    records = list(model._iter_support_records([r]))
+    assert records
+    assert all(record["target"] == 0.0 for record in records)
+    assert all(
+        record["support_state"] == "EXIT_EVIDENCE_UNAVAILABLE"
+        for record in records
+    )
+
+
+def test_support_head_receipt_distinguishes_epistemic_support_from_fill_probability():
+    rows = []
+    for index in range(40):
+        item = row(
+            "m" + str(index + 9210),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        if index % 5 == 0:
+            item["targets"] = {}
+        rows.append(item)
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["evidence_support_head"] == (
+        "STREAMING_RIDGE_LINEAR_PROBABILITY_ON_CAUSAL_ACTION_OBSERVABILITY")
+    assert receipt["support_policy_mode"] == "DIAGNOSTIC"
+    assert receipt["support_training_records"] > 0
+    assert 0 <= receipt["support_global_rate"] <= 1
+    assert receipt["support_semantics"] == (
+        "EPISTEMIC_EVIDENCE_SUPPORT_NOT_ECONOMIC_FILL_PROBABILITY;"
+        "DIRECT_CASH_TARGET_ALREADY_INCLUDES_FILL_AND_NO_FILL"
+    )
+
+
+def test_robust_support_mode_can_flip_optimistic_trade_to_no_trade():
+    import numpy as np
+
+    r = row("m9300", signal=2.0, exit_bid=.56, depth=20.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+        support_policy_mode="ROBUST_WORST_CASE",
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+
+    class ConstantValue:
+        def __init__(self, names, value):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in self.names}
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = float(value)
+        def predict(self, record):
+            return float(self.beta[0])
+
+    model.mean_model = ConstantValue(model.model_feature_names, 1.0)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.regime_action_target_counts = {}
+    model.support_model = ConstantValue(model.model_feature_names, 0.10)
+    model.fitted = True
+
+    selected = model.select_action(r, latency_ms=50)
+    assert selected["action"] == "NO_TRADE"
+
+    # With full evidence support the same economic value is admissible.
+    model.support_model = ConstantValue(model.model_feature_names, 1.0)
+    selected = model.select_action(r, latency_ms=50)
+    assert selected["action"] == "TRADE"
+    assert math.isclose(
+        selected["evidence_support_probability"], 1.0, abs_tol=1e-12)
+    assert math.isclose(
+        selected["support_robustness_penalty"], 0.0, abs_tol=1e-12)
+
+
+def test_diagnostic_support_mode_never_changes_policy_utility():
+    import numpy as np
+
+    r = row("m9301", signal=2.0, exit_bid=.56, depth=20.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+        support_policy_mode="DIAGNOSTIC",
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+
+    class ConstantModel:
+        def __init__(self, names, value):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in self.names}
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = float(value)
+        def predict(self, record):
+            return float(self.beta[0])
+
+    model.mean_model = ConstantModel(model.model_feature_names, .5)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.regime_action_target_counts = {}
+    model.support_model = ConstantModel(model.model_feature_names, 0.0)
+    model.fitted = True
+
+    scored, state = model.score_actions(r, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    best = scored[0]
+    assert best["evidence_support_probability"] == 0.0
+    assert best["support_robustness_penalty"] == 0.0
+    assert math.isclose(
+        best["calibrated_lower_cash_value"],
+        best["base_lower_cash_before_support"],
+        abs_tol=1e-12,
+    )
