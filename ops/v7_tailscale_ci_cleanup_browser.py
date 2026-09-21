@@ -274,6 +274,7 @@ def main() -> int:
     p.add_argument("--repository", required=True)
     p.add_argument("--github-token", required=True)
     p.add_argument("--chrome", default="")
+    p.add_argument("--cdp-url", default="")
     a = p.parse_args()
     value = json.loads(a.credentials.read_text(encoding="utf-8"))
     required = {
