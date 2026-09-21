@@ -57,11 +57,15 @@ jobs:
 
       - name: Verify collection liveness and real tape growth
         run: |
-          set -euo pipefail
-          python3 ops/v7_collection_plane_health.py             --instance-id "$INSTANCE_ID"             --output collection-health.json
+          set -u
+          rc=0
+          python3 ops/v7_collection_plane_health.py --instance-id "$INSTANCE_ID" --output collection-health.json || rc=$?
+          test -s collection-health.json
           cat collection-health.json >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
 
       - name: Upload health receipt
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: v7-collection-health-${{ github.run_id }}
