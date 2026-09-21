@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_stop_obsolete_research_v1",
   "version": 1,
-  "request_id": "stop-obsolete-research-20260922-a",
+  "request_id": "stop-obsolete-research-20260922-b",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "obsolete_research_roots": [
     "/tmp/polymarket-multi-alpha-2h-0c8e165b22e8",
