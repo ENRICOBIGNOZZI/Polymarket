@@ -122,7 +122,8 @@ def test_direct_model_selects_size_from_action_value_and_keeps_no_trade():
     good = row("m100", signal=2.0, exit_bid=.56, depth=20.0)
     selected = model.select_action(good, latency_ms=50)
     assert selected["action"] == "TRADE"
-    assert selected["size"] in (5.0, 10.0, 20.0, 1.0)
+    assert good["minimum"] <= selected["size"] <= good["quantity"]
+    assert selected["quantity_optimizer"] == "GLOBAL_PIECEWISE_POLYLOG_CRITICAL_POINTS"
     assert selected["calibrated_lower_value"] > 0
 
     bad = row("m101", signal=-2.0, exit_bid=.44, depth=20.0)
@@ -281,3 +282,89 @@ def test_direct_action_uses_all_training_states_with_p_squared_memory():
     assert receipt["gram_matrix_bytes"] == (
         receipt["design_dimension"] ** 2 * 8)
     assert receipt["gram_matrix_bytes"] < 1_000_000
+
+
+
+def test_continuous_quantity_optimizer_finds_known_interior_global_maximum():
+    import numpy as np
+
+    r = row("m900", signal=1.0, depth=20.0, ask=.50, minimum=1.0)
+    model = DirectActionValueModel(
+        size_grid=(1.0, 20.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+    )
+    model._configure_levels([r])
+
+    class DummyModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in self.names}
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[1 + self.names.index("action.size")] = 1.0
+            self.beta[1 + self.names.index("action.size2")] = -0.1
+
+        def predict(self, record):
+            features = record["features"]
+            value = float(self.beta[0])
+            for index, name in enumerate(self.names):
+                raw = features.get(name)
+                if isinstance(raw, (int, float)) and math.isfinite(raw):
+                    value += float(self.beta[1 + index]) * float(raw)
+                else:
+                    value += float(self.beta[1 + len(self.names) + index])
+            return value
+
+    model.mean_model = DummyModel(model.model_feature_names)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.fitted = True
+
+    selected = model.select_action(
+        r, latency_ms=50, available_capital=100.0,
+        capital_budget=1000.0)
+    assert selected["action"] == "TRADE"
+    assert math.isclose(selected["size"], 5.0, abs_tol=1e-8)
+    assert math.isclose(
+        selected["predicted_total_net_cash_pnl"], 2.5, abs_tol=1e-8)
+    assert selected["quantity_optimizer"] == "GLOBAL_PIECEWISE_POLYLOG_CRITICAL_POINTS"
+
+
+def test_continuous_quantity_optimizer_respects_available_capital_and_depth():
+    import numpy as np
+
+    r = row("m901", signal=1.0, depth=100.0, ask=.50, minimum=1.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+    )
+    model._configure_levels([r])
+
+    class IncreasingModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in self.names}
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[1 + self.names.index("action.size")] = 1.0
+
+        def predict(self, record):
+            return float(record["features"]["action.size"])
+
+    model.mean_model = IncreasingModel(model.model_feature_names)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.fitted = True
+
+    # $3 available at ask=.50 => q <= 6 even though visible depth is 100.
+    selected = model.select_action(
+        r, latency_ms=50, available_capital=3.0,
+        capital_budget=1000.0)
+    assert selected["action"] == "TRADE"
+    assert math.isclose(selected["size"], 6.0, abs_tol=1e-8)
+    assert math.isclose(selected["notional"], 3.0, abs_tol=1e-8)
