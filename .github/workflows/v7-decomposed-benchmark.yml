@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: v7-decomposed-direct-action-horse-race
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   benchmark:
@@ -62,6 +62,10 @@ jobs:
           git fetch --no-tags origin main
           git cat-file -e "$research_sha^{commit}"
           git merge-base --is-ancestor "$research_sha" origin/main
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            parent="$(git rev-parse HEAD^1)"
+            test "$research_sha" = "$parent"
+          fi
           echo "request=$request" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials through OIDC
