@@ -245,7 +245,7 @@ def test_pm_midpoint_has_zero_raw_edge_but_negative_executable_edge():
 def test_latency_policy_falls_back_to_repricing_when_settlement_model_is_unavailable():
     row = record()
     row["label"] = 1
-    row["targets"] = {"250": {"state": "OBSERVED", "arrival_bid": .54}}
+    row["targets"] = {"250": {"state": "OBSERVED", "mid_change": .05, "arrival_bid": .54}}
     for horizon in HORIZONS_MS:
         row["targets"].setdefault(str(horizon), {"state": "UNAVAILABLE_NO_POST_BOOK"})
     row["arrivals"] = {
