@@ -12,8 +12,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: v7-multi-alpha-2h-research
-  cancel-in-progress: true
+  group: v7-multi-alpha-2h-research-simplebranch
+  cancel-in-progress: false
 
 jobs:
   research:
