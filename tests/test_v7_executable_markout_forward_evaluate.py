@@ -134,3 +134,19 @@ def test_forward_evaluator_rejects_prediction_after_label_availability():
     labels = {p25["key"]: p25, p500["key"]: p500}
     with pytest.raises(ValueError, match="prediction was not strictly before label availability"):
         evaluate({key(): pred}, {key(): origin}, labels)
+
+
+
+def test_forward_evaluator_uses_live_080_entry_cap():
+    pred = prediction(10)
+    origin = origin_row()
+    origin["ask_e4"] = 7800
+    origin["bid_e4"] = 7700
+    p25 = label_point(kind6(25, 7700, 7800))
+    p500 = label_point(kind6(500, 8500, 8600))
+    labels = {p25["key"]: p25, p500["key"]: p500}
+    result = evaluate({key(): pred}, {key(): origin}, labels)
+    assert result["live_geometry"]["maximum_entry_price"] == .80
+    cell = result["cells"]["BTC:500"]
+    assert cell["prediction_threshold"] == 1
+    assert cell["live_geometry"] == 1
