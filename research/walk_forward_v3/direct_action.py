@@ -2613,7 +2613,14 @@ class DirectActionValueModel:
                     capital_budget=capital_budget,
                 )
                 probe_notional = max(1e-12, float(probe["notional"]))
-                edge_per_dollar = float(probe["calibrated_lower_value"]) / probe_notional
+                raw_edge_per_dollar = (
+                    float(probe["calibrated_lower_value"]) / probe_notional)
+                support_probability = probe.get("evidence_support_probability")
+                support_weight = (
+                    min(1.0, max(0.0, float(support_probability)))
+                    if finite(support_probability) else 0.0
+                )
+                edge_per_dollar = raw_edge_per_dollar * support_weight
                 if edge_per_dollar <= 0:
                     continue
                 desired = policy.desired_notional(
@@ -2658,7 +2665,11 @@ class DirectActionValueModel:
                     "reason": "EDGE_ADMISSION_CONTEXT_BUDGET_SIZING",
                     "sizing_mode": "EDGE_CONTEXT_BUDGET",
                     "admission_probe_size": float(lower),
+                    "raw_admission_edge_per_dollar": float(raw_edge_per_dollar),
                     "admission_edge_per_dollar": float(edge_per_dollar),
+                    "sizing_support_probability": (
+                        float(support_probability)
+                        if finite(support_probability) else None),
                     "desired_notional_before_constraints": float(
                         policy.desired_notional(edge_per_dollar, capital_budget)),
                     "desired_notional_after_constraints": float(desired),
@@ -3531,6 +3542,7 @@ def walk_forward_direct_action(
             "folds": [],
             "diagnostic_selected_outcomes": [],
             "selection": "NONE_RESEARCH_CHALLENGER_NOT_PROMOTED",
+            "sizing_support_probability_weighted": True,
         }
     if not found:
         return result
@@ -3614,7 +3626,9 @@ def walk_forward_direct_action(
                             "market_id", "asset", "contract_horizon", "decision_ns",
                             "parent_shock_id", "entry_policy", "side", "size",
                             "exit_horizon_ms", "latency_ms", "notional",
-                            "sizing_mode", "admission_edge_per_dollar",
+                            "sizing_mode", "raw_admission_edge_per_dollar",
+                            "admission_edge_per_dollar",
+                            "sizing_support_probability",
                             "context_capital_fraction",
                             "desired_notional_before_constraints",
                             "desired_notional_after_constraints",
