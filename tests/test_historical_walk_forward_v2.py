@@ -1348,8 +1348,27 @@ def test_recent_window_index_preserves_semantic_dataset_parity(tmp_path):
 
     assert plain["input_state"] == indexed["input_state"] == "READY"
     assert plain["data_sha256"] == indexed["data_sha256"]
+    assert plain["decision_evidence_sha256"] == indexed["decision_evidence_sha256"]
     assert plain["decisions"] == indexed["decisions"]
-    assert plain["book_evidence"] == indexed["book_evidence"]
+    semantic_book_keys = {
+        "source",
+        "matched_target_rows",
+        "duplicate_identical_target_rows",
+        "epoch_mismatch_rows",
+        "short_horizon_observed_pairs",
+        "arrival_observed_pairs",
+    }
+    assert {
+        key: plain["book_evidence"].get(key)
+        for key in semantic_book_keys
+    } == {
+        key: indexed["book_evidence"].get(key)
+        for key in semantic_book_keys
+    }
+    # Scan-volume diagnostics are intentionally allowed to differ: the indexed
+    # loader should not read irrelevant old kind=6 rows.
+    assert indexed["book_evidence"]["native_label_rows"] <= plain["book_evidence"]["native_label_rows"]
+    assert indexed["book_evidence"]["unmatched_label_rows"] <= plain["book_evidence"]["unmatched_label_rows"]
     assert len(indexed["decisions"]) == 1
     assert indexed["decisions"][0]["market_id"] == "recent"
     assert indexed["decisions"][0]["targets"]["100"]["state"] == "OBSERVED"
