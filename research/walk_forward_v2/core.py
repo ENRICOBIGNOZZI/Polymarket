@@ -6,6 +6,7 @@ missing evidence as censored rather than as a zero move, fill, or PnL.
 """
 from __future__ import annotations
 
+from array import array
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 import gzip
@@ -1215,38 +1216,49 @@ def summarize(outcomes):
 
 
 def pm_edge_distribution(evaluations, execution_reserve=.005):
-    by_model = defaultdict(list)
+    """Compact edge diagnostics; float arrays replace millions of Python dicts."""
+    fields = ("before_cost", "after_fee", "after_reserve")
+    by_model = defaultdict(lambda: {key: array("d") for key in fields})
+
+    def append(model, before_cost, after_fee, after_reserve):
+        values = by_model[model]
+        values["before_cost"].append(float(before_cost))
+        values["after_fee"].append(float(after_fee))
+        values["after_reserve"].append(float(after_reserve))
+
     for evaluation in evaluations:
         row = evaluation["row"]
-        pm = evaluation["settlement_predictions"]["pm"]
+        fee = fee_per_share(row, row["ask"])
         for model, value in evaluation["settlement_predictions"].items():
             if value is None:
                 continue
-            fee = fee_per_share(row, row["ask"])
-            by_model[model].append({"before_cost": value - row["ask"], "after_fee": value - row["ask"] - fee,
-                                    "after_reserve": value - row["ask"] - fee - execution_reserve})
+            before = value - row["ask"]
+            append(model, before, before - fee, before - fee - execution_reserve)
         for horizon, value in evaluation["repricing_predictions"].items():
             if value is not None:
-                fee = fee_per_share(row, row["ask"])
-                by_model["repricing_" + horizon].append({
-                    "before_cost": value, "after_fee": value - fee,
-                    "after_reserve": value - fee - execution_reserve})
+                append("repricing_" + horizon, value, value - fee,
+                       value - fee - execution_reserve)
         for horizon, value in evaluation.get("markout_predictions", {}).items():
             if value is not None:
-                fee = fee_per_share(row, row["ask"])
-                by_model["markout_" + horizon].append({
-                    "before_cost": value + fee, "after_fee": value,
-                    "after_reserve": value - execution_reserve})
+                append("markout_" + horizon, value + fee, value,
+                       value - execution_reserve)
+
     thresholds = (0, .001, .0025, .005, .01, .02)
     result = {}
     for model, values in by_model.items():
+        reserve = values["after_reserve"]
+        count = len(reserve)
         result[model] = {
-            "rows": len(values),
-            "fractions": {str(t): sum(row["after_reserve"] > t for row in values) / len(values) if values else None for t in thresholds},
-            "quantiles": {key: quantile([row[key] for row in values]) for key in ("before_cost", "after_fee", "after_reserve")},
+            "rows": count,
+            "fractions": {
+                str(t): sum(value > t for value in reserve) / count if count else None
+                for t in thresholds
+            },
+            "quantiles": {
+                key: quantile(values[key]) for key in fields
+            },
         }
     return result
-
 
 def quantile(values):
     if not values:
@@ -1386,11 +1398,15 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
         outcomes = replay_policy(
             evaluations, selector, latency_ms=100, valuation_mode=valuation_mode,
             markout_horizon_ms=markout_horizon)
-        result["models"][name] = {
+        value = {
             "metrics": summarize(outcomes),
             "uncertainty": market_bootstrap(outcomes),
-            "outcomes": outcomes,
         }
+        # Raw row outcomes are needed only for the two diagnostic charts that
+        # consume them. All other candidates are summarized immediately.
+        if name in {"pm", "markout_500ms"}:
+            value["outcomes"] = outcomes
+        result["models"][name] = value
 
     # Full prespecified horizon x latency surface. Never evaluate an exit horizon
     # at or before assumed order arrival.
