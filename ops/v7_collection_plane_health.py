@@ -14,7 +14,23 @@ INSTANCE_RE = re.compile(r"^i-[0-9a-f]+$")
 REMOTE = r"""set -euo pipefail
 ROOT=/mnt/polymarket-data/polymarket_v7_collection
 UNIT=polymarket-v7-collection.service
-systemctl is-active --quiet "$UNIT"
+if ! systemctl is-active --quiet "$UNIT"; then
+  echo "COLLECTION_SERVICE_INACTIVE"
+  systemctl --no-pager --full status "$UNIT" || true
+  echo "--- collection journal ---"
+  journalctl -u "$UNIT" -n 120 --no-pager -o cat || true
+  for log in \
+    "$ROOT/public_https_proxy.log" \
+    "$ROOT/universe/collector.log" \
+    "$ROOT/external_fair/external_assets_supervisor.log" \
+    "$ROOT/external_fair/rtds_monitor.log" \
+    "$ROOT/research/repricing_book_observer.log" \
+    "$ROOT/trade_recorder.log"; do
+    echo "--- $log ---"
+    tail -n 60 "$log" 2>/dev/null || true
+  done
+  exit 41
+fi
 python3 - "$ROOT" <<'PY'
 import json,re,sys,time
 from pathlib import Path
