@@ -223,7 +223,7 @@ def test_cancel_prior_deploy_transports_cancels_only_proven_older_sha(monkeypatc
                         "Status": "InProgress",
                         "CommandId": "cmd-old",
                         "Parameters": {
-                            "commands": [f"bash -lc 'SHA={old}; echo old'"],
+                            "commands": [f"bash -lc 'SHA={old}; echo V7_SSM_CUTOVER=old'"],
                         },
                     },
                     {
@@ -263,7 +263,7 @@ def test_cancel_prior_deploy_transports_refuses_same_sha(monkeypatch):
                 "Status": "InProgress",
                 "CommandId": "cmd-current",
                 "Parameters": {
-                    "commands": [f"bash -lc 'SHA={SHA}; echo current'"],
+                    "commands": [f"bash -lc 'SHA={SHA}; echo V7_SSM_CUTOVER=current'"],
                 },
             }],
         }
@@ -273,21 +273,48 @@ def test_cancel_prior_deploy_transports_refuses_same_sha(monkeypatch):
         m.cancel_prior_deploy_transports("eu-west-2", "i-123abc", SHA)
 
 
-def test_cancel_prior_deploy_transports_refuses_unknown_transport(monkeypatch):
+def test_cancel_prior_deploy_transports_ignores_auxiliary_research_job(monkeypatch):
+    old = "b" * 40
+    cancelled = []
+
     def fake_aws(region, args):
-        assert args[:2] == ["ssm", "list-commands"]
-        return {
-            "Commands": [{
-                "Comment": m.DEPLOY_COMMENT,
-                "Status": "InProgress",
-                "CommandId": "cmd-unknown",
-                "Parameters": {"commands": ["bash -lc 'echo no-target'"]},
-            }],
-        }
+        if args[:2] == ["ssm", "list-commands"]:
+            return {
+                "Commands": [{
+                    "Comment": m.DEPLOY_COMMENT,
+                    "Status": "InProgress",
+                    "CommandId": "cmd-research",
+                    "Parameters": {
+                        "commands": [
+                            f"bash -lc 'PYTHONPATH=/tmp/research:/home/ubuntu/runtime/{old} "
+                            "python -m research.walk_forward_v3.all_crypto_compact_equity'"
+                        ],
+                    },
+                }],
+            }
+        if args[:2] == ["ssm", "cancel-command"]:
+            cancelled.append(args)
+            return {}
+        raise AssertionError(args)
 
     monkeypatch.setattr(m, "aws_json", fake_aws)
-    with pytest.raises(m.SsmDeployError, match="cannot prove"):
-        m.cancel_prior_deploy_transports("eu-west-2", "i-123abc", SHA)
+    assert m.cancel_prior_deploy_transports("eu-west-2", "i-123abc", SHA) == []
+    assert cancelled == []
+
+
+def test_run_uses_auxiliary_comment_by_default(monkeypatch):
+    seen = {}
+
+    def fake_send(region, instance, command, timeout_s, comment):
+        seen["comment"] = comment
+        return "cmd"
+
+    monkeypatch.setattr(m, "send", fake_send)
+    monkeypatch.setattr(m, "wait", lambda *args, **kwargs: {
+        "Status": "Success", "StandardOutputContent": "", "StandardErrorContent": "",
+    })
+    m.run("eu-west-2", "i-123abc", "echo x", 10)
+    assert seen["comment"] == m.GENERIC_SSM_COMMENT
 
 
 def test_main_writes_receipt_as_one_valid_json_document(tmp_path, monkeypatch):
