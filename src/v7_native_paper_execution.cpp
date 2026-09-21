@@ -67,7 +67,9 @@ bool NativePaperExecutionAdapter::live_locally(
 NativePaperSubmitResult NativePaperExecutionAdapter::submit(
     const NativeOrderCommand& command, const BookHotSnapshot& book,
     std::int64_t now_monotonic_ns) noexcept {
-    if (command.time_in_force != AdapterTimeInForce::Fak || taker_delay_ns_ == 0)
+    if ((command.time_in_force != AdapterTimeInForce::Fak
+         && command.time_in_force != AdapterTimeInForce::Fok)
+        || taker_delay_ns_ == 0)
         return match_now(command, book, now_monotonic_ns);
     NativePaperSubmitResult out{};
     out.client_order_id = command.client_order_id;
@@ -191,7 +193,8 @@ NativePaperSubmitResult NativePaperExecutionAdapter::match_now(
         return out;
     }
     if (command.time_in_force != AdapterTimeInForce::Gtc
-        && command.time_in_force != AdapterTimeInForce::Fak) {
+        && command.time_in_force != AdapterTimeInForce::Fak
+        && command.time_in_force != AdapterTimeInForce::Fok) {
         if (!endpoint_.observe_unsent(command, now_monotonic_ns)) {
             out.reason = NativePaperReason::LifecycleFailure;
             return out;
@@ -249,7 +252,10 @@ NativePaperSubmitResult NativePaperExecutionAdapter::match_now(
     // submitted limit. Price improvement is real execution, not a non-fill.
     const bool marketable = executable_e4 > 0
         && (buy ? executable_e4 <= limit_e4 : executable_e4 >= limit_e4);
-    if (!marketable || executable_qty <= 0) {
+    const bool fok_depth_insufficient =
+        command.time_in_force == AdapterTimeInForce::Fok
+        && executable_qty < command.quantity_microunits;
+    if (!marketable || executable_qty <= 0 || fok_depth_insufficient) {
         OmsEvent expire{};
         expire.type = OmsEventType::Expire;
         expire.timestamp_ns = now_monotonic_ns + 2;
