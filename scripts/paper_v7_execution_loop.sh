@@ -537,7 +537,7 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --maximum-entry-price-e4 7500 \
   --minimum-tte-ns 105000000000 --maximum-tte-ns 120000000000 \
   --maker-share-cap-microunits 1000000 \
-  --observation-only \
+  --observation-only --clip-capital-target-to-visible-depth \
   --capture-native-decisions --capture-execution-windows --execution-window-ns 5000000000 \
   --asynchronous-settlement \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
