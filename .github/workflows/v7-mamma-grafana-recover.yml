@@ -45,19 +45,23 @@ jobs:
 
       - name: Join tailnet authkey
         if: steps.ts.outputs.mode == 'authkey'
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
-          ping: ${{ env.SERVER_HOST }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-mamma-recover-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Join tailnet oauth
         if: steps.ts.outputs.mode == 'oauth'
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
-          ping: ${{ env.SERVER_HOST }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-mamma-recover-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Configure SSH
         env:
