@@ -83,6 +83,8 @@ def public_economics(economics):
             for name, value in economics.get("models", {}).items()
         },
         "latency": economics.get("latency", {}),
+        "latency_policy": economics.get("latency_policy", {}),
+        "edge_threshold_sensitivity": economics.get("edge_threshold_sensitivity", {}),
         "idealized_upper_bounds": economics.get("idealized_upper_bounds", {}),
     }
 
@@ -129,7 +131,9 @@ def chart(output, state, economics):
 
     files = []
     models = economics.get("models", {})
-    selected = models.get("combined_settlement_repricing") or models.get("logistic_offset") or {}
+    latency_policy = economics.get("latency_policy", {})
+    selected_name = latency_policy.get("model") or "combined_settlement_repricing"
+    selected = models.get(selected_name) or models.get("repricing_250ms") or models.get("pm") or {}
     selected_outcomes = selected.get("outcomes", [])
 
     def save(name, draw):
@@ -294,7 +298,10 @@ def publish(output, *, root, start_sha, data, folds, economics):
         "funnel.json": {"schema": SCHEMA + "_funnel_v1", **SAFETY, "models": funnel},
         "execution_parity.json": parity,
         "latency_analysis.json": {"schema": SCHEMA + "_latency_v1", **SAFETY,
-                                  "primary": methodology["primary_latency"], "fixed": public.get("latency", {})},
+                                  "primary": methodology["primary_latency"],
+                                  "policy": public.get("latency_policy", {}),
+                                  "fixed": public.get("latency", {}),
+                                  "edge_threshold_sensitivity": public.get("edge_threshold_sensitivity", {})},
         "uncertainty.json": {"schema": SCHEMA + "_uncertainty_v1", **SAFETY,
                               "models": {key: value["uncertainty"] for key, value in public.get("models", {}).items()}},
     }
@@ -305,7 +312,8 @@ def publish(output, *, root, start_sha, data, folds, economics):
         atomic_json(output / name, value)
     charts = chart(output, data_manifest["input_state"], economics)
 
-    selected = public.get("models", {}).get("combined_settlement_repricing") or {}
+    selected_name = (public.get("latency_policy") or {}).get("model") or "combined_settlement_repricing"
+    selected = public.get("models", {}).get(selected_name) or {}
     direct = _support_statement(selected.get("metrics", {}), selected.get("uncertainty", {})) if data_manifest["input_state"] == "READY" else "UNKNOWN / INSUFFICIENT EVIDENCE"
     repricing = prediction.get("repricing", {}).get("250", {})
     lag = ("POSITIVE DESCRIPTIVE 250MS MOVE" if repricing.get("state") == "READY" and repricing.get("actual_mean_move",0) > 0
