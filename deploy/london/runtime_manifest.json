@@ -96,6 +96,9 @@
     "monitoring/v7_operator_truth.py",
     "monitoring/v7_portfolio_reconciliation.py",
     "monitoring/v7_runtime_contract.py",
+    "ops/systemd/polymarket-v7-collection-retention.service.in",
+    "ops/systemd/polymarket-v7-collection-retention.timer.in",
+    "ops/systemd/polymarket-v7-collection.service.in",
     "ops/systemd/polymarket-v7-exporter.service.in",
     "ops/systemd/polymarket-v7-paper.service.in",
     "ops/systemd/polymarket-v7-retention.service.in",
@@ -106,7 +109,8 @@
     "ops/v7_service_entrypoint.sh",
     "ops/verify_v7_native_critical_path.py",
     "requirements-runtime.txt",
+    "scripts/v7_collection_plane.sh",
     "scripts/v7_process_runtime.sh"
   ],
-  "version": 2
+  "version": 3
 }
