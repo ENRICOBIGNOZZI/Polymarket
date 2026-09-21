@@ -1483,3 +1483,148 @@ def test_partial_pooling_receipt_exposes_training_support_without_outcome_tuning
         isinstance(value, int) and value >= 0
         for value in receipt["regime_action_target_counts"].values()
     )
+
+
+
+def test_observability_head_labels_observed_no_fill_as_support_not_zero_pnl():
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+    )
+    observed_no_fill = row("m10001", exit_bid=.55, depth=20.0)
+    observed_no_fill["arrivals"]["50"]["ask"] = .51
+    missing_exit = row("m10002", exit_bid=.55, depth=20.0)
+    missing_exit["targets"] = {}
+
+    model._configure_levels([observed_no_fill, missing_exit])
+    records = list(model._iter_observability_rows(
+        [observed_no_fill, missing_exit]))
+    by_market = {record["market_id"]: record for record in records}
+    assert by_market["m10001"]["observability_target"] == 1.0
+    assert by_market["m10001"]["observability_state"] == (
+        "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED")
+    assert by_market["m10002"]["observability_target"] == 0.0
+    assert "EXIT" in by_market["m10002"]["observability_state"]
+
+    pnl, state = realized_action_value(
+        missing_exit, size=5.0, horizon_ms=500, latency_ms=50)
+    assert pnl is None
+    assert state == "EXIT_EVIDENCE_UNAVAILABLE"
+
+
+def test_observability_probability_is_bounded_and_reported():
+    rows = []
+    for index in range(50):
+        item = row(
+            "m" + str(index + 10100),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        if index % 4 == 0:
+            item["targets"] = {}
+        rows.append(item)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["observability_head"] == (
+        "RIDGE_BINARY_CAUSAL_ARRIVAL_PLUS_EXIT_LABEL_AVAILABILITY")
+    assert receipt["observability_training_rows"] > 0
+    assert 0.0 <= receipt["observability_training_rate"] <= 1.0
+    assert "MISSING_PNL_REMAINS_CENSORED_NOT_ZERO" in (
+        receipt["observability_target_semantics"])
+
+    probe = row("m10990", signal=2.0, exit_bid=.56, depth=20.0)
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    for entry in scored:
+        probability = entry["observability_probability"]
+        assert probability is not None
+        assert 0.0 <= probability <= 1.0
+
+
+def test_low_observability_gate_returns_no_trade_fail_closed():
+    import numpy as np
+
+    rows = [
+        row(
+            "m" + str(index + 10200),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(40)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_observability_probability=.5,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+
+    class LowSupport:
+        def predict(self, record):
+            return .1
+
+    model.observability_model = LowSupport()
+    probe = row("m10991", signal=2.0, exit_bid=.56, depth=20.0)
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert scored == []
+    assert state == "LOW_OBSERVABILITY_SUPPORT"
+    selected = model.select_action(probe, latency_ms=50)
+    assert selected["action"] == "NO_TRADE"
+    assert selected["reason"] == "LOW_OBSERVABILITY_SUPPORT"
+
+
+def test_observability_penalty_is_separate_from_economic_pnl_target():
+    rows = [
+        row(
+            "m" + str(index + 10300),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(40)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        observability_penalty_dollars=2.0,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+
+    class QuarterSupport:
+        def predict(self, record):
+            return .25
+
+    model.observability_model = QuarterSupport()
+    probe = row("m10992", signal=2.0, exit_bid=.56, depth=20.0)
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    for entry in scored:
+        assert math.isclose(
+            entry["observability_probability"], .25, abs_tol=1e-12)
+        assert math.isclose(
+            entry["observability_penalty"], 1.5, abs_tol=1e-12)
+        # The direct cash forecast is untouched; support only changes policy utility.
+        assert math.isclose(
+            entry["calibrated_lower_value"],
+            entry["calibrated_lower_cash_value"]
+            - entry["total_residual_friction"]
+            - 1.5,
+            abs_tol=1e-12,
+        )
