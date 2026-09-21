@@ -1,0 +1,72 @@
+name: V7 SSM deploy transport audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-ssm-deploy-transport-audit-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-ssm-deploy-transport-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate request
+        run: |
+          python3 - deploy/v7-ssm-deploy-transport-audit-request.json <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v=={
+            'schema':'polymarket_v7_ssm_deploy_transport_audit_request_v1',
+            'paper_only':True,
+            'authenticated_execution':False,
+            'real_order_submission':False,
+          }
+          PY
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-ssm-transport-audit
+          aws-region: eu-west-2
+      - name: Audit in-flight deploy transports
+        run: |
+          set -euo pipefail
+          aws ssm list-commands --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --output json > commands.json
+          python3 - commands.json <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          term={'Success','Cancelled','TimedOut','Failed','Cancelling'}
+          out=[]
+          for c in v.get('Commands') or []:
+              if c.get('Comment')!='Polymarket V7 exact-SHA PAPER SSM transport':
+                  continue
+              if str(c.get('Status') or '') in term:
+                  continue
+              params=c.get('Parameters') or {}
+              payloads=params.get('commands') or []
+              if isinstance(payloads,str): payloads=[payloads]
+              txt='\n'.join(map(str,payloads))
+              shas=sorted(set(re.findall(r'[0-9a-f]{40}',txt)))
+              out.append({
+                  'command_id':c.get('CommandId'),
+                  'status':c.get('Status'),
+                  'requested':str(c.get('RequestedDateTime')),
+                  'sha_candidates':shas,
+                  'command_excerpt':txt[:4000],
+              })
+          print('SSM_DEPLOY_TRANSPORT_AUDIT='+json.dumps(out,sort_keys=True,separators=(',',':')))
+          PY
