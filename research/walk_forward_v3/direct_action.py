@@ -2291,6 +2291,212 @@ class DirectActionValueModel:
         return selected
 
 
+
+def _bounded_quantity_point(value, lower, upper):
+    if not finite(value):
+        return None
+    value = float(value)
+    if value < lower - 1e-12 or value > upper + 1e-12:
+        return None
+    return min(float(upper), max(float(lower), value))
+
+
+def cash_pnl_policy_regret_diagnostic(
+    model,
+    row,
+    selected,
+    *,
+    latency_ms,
+    available_capital,
+    capital_budget,
+):
+    """Ex-post cash-PnL regret for a selected PAPER action.
+
+    This is diagnostic only. Future evidence never feeds back into selection.
+    For a fixed side/horizon the executable cash PnL is piecewise linear in q,
+    with kinks only at the feasible bounds, arrival fill capacity and future
+    exit bid capacity. Evaluating those points therefore yields the exact
+    continuous-q cash-PnL oracle under the recorded L1 execution kernel.
+
+    all_horizons_complete is true only when every feasible side/horizon cell
+    has causal execution/exit evidence. Same-horizon regret remains available
+    when the selected horizon is complete even if another horizon is censored.
+    """
+    if selected.get("action") != "TRADE":
+        return {
+            "state": "NOT_APPLICABLE_NO_TRADE_SELECTED",
+            "diagnostic_only": True,
+        }
+
+    selected_side = str(selected.get("side") or selected_action_side(row))
+    selected_horizon = int(selected["exit_horizon_ms"])
+    selected_q = float(selected["size"])
+    latency_ms = int(latency_ms)
+
+    best_all = {
+        "pnl": 0.0,
+        "action": "NO_TRADE",
+        "side": None,
+        "exit_horizon_ms": None,
+        "size": 0.0,
+    }
+    best_same = dict(best_all)
+    all_cells = 0
+    observed_cells = 0
+    missing_cells = []
+    same_cells = 0
+    same_observed_cells = 0
+    selected_cash = None
+    selected_state = None
+
+    for side in decision_action_sides(row):
+        lower, upper = model._quantity_bounds(
+            row, available_capital, side)
+        if upper + 1e-12 < lower or upper <= 0:
+            continue
+        for horizon in model.action_horizons_ms:
+            horizon = int(horizon)
+            if horizon <= latency_ms:
+                continue
+            all_cells += 1
+            if horizon == selected_horizon:
+                same_cells += 1
+            kernel, kernel_state = action_execution_kernel(
+                row,
+                horizon_ms=horizon,
+                latency_ms=latency_ms,
+                side=side,
+                entry_cap=model.entry_cap,
+            )
+            if kernel is None:
+                missing_cells.append({
+                    "side": side,
+                    "exit_horizon_ms": horizon,
+                    "reason": kernel_state,
+                })
+                continue
+            observed_cells += 1
+            if horizon == selected_horizon:
+                same_observed_cells += 1
+
+            points = {float(lower), float(upper)}
+            for candidate in (
+                kernel.get("fill_capacity"),
+                kernel.get("exit_capacity"),
+                selected_q if (
+                    side == selected_side and horizon == selected_horizon
+                ) else None,
+            ):
+                point = _bounded_quantity_point(candidate, lower, upper)
+                if point is not None:
+                    points.add(point)
+
+            for q in sorted(points):
+                economics, state = economics_from_execution_kernel(
+                    kernel, q)
+                pnl = float(economics["cash_pnl"])
+                candidate = {
+                    "pnl": pnl,
+                    "action": "TRADE",
+                    "side": side,
+                    "exit_horizon_ms": horizon,
+                    "size": float(q),
+                    "target_state": state,
+                }
+                if (
+                    pnl > best_all["pnl"] + 1e-15
+                    or (
+                        abs(pnl - best_all["pnl"]) <= 1e-15
+                        and q < float(best_all.get("size") or 0.0)
+                    )
+                ):
+                    best_all = candidate
+                if horizon == selected_horizon and (
+                    pnl > best_same["pnl"] + 1e-15
+                    or (
+                        abs(pnl - best_same["pnl"]) <= 1e-15
+                        and q < float(best_same.get("size") or 0.0)
+                    )
+                ):
+                    best_same = candidate
+
+                if (
+                    side == selected_side
+                    and horizon == selected_horizon
+                    and abs(q - selected_q) <= 1e-10
+                ):
+                    selected_cash = pnl
+                    selected_state = state
+
+    if selected_cash is None:
+        economics, selected_state = realized_action_economics(
+            row,
+            size=selected_q,
+            horizon_ms=selected_horizon,
+            latency_ms=latency_ms,
+            side=selected_side,
+            entry_cap=model.entry_cap,
+            hard_order_notional=model.hard_order_notional,
+        )
+        if economics is not None:
+            selected_cash = float(economics["cash_pnl"])
+
+    same_complete = same_cells > 0 and same_observed_cells == same_cells
+    all_complete = all_cells > 0 and observed_cells == all_cells
+    same_regret = (
+        max(0.0, float(best_same["pnl"]) - float(selected_cash))
+        if same_complete and selected_cash is not None else None
+    )
+    all_regret = (
+        max(0.0, float(best_all["pnl"]) - float(selected_cash))
+        if all_complete and selected_cash is not None else None
+    )
+    selected_matches_same = (
+        same_regret is not None and same_regret <= 1e-12
+    )
+    selected_matches_all = (
+        all_regret is not None and all_regret <= 1e-12
+    )
+    return {
+        "state": (
+            "COMPLETE_ALL_HORIZONS"
+            if all_complete
+            else "COMPLETE_SELECTED_HORIZON_ONLY"
+            if same_complete
+            else "INCOMPLETE_SELECTED_HORIZON"
+        ),
+        "diagnostic_only": True,
+        "oracle_semantics": (
+            "EX_POST_EXECUTABLE_CASH_PNL;CONTINUOUS_Q_CRITICAL_POINTS;"
+            "NO_TRADE_BASELINE_ZERO;NO_USE_IN_POLICY_SELECTION"
+        ),
+        "selected_side": selected_side,
+        "selected_exit_horizon_ms": selected_horizon,
+        "selected_size": selected_q,
+        "selected_cash_pnl": selected_cash,
+        "selected_target_state": selected_state,
+        "same_horizon_complete": same_complete,
+        "all_horizons_complete": all_complete,
+        "feasible_side_horizon_cells": all_cells,
+        "observed_side_horizon_cells": observed_cells,
+        "missing_side_horizon_cells": missing_cells,
+        "same_horizon_oracle": best_same if same_complete else None,
+        "all_horizon_oracle": best_all if all_complete else None,
+        "same_horizon_cash_regret": same_regret,
+        "all_horizon_cash_regret": all_regret,
+        "selected_matches_same_horizon_oracle": selected_matches_same,
+        "selected_matches_all_horizon_oracle": selected_matches_all,
+        "same_horizon_oracle_prefers_no_trade": (
+            same_complete and best_same["action"] == "NO_TRADE"
+        ),
+        "all_horizon_oracle_prefers_no_trade": (
+            all_complete and best_all["action"] == "NO_TRADE"
+        ),
+        "best_observed_action": best_all,
+        "best_observed_action_is_full_oracle": all_complete,
+    }
+
+
 def evaluate_direct_action_policy(
     model,
     rows,
@@ -2401,6 +2607,16 @@ def evaluate_direct_action_policy(
         outcome["realized_pnl"] = (
             None if economics is None else float(economics["cash_pnl"]))
         outcome["realized_economics"] = economics
+        outcome["cash_pnl_policy_regret"] = (
+            cash_pnl_policy_regret_diagnostic(
+                model,
+                row,
+                selected,
+                latency_ms=latency_ms,
+                available_capital=available,
+                capital_budget=capital_budget,
+            )
+        )
         outcomes.append(outcome)
 
     for row in outcomes:
@@ -2471,6 +2687,70 @@ def numeric_distribution(values):
     }
 
 
+def summarize_policy_regret(outcomes):
+    rows = [
+        row.get("cash_pnl_policy_regret")
+        for row in outcomes
+        if row.get("action") == "TRADE"
+        and isinstance(row.get("cash_pnl_policy_regret"), dict)
+    ]
+    same = [
+        row for row in rows
+        if row.get("same_horizon_cash_regret") is not None
+    ]
+    all_complete = [
+        row for row in rows
+        if row.get("all_horizon_cash_regret") is not None
+    ]
+
+    def aggregate(items, key):
+        values = [float(item[key]) for item in items]
+        return {
+            "count": len(values),
+            "total": sum(values) if values else None,
+            "mean": sum(values) / len(values) if values else None,
+            "p50": _quantile(values, .50) if values else None,
+            "p90": _quantile(values, .90) if values else None,
+            "maximum": max(values) if values else None,
+        }
+
+    return {
+        "schema": SCHEMA + "_policy_regret_diagnostic_v1",
+        "diagnostic_only": True,
+        "selected_trade_diagnostics": len(rows),
+        "same_horizon_complete": len(same),
+        "all_horizons_complete": len(all_complete),
+        "same_horizon_cash_regret": aggregate(
+            same, "same_horizon_cash_regret"),
+        "all_horizon_cash_regret": aggregate(
+            all_complete, "all_horizon_cash_regret"),
+        "same_horizon_oracle_match_fraction": (
+            sum(
+                item.get("selected_matches_same_horizon_oracle") is True
+                for item in same
+            ) / len(same) if same else None
+        ),
+        "all_horizon_oracle_match_fraction": (
+            sum(
+                item.get("selected_matches_all_horizon_oracle") is True
+                for item in all_complete
+            ) / len(all_complete) if all_complete else None
+        ),
+        "same_horizon_oracle_no_trade_fraction": (
+            sum(
+                item.get("same_horizon_oracle_prefers_no_trade") is True
+                for item in same
+            ) / len(same) if same else None
+        ),
+        "all_horizon_oracle_no_trade_fraction": (
+            sum(
+                item.get("all_horizon_oracle_prefers_no_trade") is True
+                for item in all_complete
+            ) / len(all_complete) if all_complete else None
+        ),
+    }
+
+
 def summarize_direct_action(outcomes):
     trades = [row for row in outcomes if row.get("action") == "TRADE"]
     observed = [row for row in trades if row.get("realized_pnl") is not None]
@@ -2525,6 +2805,7 @@ def summarize_direct_action(outcomes):
         "selected_notional_distribution": numeric_distribution(
             row.get("notional") for row in trades),
         "observed_pnl_distribution": numeric_distribution(pnl),
+        "policy_regret_diagnostic": summarize_policy_regret(outcomes),
         "max_active_positions": max(
             (int(row.get("replay_max_active_positions") or 0) for row in outcomes),
             default=0),
@@ -2797,6 +3078,7 @@ def walk_forward_direct_action(
                         "realized_pnl", "target_state",
                         "censored_worst_case_pnl",
                         "censored_worst_case_loss_bound",
+                        "cash_pnl_policy_regret",
                     )
                 })
                 remaining -= 1
