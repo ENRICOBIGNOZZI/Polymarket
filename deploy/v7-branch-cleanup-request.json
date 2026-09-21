@@ -8,7 +8,10 @@
   ],
   "force_delete": [
     "codex/v7-trade-frequency-risk-sizing-v1",
-    "codex/v7-independent-collection-deploy-v1"
+    "codex/v7-independent-collection-deploy-v1",
+    "research/nightly-auto-promotion-20260921",
+    "research/nightly-cold-safe-shadow-activation-20260921",
+    "research/nightly-expanding-shadow-champion-20260921"
   ],
-  "request_id": "cleanup-superseded-exact-20260921T2004CEST"
+  "request_id": "cleanup-obsolete-nightly-20260921T2010CEST"
 }
