@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_direct_action_research_ssm_request_v1",
   "version": 1,
-  "request_id": "direct-action-continuous-full-history-20260921T1455CEST",
+  "request_id": "direct-action-kernel-linear-full-history-20260921T1530CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "minimum_wall_ns": 1789921800000000000,
   "folds": 3,
