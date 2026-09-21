@@ -94,9 +94,9 @@ def json_lines(path):
 
 
 def source_hash(path):
+    """Byte-exact immutable object identity; do not decompress large sources twice."""
     hasher = hashlib.sha256()
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rb") as stream:
+    with Path(path).open("rb") as stream:
         for block in iter(lambda: stream.read(1 << 20), b""):
             hasher.update(block)
     return hasher.hexdigest()
