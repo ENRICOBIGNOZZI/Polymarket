@@ -91,6 +91,40 @@ def test_multi_crypto_keeps_independent_live_telemetry_visible() -> None:
 
 
 
+
+def test_multi_crypto_exposes_pure_arb_operator_surface() -> None:
+    dashboard = json.loads((DASHBOARDS / "polymarket-v7-multi-crypto.json").read_text(encoding="utf-8"))
+    by_title = {panel.get("title"): panel for panel in panels(dashboard)}
+    required = {
+        "PURE ARBITRAGE — LIVE PAPER / 30 crypto contexts",
+        "PAPER Locked PnL (pre-gas)",
+        "Arb Cycles",
+        "Best Current Edge",
+        "Receive → Decision",
+        "Fee-ready Contexts",
+        "PURE ARB — EXECUTION QUALITY",
+        "Active Arb Gaps",
+        "Locked PnL / hour (5m rate)",
+        "Arb Cycles / min (5m rate)",
+        "Max Receive → Decision",
+        "Max Executable L1 Shares",
+        "Locked PAPER PnL by Asset / Horizon / Direction",
+        "Current Fee-adjusted Arb Edge (bps)",
+    }
+    assert required <= set(by_title)
+    serialized = json.dumps(dashboard, sort_keys=True)
+    for metric in (
+        "polymarket_pure_arb_up",
+        "polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total",
+        "polymarket_pure_arb_cycles_total",
+        "polymarket_pure_arb_context_active",
+        "polymarket_pure_arb_context_last_edge_per_share",
+        "polymarket_pure_arb_context_last_executable_shares_l1",
+        "polymarket_pure_arb_max_receive_to_decision_ns",
+    ):
+        assert metric in serialized
+
+
 def test_provisioning_names_and_manifest_are_crypto_only() -> None:
     manifest = json.loads((ROOT / "monitoring/v7_monitoring_manifest.json").read_text(encoding="utf-8"))
     assert manifest["grafana"]["crypto_only"] is True
