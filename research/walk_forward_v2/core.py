@@ -1479,7 +1479,7 @@ def arrival(row, latency_ms):
 
 
 def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, entry_cap=.75, shares=5.0,
-               execution_reserve=.005, ideal="REALISTIC", valuation_mode="SETTLEMENT",
+               target_notional_usd=None, execution_reserve=.005, ideal="REALISTIC", valuation_mode="SETTLEMENT",
                markout_horizon_ms=250, market_available=True, capital_available=True,
                minimum_tte_ns=30_000_000_000, maximum_tte_ns=120_000_000_000,
                require_full_visible_depth=False):
@@ -1533,14 +1533,20 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
     funnel["reserve_adjusted_edge_positive"] = after_reserve > 0
     funnel["edge_threshold"] = after_reserve >= edge_threshold
     funnel["price_cap"] = row["ask"] <= entry_cap
+    decision_limit = min(entry_cap, row["ask"] + 2 * row["tick"])
+    if target_notional_usd is not None:
+        budget = float(target_notional_usd)
+        requested_target = budget / decision_limit if budget > 0 and decision_limit > 0 else 0.0
+    else:
+        requested_target = shares
     if require_full_visible_depth:
-        requested = shares
+        requested = requested_target
         funnel["sufficient_depth"] = (
-            row["quantity"] + 1e-12 >= shares
-            and row["minimum"] <= shares + 1e-12
+            row["quantity"] + 1e-12 >= requested_target
+            and row["minimum"] <= requested_target + 1e-12
         )
     else:
-        requested = min(shares, row["quantity"])
+        requested = min(requested_target, row["quantity"])
         funnel["sufficient_depth"] = requested >= row["minimum"]
     funnel["risk_size"] = funnel["sufficient_depth"]
     funnel["capital_admitted"] = funnel["risk_size"] and capital_available
@@ -1552,7 +1558,7 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         return outcome
     funnel["simulated_order"] = True
     outcome["requested"] = requested
-    outcome["reserved_cost"] = min(3.75, requested * entry_cap)
+    outcome["reserved_cost"] = requested * decision_limit
     if ideal == "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND":
         book = {"ask": row["ask"], "bid": row["bid"], "quantity": requested, "time_ns": row["decision_ns"]}
     else:
@@ -1598,7 +1604,7 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
 
 def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
                   edge_threshold=.005, entry_cap=.75, shares=5.0,
-                  execution_reserve=.005, ideal="REALISTIC",
+                  target_notional_usd=None, execution_reserve=.005, ideal="REALISTIC",
                   markout_horizon_ms=250, capital_budget=1000.0,
                   assume_sorted=False, minimum_tte_ns=30_000_000_000,
                   maximum_tte_ns=120_000_000_000,
@@ -1619,10 +1625,15 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
         row = event["row"]
         prediction, repricing = selector(event)
         available = row["market_id"] not in used_markets
-        capital_available = reserved + min(3.75, shares * entry_cap) <= capital_budget + 1e-12
+        requested_reservation = (
+            float(target_notional_usd) if target_notional_usd is not None
+            else shares * entry_cap
+        )
+        capital_available = reserved + requested_reservation <= capital_budget + 1e-12
         outcome = replay_one(
             row, prediction, repricing, latency_ms=latency_ms,
             edge_threshold=edge_threshold, entry_cap=entry_cap, shares=shares,
+            target_notional_usd=target_notional_usd,
             execution_reserve=execution_reserve, ideal=ideal,
             valuation_mode=valuation_mode, markout_horizon_ms=markout_horizon_ms,
             market_available=available, capital_available=capital_available,
@@ -1673,7 +1684,7 @@ def _stream_group_summary(opportunities, fill_outcomes, field):
 
 def replay_policy_summary(evaluations, selector, *, latency_ms, valuation_mode,
                           edge_threshold=.005, entry_cap=.75, shares=5.0,
-                          execution_reserve=.005, ideal="REALISTIC",
+                          target_notional_usd=None, execution_reserve=.005, ideal="REALISTIC",
                           markout_horizon_ms=250, capital_budget=1000.0,
                           assume_sorted=False, minimum_tte_ns=30_000_000_000,
                           maximum_tte_ns=120_000_000_000,
@@ -1711,10 +1722,15 @@ def replay_policy_summary(evaluations, selector, *, latency_ms, valuation_mode,
             continue
 
         available = row["market_id"] not in used_markets
-        capital_available = reserved + min(3.75, shares * entry_cap) <= capital_budget + 1e-12
+        requested_reservation = (
+            float(target_notional_usd) if target_notional_usd is not None
+            else shares * entry_cap
+        )
+        capital_available = reserved + requested_reservation <= capital_budget + 1e-12
         outcome = replay_one(
             row, prediction, repricing, latency_ms=latency_ms,
             edge_threshold=edge_threshold, entry_cap=entry_cap, shares=shares,
+            target_notional_usd=target_notional_usd,
             execution_reserve=execution_reserve, ideal=ideal,
             valuation_mode=valuation_mode, markout_horizon_ms=markout_horizon_ms,
             market_available=available, capital_available=capital_available,
@@ -2157,6 +2173,49 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
                     "require_full_visible_depth": True,
                 },
             }
+
+    # Prespecified PAPER capital-based sizing sensitivity. This changes only
+    # order notional, never model coefficients, thresholds or risk authority.
+    result["capital_based_sizing_sensitivity"] = {}
+    context_budget_usd = 10_000.0 / 30.0
+    notional_grid = (10.0, 25.0, 50.0, context_budget_usd * .25)
+    for family in ("POOLED", "ASSET_SPECIFIC"):
+        family_result = {}
+        for horizon in (500, 1000, 2000):
+            hkey = str(horizon)
+            if family == "POOLED":
+                selector = lambda event, h=hkey: (
+                    event.get("markout_predictions", {}).get(h), None)
+            else:
+                selector = lambda event, h=hkey: (
+                    event.get("asset_markout_predictions", {}).get(h), None)
+            horizon_result = {}
+            for latency in (25, 50, 100):
+                cells = {}
+                for budget in notional_grid:
+                    metrics = replay_policy_summary(
+                        ordered, selector,
+                        latency_ms=latency,
+                        valuation_mode="EXECUTABLE_MARKOUT",
+                        markout_horizon_ms=horizon,
+                        assume_sorted=True,
+                        entry_cap=.80,
+                        target_notional_usd=budget,
+                        minimum_tte_ns=105_000_000_000,
+                        maximum_tte_ns=120_000_000_000,
+                        require_full_visible_depth=True,
+                        capital_budget=10_000.0,
+                    )
+                    cells[f"{budget:.6f}"] = {
+                        "state": "READY",
+                        "target_notional_usd": budget,
+                        "context_budget_usd": context_budget_usd,
+                        "context_budget_fraction": budget / context_budget_usd,
+                        **metrics,
+                    }
+                horizon_result[str(latency)] = cells
+            family_result[hkey] = horizon_result
+        result["capital_based_sizing_sensitivity"][family] = family_result
 
     # Backward-compatible latency chart uses a declared reference horizon only.
     result["latency"] = result["horizon_latency"]["500"]
