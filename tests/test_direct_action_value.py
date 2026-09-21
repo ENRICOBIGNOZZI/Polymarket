@@ -197,12 +197,14 @@ def test_model_receipt_explicitly_disclaims_mean_covariance_and_l2_impact():
     assert receipt["calibration_holdouts_disjoint"] is True
     assert (
         receipt["action_calibration_market_count"]
-        + receipt["selection_calibration_market_count"]
         == receipt["calibration_market_count"]
     )
+    assert receipt["selection_calibration_mode"] == "PREQUENTIAL"
+    assert receipt["selection_scores_oos_when_generated"] is True
+    assert receipt["selection_score_blocks_may_enter_final_mean_fit"] is True
     assert receipt["selection_calibration_state"] in (
-        "TEMPORAL_MARKET_BLOCK_POST_ARGMAX_ONE_SIDED",
-        "INSUFFICIENT_POST_ARGMAX_CALIBRATION",
+        "PREQUENTIAL_SELECTED_POLICY_ONE_SIDED",
+        "INSUFFICIENT_PREQUENTIAL_SELECTION_CALIBRATION",
     )
 
 
@@ -338,8 +340,11 @@ def test_direct_action_uses_all_precalibration_states_with_p_squared_memory():
     assert receipt["training_states_used"] == 96
     assert receipt["training_markets_used"] == 96
     assert receipt["calibration_market_count"] == 24
-    assert receipt["action_calibration_market_count"] == 12
-    assert receipt["selection_calibration_market_count"] == 12
+    assert receipt["action_calibration_market_count"] == 24
+    assert receipt["selection_calibration_mode"] == "PREQUENTIAL"
+    assert receipt["prequential_calibration_blocks"] == 2
+    assert receipt["selection_prequential_score_markets"] >= 0
+    assert receipt["selection_prequential_observed_markets"] >= 0
     assert receipt["calibration_holdouts_disjoint"] is True
     assert receipt["calibration_holdout_excluded_from_mean_fit"] is True
     assert receipt["training_state_cap"] is None
@@ -1160,7 +1165,7 @@ def test_post_argmax_calibration_is_one_sided_and_can_flip_trade_to_no_trade():
     assert after["action"] == "NO_TRADE"
 
 
-def test_post_argmax_calibration_holdout_is_disjoint_from_action_conformal():
+def test_prequential_post_argmax_calibration_keeps_final20_for_action_conformal():
     rows = [
         row(
             "m" + str(index + 7000),
@@ -1182,14 +1187,27 @@ def test_post_argmax_calibration_holdout_is_disjoint_from_action_conformal():
     assert receipt["fit_market_count"] == 60
     assert receipt["scale_market_count"] == 20
     assert receipt["calibration_market_count"] == 20
-    assert receipt["action_calibration_market_count"] == 10
-    assert receipt["selection_calibration_market_count"] == 10
+    assert receipt["action_calibration_market_count"] == 20
+    assert receipt["selection_calibration_mode"] == "PREQUENTIAL"
+    assert receipt["prequential_calibration_blocks"] == 2
     assert receipt["calibration_holdouts_disjoint"] is True
+    assert receipt["selection_scores_oos_when_generated"] is True
+    assert receipt["selection_score_blocks_may_enter_final_mean_fit"] is True
     assert receipt["calibration_semantics"] == (
-        "MEAN_FIT_60_20_PRETAIL;"
-        "ACTION_CONFORMAL_FIRST_HALF_OF_FINAL_20;"
-        "POST_ARGMAX_CALIBRATION_SECOND_HALF_OF_FINAL_20"
+        "MEAN_FIT_FIRST_80_PERCENT;"
+        "ACTION_CONFORMAL_FINAL_20_PERCENT;"
+        "POST_ARGMAX_OPTIMISM_PREQUENTIAL_ROLLING_OOS_WITHIN_FIRST_80"
     )
+    blocks = (receipt["selection_calibration"] or {}).get("blocks") or []
+    assert len(blocks) <= 2
+    for block in blocks:
+        assert block["train_markets"] > 0
+        assert block["evaluation_markets"] > 0
+        assert block["clone_calibration_state"] in (
+            "TEMPORAL_MARKET_BLOCK_SPLIT_CONFORMAL",
+            "INSUFFICIENT_CALIBRATION_ACTION_TARGETS",
+            "INSUFFICIENT_MARKET_BLOCKS",
+        )
 
 
 
@@ -1231,3 +1249,47 @@ def test_robust_pareto_frontier_uses_lower_bound_without_promoting_censored_poli
     # The ordinary promotion-grade Pareto remains empty because every policy
     # still has censored selected trades.
     assert pareto_frontier(entries) == []
+
+
+
+def test_prequential_clone_disables_recursive_selection_calibration():
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        prequential_calibration_blocks=2,
+    )
+    clone = model._prequential_clone()
+    assert clone.selection_calibration_mode == "OFF"
+    assert clone.prequential_calibration_blocks == 2
+
+
+def test_prequential_selection_scores_are_generated_on_later_market_blocks():
+    rows = [
+        row(
+            "m" + str(index + 8000),
+            signal=2.0 if index % 3 else -2.0,
+            exit_bid=.56 if index % 3 else .44,
+            depth=20.0,
+        )
+        for index in range(120)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        streaming_batch_size=32,
+        prequential_calibration_blocks=2,
+    ).fit(rows)
+    calibration = model.training_receipt["selection_calibration"]
+    blocks = calibration.get("blocks") or []
+    assert len(blocks) <= 2
+    if len(blocks) == 2:
+        assert blocks[1]["train_markets"] > blocks[0]["train_markets"]
+    assert model.training_receipt["selection_scores_oos_when_generated"] is True
+    assert model.training_receipt["selection_score_blocks_may_enter_final_mean_fit"] is True
+    assert calibration["semantics"] == (
+        "ROLLING_MARKET_BLOCK_OOS_SCORES;"
+        "FINAL_MODEL_MAY_LATER_REFIT_ON_HISTORICAL_SCORE_BLOCKS;"
+        "NOT_A_FINAL_MODEL_CONFORMAL_COVERAGE_CLAIM"
+    )

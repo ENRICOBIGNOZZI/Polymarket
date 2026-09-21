@@ -844,6 +844,8 @@ class DirectActionValueModel:
         max_sizes_per_state=3,
         streaming_batch_size=4096,
         friction_policy=DEFAULT_FRICTION_POLICY,
+        selection_calibration_mode="PREQUENTIAL",
+        prequential_calibration_blocks=2,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -854,8 +856,14 @@ class DirectActionValueModel:
         self.calibration_level = float(calibration_level)
         self.max_sizes_per_state = int(max_sizes_per_state)
         self.streaming_batch_size = int(streaming_batch_size)
+        self.selection_calibration_mode = str(selection_calibration_mode).upper()
+        self.prequential_calibration_blocks = int(prequential_calibration_blocks)
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
+        if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
+            raise ValueError("selection calibration mode must be PREQUENTIAL or OFF")
+        if self.prequential_calibration_blocks <= 0:
+            raise ValueError("positive prequential calibration block count required")
         self.friction_policy = friction_policy.validated()
         self.fitted = False
 
@@ -1048,7 +1056,171 @@ class DirectActionValueModel:
         return sorted(first, key=lambda market: (first[market], market))
 
 
-    def _calibrate_selected_policy(self, rows, calibration_markets):
+    def _prequential_clone(self):
+        return DirectActionValueModel(
+            size_grid=self.size_grid,
+            action_horizons_ms=self.action_horizons_ms,
+            train_latencies_ms=self.train_latencies_ms,
+            entry_cap=self.entry_cap,
+            hard_order_notional=self.hard_order_notional,
+            ridge=self.ridge,
+            calibration_level=self.calibration_level,
+            max_sizes_per_state=self.max_sizes_per_state,
+            streaming_batch_size=self.streaming_batch_size,
+            friction_policy=self.friction_policy,
+            selection_calibration_mode="OFF",
+            prequential_calibration_blocks=self.prequential_calibration_blocks,
+        )
+
+    def _prequential_selected_policy_calibration(
+        self, rows, chronological_markets,
+    ):
+        """Aggregate honest post-selection errors from rolling OOS blocks.
+
+        Each evaluation block is scored by a model fit only on earlier markets.
+        The final deployment mean may later train on these historical blocks, so
+        this is explicitly prequential calibration, not a conformal coverage
+        claim for the final model.
+        """
+        markets = list(chronological_markets)
+        minimum_warmup = 15
+        if len(markets) < minimum_warmup + self.prequential_calibration_blocks:
+            return {
+                "state": "INSUFFICIENT_PREQUENTIAL_SELECTION_CALIBRATION",
+                "penalty": 0.0,
+                "selected_markets": 0,
+                "observed_selected_markets": 0,
+                "censored_selected_markets": 0,
+                "observed_fraction": 0.0,
+                "score_markets": 0,
+                "blocks": [],
+                "failed_blocks": [],
+                "calibration_level": self.calibration_level,
+                "minimum_observed_markets": 10,
+                "minimum_observed_fraction": 0.50,
+            }
+
+        warmup_end = max(
+            minimum_warmup,
+            int(len(markets) * 0.50),
+        )
+        warmup_end = min(
+            warmup_end,
+            len(markets) - self.prequential_calibration_blocks,
+        )
+        remaining = len(markets) - warmup_end
+        blocks = max(1, min(self.prequential_calibration_blocks, remaining))
+        cutpoints = [
+            warmup_end + (remaining * index // blocks)
+            for index in range(blocks + 1)
+        ]
+
+        all_scores = []
+        selected = observed = censored = 0
+        predicted_sum = realized_sum = 0.0
+        receipts = []
+        failed = []
+
+        for block_index in range(blocks):
+            start, end = cutpoints[block_index], cutpoints[block_index + 1]
+            eval_markets = markets[start:end]
+            if not eval_markets:
+                continue
+            train_markets = set(markets[:start])
+            train_rows = [
+                row for row in rows
+                if str(row.get("market_id")) in train_markets
+            ]
+            try:
+                clone = self._prequential_clone().fit(train_rows)
+            except ValueError as exc:
+                failed.append({
+                    "block": block_index + 1,
+                    "reason": str(exc),
+                    "train_markets": len(train_markets),
+                    "evaluation_markets": len(eval_markets),
+                })
+                continue
+
+            calibration = clone._calibrate_selected_policy(
+                rows,
+                set(eval_markets),
+                include_score_values=True,
+            )
+            scores = list(calibration.get("score_values") or [])
+            all_scores.extend(scores)
+            selected += int(calibration.get("selected_markets") or 0)
+            block_observed = int(
+                calibration.get("observed_selected_markets") or 0)
+            observed += block_observed
+            censored += int(
+                calibration.get("censored_selected_markets") or 0)
+            predicted = calibration.get("predicted_lower_cash_mean")
+            realized = calibration.get("realized_cash_mean")
+            if block_observed and predicted is not None and realized is not None:
+                predicted_sum += float(predicted) * block_observed
+                realized_sum += float(realized) * block_observed
+            receipts.append({
+                "block": block_index + 1,
+                "train_markets": len(train_markets),
+                "evaluation_markets": len(eval_markets),
+                "selected_markets": int(
+                    calibration.get("selected_markets") or 0),
+                "observed_selected_markets": block_observed,
+                "censored_selected_markets": int(
+                    calibration.get("censored_selected_markets") or 0),
+                "score_markets": len(scores),
+                "clone_calibration_state": clone.training_receipt.get(
+                    "calibration_state"),
+                "clone_calibration_multiplier": clone.training_receipt.get(
+                    "calibration_multiplier"),
+            })
+
+        observed_fraction = observed / selected if selected else 0.0
+        penalty = _quantile(all_scores, self.calibration_level)
+        ready = (
+            penalty is not None
+            and finite(penalty)
+            and observed >= 10
+            and observed_fraction >= 0.50
+        )
+        return {
+            "state": (
+                "PREQUENTIAL_SELECTED_POLICY_ONE_SIDED"
+                if ready
+                else "INSUFFICIENT_PREQUENTIAL_SELECTION_CALIBRATION"
+            ),
+            "penalty": float(max(0.0, penalty)) if ready else 0.0,
+            "selected_markets": selected,
+            "observed_selected_markets": observed,
+            "censored_selected_markets": censored,
+            "observed_fraction": observed_fraction,
+            "score_markets": len(all_scores),
+            "blocks": receipts,
+            "failed_blocks": failed,
+            "predicted_lower_cash_mean": (
+                predicted_sum / observed if observed else None
+            ),
+            "realized_cash_mean": (
+                realized_sum / observed if observed else None
+            ),
+            "mean_optimism_after_action_conformal": (
+                (predicted_sum - realized_sum) / observed
+                if observed else None
+            ),
+            "calibration_level": self.calibration_level,
+            "minimum_observed_markets": 10,
+            "minimum_observed_fraction": 0.50,
+            "semantics": (
+                "ROLLING_MARKET_BLOCK_OOS_SCORES;"
+                "FINAL_MODEL_MAY_LATER_REFIT_ON_HISTORICAL_SCORE_BLOCKS;"
+                "NOT_A_FINAL_MODEL_CONFORMAL_COVERAGE_CLAIM"
+            ),
+        }
+
+    def _calibrate_selected_policy(
+        self, rows, calibration_markets, *, include_score_values=False,
+    ):
         """Calibrate optimism after the continuous action argmax.
 
         This holdout is disjoint from mean fitting and from the action-level
@@ -1158,6 +1330,8 @@ class DirectActionValueModel:
             "calibration_level": self.calibration_level,
             "minimum_observed_markets": 10,
             "minimum_observed_fraction": 0.50,
+            **({"score_values": sorted(scores.values())}
+               if include_score_values else {}),
         }
 
     def fit(self, rows):
@@ -1177,7 +1351,11 @@ class DirectActionValueModel:
         self.calibration_multiplier = 1.5
         self.selection_optimism_penalty = 0.0
         self.selection_calibration = {
-            "state": "INSUFFICIENT_POST_ARGMAX_CALIBRATION",
+            "state": (
+                "DISABLED"
+                if self.selection_calibration_mode == "OFF"
+                else "INSUFFICIENT_PREQUENTIAL_SELECTION_CALIBRATION"
+            ),
             "penalty": 0.0,
             "selected_markets": 0,
             "observed_selected_markets": 0,
@@ -1196,28 +1374,20 @@ class DirectActionValueModel:
         calibration_block_scores = 0
 
         # Chronological split:
-        # 60% mean seed, 20% residual scale, final 20% held out from mean.
-        # The held-out tail is split again: first half calibrates action-level
-        # conformal uncertainty; second half calibrates post-argmax optimism.
+        # 60% mean seed, 20% residual scale, final 20% held out from mean for
+        # action-level split conformal. Post-argmax optimism is estimated
+        # prequentially on rolling OOS blocks inside the earlier 80%.
         fit_markets = scale_markets = calibration_markets = set()
-        action_calibration_markets = selection_calibration_markets = set()
         mean_fit_markets = set(markets)
+        mean_fit_sequence = list(markets)
         if len(markets) >= 15:
             fit_end = max(1, int(len(markets) * 0.60))
             scale_end = max(fit_end + 1, int(len(markets) * 0.80))
             scale_end = min(scale_end, len(markets) - 1)
             fit_markets = set(markets[:fit_end])
             scale_markets = set(markets[fit_end:scale_end])
-            calibration_sequence = list(markets[scale_end:])
-            calibration_markets = set(calibration_sequence)
-            if len(calibration_sequence) >= 2:
-                split = max(1, len(calibration_sequence) // 2)
-                action_calibration_markets = set(
-                    calibration_sequence[:split])
-                selection_calibration_markets = set(
-                    calibration_sequence[split:])
-            else:
-                action_calibration_markets = set(calibration_sequence)
+            calibration_markets = set(markets[scale_end:])
+            mean_fit_sequence = list(markets[:scale_end])
 
         target_states = Counter()
         if fit_markets and scale_markets and calibration_markets:
@@ -1243,10 +1413,9 @@ class DirectActionValueModel:
                     factory(mean_fit_markets, target_states),
                     lambda action: action["target"])
 
-            # Action-level split conformal uses only the first half of the
-            # untouched chronological tail.
+            # Action-level split conformal uses the full untouched final 20%.
             block_scores = {}
-            for action in factory(action_calibration_markets)():
+            for action in factory(calibration_markets)():
                 predicted = deployment_mean.predict(action)
                 scale = max(
                     self.uncertainty_floor,
@@ -1264,12 +1433,14 @@ class DirectActionValueModel:
             else:
                 calibration_state = "INSUFFICIENT_CALIBRATION_ACTION_TARGETS"
 
-            # Freeze all fitted objects before evaluating the post-argmax tail.
+            # Freeze fitted objects before prequential policy calibration.
             self.mean_model = deployment_mean
             self.fitted = True
-            if selection_calibration_markets:
-                self.selection_calibration = self._calibrate_selected_policy(
-                    rows, selection_calibration_markets)
+            if self.selection_calibration_mode == "PREQUENTIAL":
+                self.selection_calibration = (
+                    self._prequential_selected_policy_calibration(
+                        rows, mean_fit_sequence)
+                )
                 self.selection_optimism_penalty = float(
                     self.selection_calibration["penalty"])
         else:
@@ -1332,7 +1503,7 @@ class DirectActionValueModel:
                 "uncertainty_aversion": self.friction_policy.uncertainty_aversion,
             },
             "ridge": self.ridge,
-            "uncertainty": "STREAMING_ABSOLUTE_RESIDUAL_SCALE_WITH_DISJOINT_ACTION_CONFORMAL_AND_POST_ARGMAX_HOLDOUTS",
+            "uncertainty": "STREAMING_ABSOLUTE_RESIDUAL_SCALE_WITH_FINAL20_ACTION_CONFORMAL_AND_PREQUENTIAL_POST_ARGMAX_CALIBRATION",
             "calibration_level": self.calibration_level,
             "calibration_multiplier": self.calibration_multiplier,
             "uncertainty_floor": self.uncertainty_floor,
@@ -1347,19 +1518,25 @@ class DirectActionValueModel:
             "fit_market_count": len(fit_markets),
             "scale_market_count": len(scale_markets),
             "calibration_market_count": len(calibration_markets),
-            "action_calibration_market_count": len(
-                action_calibration_markets),
-            "selection_calibration_market_count": len(
-                selection_calibration_markets),
+            "action_calibration_market_count": len(calibration_markets),
+            "selection_calibration_mode": self.selection_calibration_mode,
+            "prequential_calibration_blocks": self.prequential_calibration_blocks,
+            "selection_prequential_score_markets": int(
+                self.selection_calibration.get("score_markets") or 0),
+            "selection_prequential_observed_markets": int(
+                self.selection_calibration.get(
+                    "observed_selected_markets") or 0),
             "calibration_block_scores": calibration_block_scores,
             "calibration_holdout_excluded_from_mean_fit": bool(
                 calibration_markets),
-            "calibration_holdouts_disjoint": not bool(
-                action_calibration_markets & selection_calibration_markets),
+            "calibration_holdouts_disjoint": True,
+            "selection_scores_oos_when_generated": True,
+            "selection_score_blocks_may_enter_final_mean_fit": (
+                self.selection_calibration_mode == "PREQUENTIAL"),
             "calibration_semantics": (
-                "MEAN_FIT_60_20_PRETAIL;"
-                "ACTION_CONFORMAL_FIRST_HALF_OF_FINAL_20;"
-                "POST_ARGMAX_CALIBRATION_SECOND_HALF_OF_FINAL_20"
+                "MEAN_FIT_FIRST_80_PERCENT;"
+                "ACTION_CONFORMAL_FINAL_20_PERCENT;"
+                "POST_ARGMAX_OPTIMISM_PREQUENTIAL_ROLLING_OOS_WITHIN_FIRST_80"
             ),
             "feature_names": list(self.model_feature_names),
             "capacity_scope": "L1_ONLY_NO_COUNTERFACTUAL_IMPACT_BEYOND_VISIBLE_DEPTH",
