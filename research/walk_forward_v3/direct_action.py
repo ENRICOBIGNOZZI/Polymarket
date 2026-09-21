@@ -891,6 +891,9 @@ class DirectActionValueModel:
         partial_pooling_enabled=True,
         partial_pooling_penalty_multiplier=4.0,
         minimum_bilateral_opposite_side_markets=0,
+        support_heads_enabled=True,
+        minimum_evidence_support_probability=None,
+        minimum_full_execution_probability=None,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -917,6 +920,27 @@ class DirectActionValueModel:
             raise ValueError(
                 "minimum bilateral opposite-side markets must be nonnegative")
         self.bilateral_support_markets = 0
+        self.support_heads_enabled = bool(support_heads_enabled)
+        self.minimum_evidence_support_probability = (
+            None if minimum_evidence_support_probability is None
+            else float(minimum_evidence_support_probability)
+        )
+        self.minimum_full_execution_probability = (
+            None if minimum_full_execution_probability is None
+            else float(minimum_full_execution_probability)
+        )
+        for value, name in (
+            (self.minimum_evidence_support_probability,
+             "minimum evidence support probability"),
+            (self.minimum_full_execution_probability,
+             "minimum full execution probability"),
+        ):
+            if value is not None and (
+                not finite(value) or value < 0.0 or value > 1.0
+            ):
+                raise ValueError(name + " must be finite in [0,1]")
+        self.evidence_support_model = None
+        self.full_execution_model = None
         if (
             not finite(self.partial_pooling_penalty_multiplier)
             or self.partial_pooling_penalty_multiplier < 1.0
@@ -1201,6 +1225,72 @@ class DirectActionValueModel:
                             yield action
 
 
+    def _iter_support_examples(self, rows, *, markets=None):
+        """Decision-time actions labelled by evidence and full round-trip support."""
+        market_filter = set(markets) if markets is not None else None
+        for row in rows:
+            if market_filter is not None and str(row["market_id"]) not in market_filter:
+                continue
+            if not _valid_state(row):
+                continue
+            for side in decision_action_sides(row):
+                side_state = decision_side_state(row, side)
+                if (
+                    side_state is None
+                    or float(side_state["ask"]) > self.entry_cap + 1e-12
+                ):
+                    continue
+                sizes = candidate_sizes(
+                    row,
+                    side=side,
+                    size_grid=self.size_grid,
+                    hard_order_notional=self.hard_order_notional,
+                    max_sizes=self.max_sizes_per_state,
+                )
+                if not sizes:
+                    continue
+                for latency in self.train_latencies_ms:
+                    for horizon in self.action_horizons_ms:
+                        if horizon <= latency:
+                            continue
+                        kernel, _ = action_execution_kernel(
+                            row,
+                            horizon_ms=horizon,
+                            latency_ms=latency,
+                            side=side,
+                            entry_cap=self.entry_cap,
+                        )
+                        evidence_observed = 1.0 if kernel is not None else 0.0
+                        for size in sizes:
+                            action = self._action_record(
+                                row,
+                                size=size,
+                                horizon_ms=horizon,
+                                latency_ms=latency,
+                                side=side,
+                            )
+                            full_round_trip = 0.0
+                            if kernel is not None:
+                                economics, _ = economics_from_execution_kernel(
+                                    kernel, size)
+                                full_round_trip = 1.0 if (
+                                    float(economics.get("filled") or 0.0)
+                                        + 1e-12 >= float(size)
+                                    and bool(
+                                        economics.get(
+                                            "fully_exitable_at_horizon"))
+                                ) else 0.0
+                            action["evidence_support_target"] = evidence_observed
+                            action["full_execution_target"] = full_round_trip
+                            yield action
+
+    @staticmethod
+    def _probability_prediction(model, action):
+        if model is None:
+            return None
+        value = float(model.predict(action))
+        return min(1.0, max(0.0, value))
+
     @staticmethod
     def _market_order(rows):
         first = {}
@@ -1234,6 +1324,11 @@ class DirectActionValueModel:
                 self.partial_pooling_penalty_multiplier),
             minimum_bilateral_opposite_side_markets=(
                 self.minimum_bilateral_opposite_side_markets),
+            support_heads_enabled=self.support_heads_enabled,
+            minimum_evidence_support_probability=(
+                self.minimum_evidence_support_probability),
+            minimum_full_execution_probability=(
+                self.minimum_full_execution_probability),
         )
 
     def _prequential_selected_policy_calibration(
@@ -1669,6 +1764,27 @@ class DirectActionValueModel:
             else:
                 calibration_state = "INSUFFICIENT_CALIBRATION_ACTION_TARGETS"
 
+            support_head_state = "DISABLED"
+            if self.support_heads_enabled:
+                try:
+                    self.evidence_support_model = self._streaming_ridge().fit_factory(
+                        lambda: self._iter_support_examples(
+                            rows, markets=mean_fit_markets),
+                        lambda action: action["evidence_support_target"],
+                    )
+                    self.full_execution_model = self._streaming_ridge().fit_factory(
+                        lambda: self._iter_support_examples(
+                            rows, markets=mean_fit_markets),
+                        lambda action: action["full_execution_target"],
+                    )
+                    support_head_state = "READY"
+                except ValueError as exc:
+                    if str(exc) != "streaming ridge received zero rows":
+                        raise
+                    self.evidence_support_model = None
+                    self.full_execution_model = None
+                    support_head_state = "INSUFFICIENT_SUPPORT_EXAMPLES"
+
             # Freeze fitted objects before prequential policy calibration.
             self.mean_model = deployment_mean
             self.fitted = True
@@ -1687,6 +1803,26 @@ class DirectActionValueModel:
         if self.scale_model is None:
             self.uncertainty_floor = max(
                 1e-6, deployment_mean.target_std)
+
+        if not (fit_markets and scale_markets and calibration_markets):
+            support_head_state = "DISABLED"
+            if self.support_heads_enabled:
+                try:
+                    self.evidence_support_model = self._streaming_ridge().fit_factory(
+                        lambda: self._iter_support_examples(
+                            rows, markets=mean_fit_markets),
+                        lambda action: action["evidence_support_target"],
+                    )
+                    self.full_execution_model = self._streaming_ridge().fit_factory(
+                        lambda: self._iter_support_examples(
+                            rows, markets=mean_fit_markets),
+                        lambda action: action["full_execution_target"],
+                    )
+                    support_head_state = "READY"
+                except ValueError as exc:
+                    if str(exc) != "streaming ridge received zero rows":
+                        raise
+                    support_head_state = "INSUFFICIENT_SUPPORT_EXAMPLES"
 
         self.mean_model = deployment_mean
         support_rows = [
