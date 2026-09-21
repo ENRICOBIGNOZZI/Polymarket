@@ -1571,9 +1571,16 @@ def test_side_specific_support_gate_rejects_unsupported_bilateral_leg():
     model.fitted = True
 
     class FlatModel:
+        def __init__(self, names):
+            import numpy as np
+            self.names = tuple(names)
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = 1.0
+
         def predict(self, record):
             return 1.0
-    model.mean_model = FlatModel()
+    model.mean_model = FlatModel(model.model_feature_names)
     model.uncertainty_floor = 0.0
     model.calibration_multiplier = 1.0
     model.selection_optimism_penalty = 0.0
@@ -1599,9 +1606,16 @@ def test_side_specific_support_gate_fails_closed_when_all_bilateral_legs_unsuppo
     model.fitted = True
 
     class FlatModel:
+        def __init__(self, names):
+            import numpy as np
+            self.names = tuple(names)
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = 1.0
+
         def predict(self, record):
             return 1.0
-    model.mean_model = FlatModel()
+    model.mean_model = FlatModel(model.model_feature_names)
     model.scale_model = None
     model.uncertainty_floor = 0.0
     model.calibration_multiplier = 1.0
