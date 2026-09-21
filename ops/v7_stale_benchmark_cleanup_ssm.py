@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Terminate one stale decomposed benchmark generation on London, and nothing else."""
+"""Terminate one exact stale research generation on London, and nothing else."""
 from __future__ import annotations
 import argparse,json,re
 from pathlib import Path
 from v7_london_ssm_deploy import REGION, run
 
 INSTANCE_RE=re.compile(r"^i-[0-9a-f]+$")
-PREFIX_RE=re.compile(r"^/tmp/polymarket-decomposed-benchmark-[0-9a-f]{12}$")
+PREFIX_RE=re.compile(
+    r"^/tmp/(?:polymarket-decomposed-benchmark|polymarket-simple-edge)-[0-9a-f]{12}$"
+)
 
 def main()->int:
     p=argparse.ArgumentParser()
