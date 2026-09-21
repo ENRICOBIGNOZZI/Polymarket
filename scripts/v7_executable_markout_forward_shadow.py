@@ -7,6 +7,7 @@ before future kind=6 labels exist, and never writes orders/cancel signals.
 from __future__ import annotations
 
 import argparse
+from collections import Counter, deque
 import hashlib
 import json
 import math
@@ -197,6 +198,9 @@ class Tailer:
         self.offsets: dict[str, int] = {}
         self.seen: set[str] = set()
         self.scored = self.timely = self.late = self.invalid = 0
+        self.asset_scored = Counter()
+        self.asset_timely = Counter()
+        self.inference_age_window_ns = deque(maxlen=8192)
         self.started_ns = time.time_ns()
         self.active_run_id = ""
         self.output = args.output.open("a", encoding="utf-8", buffering=1)
@@ -209,8 +213,19 @@ class Tailer:
         try:
             for line in self.args.output.read_text(encoding="utf-8").splitlines():
                 row = json.loads(line)
-                if row.get("schema") == SCHEMA and isinstance(row.get("decision_id"), str):
-                    self.seen.add(row["decision_id"])
+                if row.get("schema") != SCHEMA or not isinstance(row.get("decision_id"), str):
+                    continue
+                self.seen.add(row["decision_id"])
+                self.scored += 1
+                timely = row.get("forward_eligible") is True
+                self.timely += int(timely)
+                self.late += int(not timely)
+                asset = str(row.get("asset") or "UNKNOWN")
+                self.asset_scored[asset] += 1
+                self.asset_timely[asset] += int(timely)
+                age = row.get("inference_age_ns")
+                if isinstance(age, int) and age >= 0:
+                    self.inference_age_window_ns.append(age)
         except (OSError, ValueError, json.JSONDecodeError):
             pass
 
@@ -318,6 +333,31 @@ class Tailer:
                 self.scored += 1
                 self.timely += int(timely)
                 self.late += int(not timely)
+                self.asset_scored[item["asset"] or "UNKNOWN"] += 1
+                self.asset_timely[item["asset"] or "UNKNOWN"] += int(timely)
+                self.inference_age_window_ns.append(age_ns)
+
+    def latency_summary(self) -> dict[str, Any]:
+        values = sorted(self.inference_age_window_ns)
+        if not values:
+            return {
+                "window_rows": 0,
+                "p50_ms": None, "p90_ms": None, "p99_ms": None,
+                "mean_ms": None, "max_ms": None,
+                "fraction_le_10ms": None, "fraction_le_25ms": None,
+                "fraction_le_50ms": None,
+            }
+        def q(level: float) -> float:
+            return values[round((len(values) - 1) * level)] / 1_000_000
+        mean_ms = sum(values) / len(values) / 1_000_000
+        return {
+            "window_rows": len(values),
+            "p50_ms": q(.50), "p90_ms": q(.90), "p99_ms": q(.99),
+            "mean_ms": mean_ms, "max_ms": values[-1] / 1_000_000,
+            "fraction_le_10ms": sum(v <= 10_000_000 for v in values) / len(values),
+            "fraction_le_25ms": sum(v <= 25_000_000 for v in values) / len(values),
+            "fraction_le_50ms": sum(v <= 50_000_000 for v in values) / len(values),
+        }
 
     def publish_status(self) -> None:
         atomic_json(self.args.status, {
@@ -341,6 +381,18 @@ class Tailer:
             "late": self.late,
             "invalid_json": self.invalid,
             "timely_fraction": self.timely / self.scored if self.scored else None,
+            "latency": self.latency_summary(),
+            "by_asset": {
+                asset: {
+                    "scored": int(self.asset_scored[asset]),
+                    "timely": int(self.asset_timely[asset]),
+                    "timely_fraction": (
+                        self.asset_timely[asset] / self.asset_scored[asset]
+                        if self.asset_scored[asset] else None
+                    ),
+                }
+                for asset in sorted(self.asset_scored)
+            },
             "state": "COLLECTING" if self.active_run_id else "AWAITING_NATIVE_RUN",
         })
 
