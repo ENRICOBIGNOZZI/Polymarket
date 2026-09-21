@@ -166,6 +166,9 @@ def load_trade_frequency_challenger_config(path):
             calibration.get("minimum_markets")),
         "conditional_calibration_shrinkage": float(
             calibration.get("shrinkage")),
+        "insufficient_selection_calibration_policy": str(
+            calibration.get("selection_insufficient_policy") or "ZERO"
+        ).upper(),
     }
     return {
         "config": value,
@@ -983,6 +986,7 @@ class DirectActionValueModel:
         conditional_calibration=False,
         conditional_calibration_min_markets=12,
         conditional_calibration_shrinkage=20.0,
+        insufficient_selection_calibration_policy="ZERO",
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -1011,6 +1015,8 @@ class DirectActionValueModel:
             conditional_calibration_min_markets)
         self.conditional_calibration_shrinkage = float(
             conditional_calibration_shrinkage)
+        self.insufficient_selection_calibration_policy = str(
+            insufficient_selection_calibration_policy).upper()
         if (
             self.maximum_effective_action_age_ms is not None
             and (
@@ -1038,6 +1044,10 @@ class DirectActionValueModel:
             or self.conditional_calibration_shrinkage < 0
         ):
             raise ValueError("nonnegative finite calibration shrinkage required")
+        if self.insufficient_selection_calibration_policy not in (
+            "ZERO", "MAX_OBSERVED",
+        ):
+            raise ValueError("unknown insufficient selection calibration policy")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -1442,6 +1452,8 @@ class DirectActionValueModel:
                 self.conditional_calibration_min_markets),
             conditional_calibration_shrinkage=(
                 self.conditional_calibration_shrinkage),
+            insufficient_selection_calibration_policy=(
+                self.insufficient_selection_calibration_policy),
         )
 
     @staticmethod
@@ -1497,6 +1509,7 @@ class DirectActionValueModel:
                 "calibration_level": self.calibration_level,
                 "minimum_observed_markets": 10,
                 "minimum_observed_fraction": 0.50,
+                "fallback_penalty": 0.0,
             }
 
         warmup_end = max(
@@ -1590,6 +1603,8 @@ class DirectActionValueModel:
                 else "INSUFFICIENT_PREQUENTIAL_SELECTION_CALIBRATION"
             ),
             "penalty": float(max(0.0, penalty)) if ready else 0.0,
+            "fallback_penalty": (
+                float(max(0.0, max(all_scores))) if all_scores else 0.0),
             "selected_markets": selected,
             "observed_selected_markets": observed,
             "censored_selected_markets": censored,
@@ -1776,6 +1791,7 @@ class DirectActionValueModel:
             "calibration_level": self.calibration_level,
             "minimum_observed_markets": 10,
             "minimum_observed_fraction": 0.50,
+            "fallback_penalty": 0.0,
         }
         self.scale_model = None
         calibration_state = "INSUFFICIENT_MARKET_BLOCKS"
@@ -1882,6 +1898,14 @@ class DirectActionValueModel:
                 )
                 self.selection_optimism_penalty = float(
                     self.selection_calibration["penalty"])
+                if (
+                    self.selection_calibration["state"]
+                    != "PREQUENTIAL_SELECTED_POLICY_ONE_SIDED"
+                    and self.insufficient_selection_calibration_policy
+                    == "MAX_OBSERVED"
+                ):
+                    self.selection_optimism_penalty = float(
+                        self.selection_calibration.get("fallback_penalty") or 0.0)
         else:
             deployment_mean = StreamingRidge(
                 self.model_feature_names, ridge=self.ridge,
@@ -2038,6 +2062,10 @@ class DirectActionValueModel:
             "calibration_market_count": len(calibration_markets),
             "action_calibration_market_count": len(calibration_markets),
             "selection_calibration_mode": self.selection_calibration_mode,
+            "insufficient_selection_calibration_policy": (
+                self.insufficient_selection_calibration_policy),
+            "selection_calibration_fallback_penalty": float(
+                self.selection_calibration.get("fallback_penalty") or 0.0),
             "prequential_calibration_blocks": self.prequential_calibration_blocks,
             "selection_prequential_score_markets": int(
                 self.selection_calibration.get("score_markets") or 0),
