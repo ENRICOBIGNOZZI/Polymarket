@@ -741,7 +741,8 @@ def arrival(row, latency_ms):
 
 
 def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, entry_cap=.75, shares=5.0,
-               execution_reserve=.005, ideal="REALISTIC", valuation_mode="SETTLEMENT"):
+               execution_reserve=.005, ideal="REALISTIC", valuation_mode="SETTLEMENT",
+               market_available=True, capital_available=True):
     """Same L1 taker economics for every candidate; unavailable is never a nonfill."""
     funnel = {stage: False for stage in FUNNEL_STAGES}
     funnel["native_decision_rows"] = True
@@ -752,6 +753,9 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
     funnel["pm_pretrigger"] = funnel["fresh_book"] and row["pretrigger"]
     outcome = {"status": "NO_SIGNAL", "funnel": funnel, "filled": 0.0, "pnl": None, "markout": None}
     if not funnel["pm_pretrigger"] or prediction is None:
+        return outcome
+    if not market_available:
+        outcome["status"] = "FILTERED_MARKET_ALREADY_TRADED"
         return outcome
     funnel["forecast_available"] = True
     midpoint = (row["bid"] + row["ask"]) / 2
@@ -780,7 +784,7 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
     requested = min(shares, row["quantity"])
     funnel["sufficient_depth"] = requested >= row["minimum"]
     funnel["risk_size"] = funnel["sufficient_depth"]
-    funnel["capital_admitted"] = funnel["risk_size"]
+    funnel["capital_admitted"] = funnel["risk_size"] and capital_available
     required_gates = ["edge_threshold", "price_cap", "sufficient_depth", "risk_size", "capital_admitted"]
     if valuation_mode == "SETTLEMENT_WITH_REPRICING_CONFIRMATION":
         required_gates.append("predicted_repricing_positive")
@@ -788,6 +792,8 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
         outcome.update({"status": "FILTERED", "predicted_edge": after_reserve})
         return outcome
     funnel["simulated_order"] = True
+    outcome["requested"] = requested
+    outcome["reserved_cost"] = min(3.75, requested * entry_cap)
     if ideal == "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND":
         book = {"ask": row["ask"], "bid": row["bid"], "quantity": requested, "time_ns": row["decision_ns"]}
     else:
@@ -821,6 +827,42 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
                     "arrival_price": book["ask"], "predicted_edge": after_reserve,
                     "gross_edge": gross, "fee_adjusted_edge": after_fee})
     return outcome
+
+
+def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
+                  edge_threshold=.005, entry_cap=.75, shares=5.0,
+                  execution_reserve=.005, ideal="REALISTIC",
+                  capital_budget=1000.0):
+    """Sequential one-entry-per-market PAPER replay with bounded capital reservation.
+
+    A market is consumed when an order is actually simulated, matching the
+    current one-entry-per-market research contract. Capital is conservatively
+    reserved at the same per-order ceiling used by the existing simple backtest
+    and is not recycled from later settlement information.
+    """
+    used_markets = set()
+    reserved = 0.0
+    outcomes = []
+    for event in sorted(evaluations, key=lambda value: (value["decision_ns"], value["decision_id"])):
+        row = event["row"]
+        prediction, repricing = selector(event)
+        available = row["market_id"] not in used_markets
+        capital_available = reserved + min(3.75, shares * entry_cap) <= capital_budget + 1e-12
+        outcome = replay_one(
+            row, prediction, repricing, latency_ms=latency_ms,
+            edge_threshold=edge_threshold, entry_cap=entry_cap, shares=shares,
+            execution_reserve=execution_reserve, ideal=ideal,
+            valuation_mode=valuation_mode, market_available=available,
+            capital_available=capital_available,
+        )
+        outcome["market_id"], outcome["asset"], outcome["horizon"] = (
+            row["market_id"], row["asset"], row["horizon"])
+        outcome["decision_ns"] = row["decision_ns"]
+        if outcome["funnel"]["simulated_order"]:
+            used_markets.add(row["market_id"])
+            reserved += float(outcome.get("reserved_cost") or 0.0)
+        outcomes.append(outcome)
+    return outcomes
 
 
 def summarize(outcomes):
@@ -950,34 +992,21 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
                                            "SETTLEMENT_WITH_REPRICING_CONFIRMATION"),
     }
     for name, (selector, valuation_mode) in variants.items():
-        outcomes = []
-        for event in evaluations:
-            prediction, repricing = selector(event)
-            row = event["row"]
-            outcome = replay_one(row, prediction, repricing, latency_ms=100, valuation_mode=valuation_mode)
-            outcome["market_id"], outcome["asset"], outcome["horizon"] = row["market_id"], row["asset"], row["horizon"]
-            outcome["decision_ns"] = row["decision_ns"]
-            outcomes.append(outcome)
+        outcomes = replay_policy(evaluations, selector, latency_ms=100,
+                                 valuation_mode=valuation_mode)
         result["models"][name] = {"metrics": summarize(outcomes), "uncertainty": market_bootstrap(outcomes), "outcomes": outcomes}
+    combined_selector = variants["combined_settlement_repricing"][0]
     for latency in latency_ms:
-        outcomes = []
-        for event in evaluations:
-            row = event["row"]
-            outcome = replay_one(row, event["settlement_predictions"]["logistic_offset"],
-                                 event["repricing_predictions"].get("250"), latency_ms=latency)
-            outcome["market_id"] = row["market_id"]
-            outcomes.append(outcome)
+        outcomes = replay_policy(
+            evaluations, combined_selector, latency_ms=latency,
+            valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION")
         result["latency"][str(latency)] = summarize(outcomes)
     upper = {}
     for kind in ("ZERO_LATENCY_EXECUTION_UPPER_BOUND", "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND",
                  "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND"):
-        outcomes = []
-        for event in evaluations:
-            row = event["row"]
-            outcome = replay_one(row, event["settlement_predictions"]["logistic_offset"],
-                                 event["repricing_predictions"].get("250"), latency_ms=100, ideal=kind)
-            outcome["market_id"] = row["market_id"]
-            outcomes.append(outcome)
+        outcomes = replay_policy(
+            evaluations, combined_selector, latency_ms=100,
+            valuation_mode="SETTLEMENT_WITH_REPRICING_CONFIRMATION", ideal=kind)
         upper[kind] = summarize(outcomes)
     result["idealized_upper_bounds"] = upper
     return result
