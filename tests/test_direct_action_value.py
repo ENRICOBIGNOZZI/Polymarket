@@ -1549,3 +1549,118 @@ def test_effective_age_bucket_summary_separates_observed_and_censored():
     assert result["50_100"]["censored_selected_trades"] == 1
     assert result["100_250"]["observed_selected_trades"] == 1
     assert math.isclose(result["100_250"]["total_observed_net_pnl"], -.1)
+
+
+
+def test_observability_head_treats_observed_no_fill_as_supported_evidence():
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+    )
+    observed_no_fill = row("m13001", exit_bid=.55, depth=20.0)
+    observed_no_fill["arrivals"]["50"]["ask"] = .51
+    missing_exit = row("m13002", exit_bid=.55, depth=20.0)
+    missing_exit["targets"] = {}
+    model._configure_levels([observed_no_fill, missing_exit])
+
+    records = list(model._iter_observability_rows(
+        [observed_no_fill, missing_exit]))
+    by_market = {record["market_id"]: record for record in records}
+    assert by_market["m13001"]["observability_target"] == 1.0
+    assert by_market["m13001"]["observability_state"] == (
+        "OBSERVED_NO_FILL_LIMIT_NOT_TOUCHED")
+    assert by_market["m13002"]["observability_target"] == 0.0
+    pnl, state = realized_action_value(
+        missing_exit, size=5.0, horizon_ms=500, latency_ms=50)
+    assert pnl is None
+    assert state == "EXIT_EVIDENCE_UNAVAILABLE"
+
+
+def test_observability_head_is_bounded_and_does_not_replace_pnl_target():
+    rows = []
+    for index in range(48):
+        item = row(
+            "m" + str(index + 13100),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        if index % 4 == 0:
+            item["targets"] = {}
+        rows.append(item)
+
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["observability_head"] == (
+        "RIDGE_BINARY_CAUSAL_ARRIVAL_PLUS_EXIT_LABEL_AVAILABILITY")
+    assert receipt["observability_training_rows"] > 0
+    assert 0.0 <= receipt["observability_training_rate"] <= 1.0
+    assert "MISSING_PNL_REMAINS_CENSORED_NOT_ZERO" in (
+        receipt["observability_target_semantics"])
+
+    probe = row("m13990", signal=2.0, exit_bid=.56, depth=20.0)
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    for entry in scored:
+        probability = entry["observability_probability"]
+        assert probability is not None
+        assert 0.0 <= probability <= 1.0
+
+
+def test_low_observability_gate_is_fail_closed_and_penalty_is_separate():
+    rows = [
+        row(
+            "m" + str(index + 13200),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(40)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_observability_probability=.5,
+        observability_penalty_dollars=2.0,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+
+    class LowSupport:
+        def predict(self, record):
+            return .25
+
+    model.observability_model = LowSupport()
+    probe = row("m13991", signal=2.0, exit_bid=.56, depth=20.0)
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert scored == []
+    assert state == "LOW_OBSERVABILITY_SUPPORT"
+    selected = model.select_action(probe, latency_ms=50)
+    assert selected["action"] == "NO_TRADE"
+    assert selected["reason"] == "LOW_OBSERVABILITY_SUPPORT"
+
+    model.minimum_observability_probability = 0.0
+    scored, state = model.score_actions(probe, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    for entry in scored:
+        assert math.isclose(
+            entry["observability_probability"], .25, abs_tol=1e-12)
+        assert math.isclose(entry["observability_penalty"], 1.5, abs_tol=1e-12)
+        assert math.isclose(
+            entry["calibrated_lower_value"],
+            entry["calibrated_lower_cash_value"]
+            - entry["total_residual_friction"]
+            - 1.5,
+            abs_tol=1e-12,
+        )
