@@ -22,6 +22,14 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false
+    },
+    {
+      "title": "Crypto Pure Arbitrage PAPER",
+      "type": "link",
+      "url": "/d/polymarket-v7-pure-arb",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false
     }
   ],
   "liveNow": false,
@@ -3316,6 +3324,6 @@
   "timezone": "browser",
   "title": "Polymarket V7 Multi-Crypto Performance & Runtime",
   "uid": "polymarket-v7-multi-crypto",
-  "version": 13,
+  "version": 14,
   "description": "PAPER economic performance plus native runtime and data-plane health. Live telemetry remains visible when freshness gates hide stale economic panels; missing economic series are never interpreted as zeros."
 }

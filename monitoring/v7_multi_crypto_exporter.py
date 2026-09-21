@@ -63,6 +63,7 @@ def render_pure_arb_prometheus(status: dict[str, Any]) -> list[str]:
     )
     lines = [
         f"polymarket_pure_arb_up {1 if safe and status.get('state') == 'running' else 0}",
+        f"polymarket_pure_arb_status_timestamp_seconds {_finite_number(status.get('timestamp_ms')) / 1000.0}",
         f"polymarket_pure_arb_cycles_total {_finite_number(status.get('cycles_total'))}",
         f"polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total {_finite_number(status.get('paper_locked_pnl_pre_gas_total'))}",
         f"polymarket_pure_arb_evaluations_total {_finite_number(status.get('evaluations'))}",
@@ -80,6 +81,11 @@ def render_pure_arb_prometheus(status: dict[str, Any]) -> list[str]:
             continue
         asset = _prom_label(row.get("asset"))
         horizon = _prom_label(row.get("horizon"))
+        context_labels = f'asset="{asset}",horizon="{horizon}"'
+        lines.append(
+            f"polymarket_pure_arb_context_fee_verified{{{context_labels}}} "
+            f"{1 if row.get('fee_verified') is True else 0}"
+        )
         for field, kind in (
             ("buy_complete_set", "BUY_COMPLETE_SET"),
             ("sell_complete_set", "SELL_COMPLETE_SET"),
@@ -96,6 +102,7 @@ def render_pure_arb_prometheus(status: dict[str, Any]) -> list[str]:
                 f"polymarket_pure_arb_context_max_edge_per_share{{{labels}}} {_finite_number(value.get('max_edge_per_share'))}",
                 f"polymarket_pure_arb_context_last_executable_shares_l1{{{labels}}} {_finite_number(value.get('last_executable_shares_l1'))}",
                 f"polymarket_pure_arb_context_last_locked_pnl_pre_gas_usd{{{labels}}} {_finite_number(value.get('last_locked_pnl_pre_gas'))}",
+                f"polymarket_pure_arb_context_last_detect_timestamp_seconds{{{labels}}} {_finite_number(value.get('last_detect_wall_ms')) / 1000.0}",
             ])
     return lines
 
