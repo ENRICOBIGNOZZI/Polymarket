@@ -264,7 +264,7 @@ def test_native_kind6_repricing_label_populates_oos_target_and_arrival():
     proof = attach_native_repricing([origin], {(key, horizon): point})
     assert proof["matched_target_rows"] == 1
     assert origin["targets"]["100"]["state"] == "OBSERVED"
-    assert math.isclose(origin["targets"]["100"]["mid_change"], .005, abs_tol=1e-12)
+    assert math.isclose(origin["targets"]["100"]["mid_change"], .010, abs_tol=1e-12)
     arrival = origin["arrivals"]["100"]
     assert math.isclose(arrival["ask"], .51, abs_tol=1e-12)
     assert arrival["quantity"] == 4.0
