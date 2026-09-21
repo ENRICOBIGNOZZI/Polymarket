@@ -242,7 +242,8 @@
         "${RUN_ROOT}/universe/book_selection.json",
         "--selection-only",
         "--model-sha",
-        "${SHA}"
+        "${SHA}",
+        "--pure-arb-paper"
       ],
       "profile": "observer",
       "inputs": [
@@ -252,7 +253,9 @@
       "outputs": [
         "research/repricing_book/fillability_ws_status.json",
         "research/repricing_book/book_observations/current.jsonl",
-        "research/repricing_book_observer.log"
+        "research/repricing_book_observer.log",
+        "research/repricing_book/pure_arb_status.json",
+        "research/repricing_book/pure_arb_trades.jsonl"
       ],
       "dependencies": [
         "crypto_universe"
