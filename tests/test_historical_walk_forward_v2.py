@@ -7,6 +7,7 @@ from research.walk_forward_v2.core import (
     Ridge,
     book_targets,
     build_dataset,
+    economic_evaluation,
     folds,
     replay_one,
     replay_policy,
@@ -226,3 +227,45 @@ def test_pm_baseline_remains_available_before_any_settlement_labels():
     assert predictions["pm"] == [(row["bid"] + row["ask"]) / 2 for row in test]
     assert predictions["logistic_offset"] == [None, None]
     assert predictions["boosted_offset"] == [None, None]
+
+
+def test_pm_midpoint_has_zero_raw_edge_but_negative_executable_edge():
+    row = record()
+    row["timeline"] = [book(row, row["decision_ns"] + 100_000_000, ask=.50)]
+    row["timeline_times"] = [row["timeline"][0]["time_ns"]]
+    midpoint = (row["bid"] + row["ask"]) / 2
+    outcome = replay_one(row, midpoint, None, latency_ms=100, edge_threshold=0.0,
+                         execution_reserve=0.0)
+    assert outcome["status"] == "FILTERED"
+    assert outcome["funnel"]["gross_edge_positive"] is False
+    assert outcome["funnel"]["spread_adjusted_edge_positive"] is False
+    assert outcome["predicted_edge"] < 0
+
+
+def test_latency_policy_falls_back_to_repricing_when_settlement_model_is_unavailable():
+    row = record()
+    row["label"] = 1
+    row["targets"] = {"250": {"state": "OBSERVED", "arrival_bid": .54}}
+    for horizon in HORIZONS_MS:
+        row["targets"].setdefault(str(horizon), {"state": "UNAVAILABLE_NO_POST_BOOK"})
+    row["arrivals"] = {
+        str(latency): {
+            "time_ns": row["decision_ns"] + latency * 1_000_000,
+            "bid": .50, "ask": .51, "quantity": 4.0, "epoch": row["epoch"],
+        }
+        for latency in (0, 10, 25, 50, 100, 250, 500)
+    }
+    event = {
+        "fold": 1, "cutoff_ns": row["decision_ns"], "decision_id": row["decision_id"],
+        "market_id": row["market_id"], "asset": row["asset"], "horizon": row["horizon"],
+        "decision_ns": row["decision_ns"], "row": row,
+        "settlement_predictions": {
+            "pm": (row["bid"] + row["ask"]) / 2,
+            "logistic_offset": None, "boosted_offset": None,
+        },
+        "repricing_predictions": {str(h): (.05 if h == 250 else None) for h in HORIZONS_MS},
+    }
+    result = economic_evaluation([event])
+    assert result["latency_policy"]["model"] == "repricing_250ms"
+    assert result["latency_policy"]["learned_settlement_oos_rows"] == 0
+    assert set(result["edge_threshold_sensitivity"]) == {"0.0", "0.0025", "0.005", "0.01", "0.02"}
