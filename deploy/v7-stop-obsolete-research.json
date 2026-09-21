@@ -1,0 +1,11 @@
+{
+  "schema": "polymarket_v7_stop_obsolete_research_v1",
+  "version": 1,
+  "request_id": "stop-obsolete-research-20260922-a",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "obsolete_research_roots": [
+    "/tmp/polymarket-multi-alpha-2h-0c8e165b22e8",
+    "/tmp/polymarket-native-alpha-2h-42dce601751e"
+  ],
+  "live_service_untouched": true
+}
