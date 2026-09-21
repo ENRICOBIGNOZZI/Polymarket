@@ -72,6 +72,68 @@ class FrictionPolicy:
 DEFAULT_FRICTION_POLICY = FrictionPolicy()
 
 
+@dataclass(frozen=True)
+class EdgeSizingPolicy:
+    """Research-only monotone mapping from conservative edge to context capital.
+
+    Admission and sizing are separated: nonpositive lower-confidence edge gets
+    zero capital; positive edge maps monotonically to a bounded fraction of the
+    context budget. Hard venue, depth, market, order and portfolio caps remain
+    authoritative after this desired-notional calculation.
+    """
+    context_count: int = 30
+    knots: tuple = (
+        (0.0, 0.0),
+        (0.0025, 0.05),
+        (0.0050, 0.10),
+        (0.0100, 0.25),
+        (0.0200, 0.50),
+        (0.0400, 1.00),
+    )
+
+    def validated(self):
+        if type(self.context_count) is not int or self.context_count <= 0:
+            raise ValueError("positive context count required")
+        points = tuple((float(x), float(y)) for x, y in self.knots)
+        if len(points) < 2:
+            raise ValueError("at least two sizing knots required")
+        previous_x = previous_y = None
+        for x, y in points:
+            if not finite(x) or not finite(y) or x < 0 or not 0 <= y <= 1:
+                raise ValueError("finite nonnegative sizing knots required")
+            if previous_x is not None and (x <= previous_x or y < previous_y):
+                raise ValueError("sizing knots must be strictly ordered and monotone")
+            previous_x, previous_y = x, y
+        if points[0] != (0.0, 0.0):
+            raise ValueError("sizing policy must map zero edge to zero capital")
+        return self
+
+    def capital_fraction(self, edge_per_dollar):
+        self.validated()
+        edge = float(edge_per_dollar)
+        if not finite(edge) or edge <= 0:
+            return 0.0
+        points = tuple((float(x), float(y)) for x, y in self.knots)
+        if edge >= points[-1][0]:
+            return points[-1][1]
+        for (left_x, left_y), (right_x, right_y) in zip(points[:-1], points[1:]):
+            if left_x <= edge <= right_x:
+                width = right_x - left_x
+                weight = 0.0 if width <= 0 else (edge - left_x) / width
+                return left_y + weight * (right_y - left_y)
+        return 0.0
+
+    def desired_notional(self, edge_per_dollar, capital_budget):
+        budget = float(capital_budget)
+        if not finite(budget) or budget <= 0:
+            return 0.0
+        context_budget = budget / self.context_count
+        return context_budget * self.capital_fraction(edge_per_dollar)
+
+
+DEFAULT_EDGE_SIZING_POLICY = EdgeSizingPolicy()
+
+
 def _quantile(values, level):
     values = sorted(float(v) for v in values if finite(v))
     if not values:
@@ -877,6 +939,9 @@ class DirectActionValueModel:
         minimum_side_regime_action_targets=0,
         support_policy_mode="DIAGNOSTIC",
         support_ridge=8.0,
+        conditional_calibration=False,
+        conditional_calibration_min_markets=12,
+        conditional_calibration_shrinkage=20.0,
     ):
         self.size_grid = tuple(float(v) for v in size_grid)
         self.action_horizons_ms = tuple(int(v) for v in action_horizons_ms)
@@ -900,6 +965,11 @@ class DirectActionValueModel:
             minimum_side_regime_action_targets)
         self.support_policy_mode = str(support_policy_mode).upper()
         self.support_ridge = float(support_ridge)
+        self.conditional_calibration = bool(conditional_calibration)
+        self.conditional_calibration_min_markets = int(
+            conditional_calibration_min_markets)
+        self.conditional_calibration_shrinkage = float(
+            conditional_calibration_shrinkage)
         if (
             self.maximum_effective_action_age_ms is not None
             and (
@@ -920,6 +990,13 @@ class DirectActionValueModel:
                 "support policy mode must be DIAGNOSTIC or ROBUST_WORST_CASE")
         if not finite(self.support_ridge) or self.support_ridge <= 0:
             raise ValueError("positive finite support ridge required")
+        if self.conditional_calibration_min_markets < 2:
+            raise ValueError("conditional calibration requires at least two markets")
+        if (
+            not finite(self.conditional_calibration_shrinkage)
+            or self.conditional_calibration_shrinkage < 0
+        ):
+            raise ValueError("nonnegative finite calibration shrinkage required")
         if self.max_sizes_per_state <= 0 or self.streaming_batch_size <= 0:
             raise ValueError("positive direct-action capacity limits required")
         if self.selection_calibration_mode not in ("PREQUENTIAL", "OFF"):
@@ -1319,7 +1396,39 @@ class DirectActionValueModel:
                 self.minimum_side_regime_action_targets),
             support_policy_mode=self.support_policy_mode,
             support_ridge=self.support_ridge,
+            conditional_calibration=self.conditional_calibration,
+            conditional_calibration_min_markets=(
+                self.conditional_calibration_min_markets),
+            conditional_calibration_shrinkage=(
+                self.conditional_calibration_shrinkage),
         )
+
+    @staticmethod
+    def _calibration_cell_from_action(action):
+        return "::".join((
+            str(action.get("asset") or "UNKNOWN"),
+            str(action.get("contract_horizon") or "UNKNOWN"),
+            effective_age_bucket(
+                float(action.get("signal_age_ms") or 0.0),
+                int(action.get("latency_ms") or 0),
+            ),
+        ))
+
+    def _conditional_multiplier_for(self, row, latency_ms):
+        if not self.conditional_calibration:
+            return float(self.calibration_multiplier)
+        action = {
+            "asset": str(row.get("asset") or "UNKNOWN"),
+            "contract_horizon": str(row.get("horizon") or "UNKNOWN"),
+            "signal_age_ms": max(
+                0.0, float(row.get("signal_age_ns") or 0) / 1e6),
+            "latency_ms": int(latency_ms),
+        }
+        key = self._calibration_cell_from_action(action)
+        cell = getattr(self, "conditional_calibration_multipliers", {}).get(key)
+        if isinstance(cell, dict) and finite(cell.get("multiplier")):
+            return float(cell["multiplier"])
+        return float(self.calibration_multiplier)
 
     def _prequential_selected_policy_calibration(
         self, rows, chronological_markets,
@@ -1607,6 +1716,7 @@ class DirectActionValueModel:
         self.uncertainty_floor = 1e-6
         self.calibration_multiplier = 1.5
         self.selection_optimism_penalty = 0.0
+        self.conditional_calibration_multipliers = {}
         self.selection_calibration = {
             "state": (
                 "DISABLED"
@@ -1679,6 +1789,7 @@ class DirectActionValueModel:
 
             # Action-level split conformal uses the full untouched final 20%.
             block_scores = {}
+            cell_block_scores = defaultdict(dict)
             for action in factory(calibration_markets)():
                 predicted = deployment_mean.predict(action)
                 scale = max(
@@ -1688,12 +1799,35 @@ class DirectActionValueModel:
                 market = str(action["market_id"])
                 block_scores[market] = max(
                     float(score), block_scores.get(market, 0.0))
+                cell = self._calibration_cell_from_action(action)
+                cell_block_scores[cell][market] = max(
+                    float(score), cell_block_scores[cell].get(market, 0.0))
             calibration_block_scores = len(block_scores)
             calibrated = _quantile(
                 list(block_scores.values()), self.calibration_level)
             if calibrated is not None and finite(calibrated):
                 self.calibration_multiplier = max(1.0, float(calibrated))
                 calibration_state = "TEMPORAL_MARKET_BLOCK_SPLIT_CONFORMAL"
+                if self.conditional_calibration:
+                    shrink = float(self.conditional_calibration_shrinkage)
+                    minimum = int(self.conditional_calibration_min_markets)
+                    for cell, market_scores in sorted(cell_block_scores.items()):
+                        values = list(market_scores.values())
+                        raw = _quantile(values, self.calibration_level)
+                        if raw is None or not finite(raw) or len(values) < minimum:
+                            continue
+                        weight = len(values) / (len(values) + shrink) if shrink else 1.0
+                        multiplier = max(
+                            1.0,
+                            weight * float(raw)
+                            + (1.0 - weight) * self.calibration_multiplier,
+                        )
+                        self.conditional_calibration_multipliers[cell] = {
+                            "multiplier": float(multiplier),
+                            "raw_multiplier": float(max(1.0, raw)),
+                            "markets": len(values),
+                            "shrinkage_weight": float(weight),
+                        }
             else:
                 calibration_state = "INSUFFICIENT_CALIBRATION_ACTION_TARGETS"
 
@@ -1842,6 +1976,13 @@ class DirectActionValueModel:
             "uncertainty": "STREAMING_ABSOLUTE_RESIDUAL_SCALE_WITH_FINAL20_ACTION_CONFORMAL_AND_PREQUENTIAL_POST_ARGMAX_CALIBRATION",
             "calibration_level": self.calibration_level,
             "calibration_multiplier": self.calibration_multiplier,
+            "conditional_calibration_enabled": self.conditional_calibration,
+            "conditional_calibration_min_markets": (
+                self.conditional_calibration_min_markets),
+            "conditional_calibration_shrinkage": (
+                self.conditional_calibration_shrinkage),
+            "conditional_calibration_multipliers": dict(
+                sorted(self.conditional_calibration_multipliers.items())),
             "uncertainty_floor": self.uncertainty_floor,
             "calibration_state": calibration_state,
             "selection_optimism_penalty": self.selection_optimism_penalty,
@@ -1997,9 +2138,11 @@ class DirectActionValueModel:
             )
         side_state = decision_side_state(row, side)
         notional = float(size) * float(side_state["ask"])
+        calibration_multiplier = self._conditional_multiplier_for(
+            row, latency_ms)
         uncertainty_penalty = (
             float(self.friction_policy.uncertainty_aversion)
-            * self.calibration_multiplier * scale
+            * calibration_multiplier * scale
         )
         selection_optimism_penalty = float(
             getattr(self, "selection_optimism_penalty", 0.0))
@@ -2064,6 +2207,7 @@ class DirectActionValueModel:
             "predicted_total_net_pnl": mean,
             "predicted_abs_error_scale": scale,
             "uncertainty_penalty": float(uncertainty_penalty),
+            "calibration_multiplier_used": float(calibration_multiplier),
             "selection_optimism_penalty": float(selection_optimism_penalty),
             "base_lower_cash_before_support": float(base_lower_cash),
             "evidence_support_probability": evidence_support_probability,
@@ -2102,7 +2246,7 @@ class DirectActionValueModel:
         )
         uncertainty_multiplier = (
             float(self.friction_policy.uncertainty_aversion)
-            * float(self.calibration_multiplier)
+            * self._conditional_multiplier_for(row, latency_ms)
         )
 
         boundaries = {lower, upper}
