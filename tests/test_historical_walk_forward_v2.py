@@ -924,3 +924,95 @@ def test_nightly_promotion_writes_only_paper_research_registry(tmp_path, monkeyp
     assert champion["trader_restart_required"] is False
     assert champion["real_order_submission"] is False
     assert json.loads(receipt.read_text())["action"] == "PROMOTE"
+
+
+
+def test_existing_champion_is_refit_when_it_remains_best(tmp_path, monkeypatch):
+    report = tmp_path / "report"
+    report.mkdir()
+    safety = {
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+    }
+    economics = {
+        **safety,
+        "live_policy_promotion_candidates": {
+            "pooled_1000ms": {
+                "family": "POOLED", "horizon_ms": 1000,
+                "reference_latency_ms": 50,
+                "metrics": {
+                    "marked_fills": 80, "fills": 90, "fill_rate": .5,
+                    "markout_pnl": 3.0, "markout_per_fill": .05,
+                },
+                "uncertainty": {
+                    "markout_per_fill_interval": [.01, .09],
+                    "markout": {"markets": 40},
+                },
+                "candidate_contract": {"ridge": 8.0},
+            }
+        },
+        "live_parity_horizon_latency": {
+            "1000": {
+                "25": {"state": "READY", "markout_pnl": 3.2, "marked_fills": 81},
+                "50": {"state": "READY", "markout_pnl": 3.0, "marked_fills": 80},
+            }
+        },
+    }
+    manifest = {
+        **safety,
+        "minimum_wall_ns": 1_789_921_800_000_000_000,
+        "data_sha256": "e" * 64,
+    }
+    results = {**safety, "start_sha": "b" * 40}
+    model = {
+        "state": "READY",
+        "target": "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees",
+        "training_end_ns": 300,
+    }
+    artifact = {
+        **safety,
+        "automatic_promotion": False,
+        "training_window": {
+            "mode": "EXPANDING_ALL_CAUSAL_HISTORY",
+            "minimum_wall_ns": 1_789_921_800_000_000_001,
+            "maximum_decision_ns": 300,
+            "decision_rows": 1200,
+        },
+        "executable_markout_models": {"1000": model},
+        "asset_executable_markout_models": {},
+    }
+    for name, value in (
+        ("economic_metrics.json", economics),
+        ("data_manifest.json", manifest),
+        ("results.json", results),
+        ("full_window_repricing_models.json", artifact),
+    ):
+        (report / name).write_text(json.dumps(value), encoding="utf-8")
+
+    registry = tmp_path / "champion.json"
+    registry.write_text(json.dumps({
+        "schema": "polymarket_v7_executable_markout_research_champion_v1",
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "candidate_id": "pooled_1000ms",
+        "configured_minimum_wall_ns": 1_789_921_800_000_000_000,
+        "training_window": {"decision_rows": 1000, "maximum_decision_ns": 200},
+    }), encoding="utf-8")
+    receipt = report / "promotion_receipt.json"
+    monkeypatch.setattr(sys, "argv", [
+        "promotion", "--report-dir", str(report),
+        "--registry", str(registry), "--receipt", str(receipt),
+    ])
+    assert promotion_main() == 0
+    value = json.loads(receipt.read_text())
+    assert value["action"] == "REFIT_CHAMPION"
+    assert value["registry_updated"] is True
+    champion = json.loads(registry.read_text())
+    assert champion["candidate_id"] == "pooled_1000ms"
+    assert champion["training_window"]["decision_rows"] == 1200
+    assert champion["training_window"]["maximum_decision_ns"] == 300
+    assert champion["selection_action"] == "REFIT_CHAMPION"
