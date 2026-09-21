@@ -1549,3 +1549,72 @@ def test_effective_age_bucket_summary_separates_observed_and_censored():
     assert result["50_100"]["censored_selected_trades"] == 1
     assert result["100_250"]["observed_selected_trades"] == 1
     assert math.isclose(result["100_250"]["total_observed_net_pnl"], -.1)
+
+
+
+def test_bilateral_support_gate_requires_training_market_support():
+    rows = [
+        bilateral_row("m" + str(index + 9700), no_depth=10.0)
+        for index in range(4)
+    ]
+    probe = bilateral_row("m9799", no_depth=10.0)
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_bilateral_opposite_side_markets=5,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels(rows)
+    support = model._bilateral_support_summary(rows)
+    assert support["bilateral_markets"] == 4
+    assert support["yes_supported_markets"] == 4
+    assert support["no_supported_markets"] == 4
+    assert support["opposite_side_ready"] is False
+
+    model.bilateral_support_markets = 4
+    assert model._eligible_action_sides(probe) == ("YES",)
+    model.bilateral_support_markets = 5
+    assert model._eligible_action_sides(probe) == ("YES", "NO")
+
+
+def test_bilateral_support_gate_never_blocks_selected_side():
+    legacy = row("m9800")
+    model = DirectActionValueModel(
+        minimum_bilateral_opposite_side_markets=100,
+        selection_calibration_mode="OFF",
+    )
+    model.bilateral_support_markets = 0
+    assert model._eligible_action_sides(legacy) == ("SELECTED",)
+
+
+def test_bilateral_support_receipt_is_based_on_mean_fit_training_markets():
+    rows = [
+        bilateral_row("m" + str(index + 9810), no_depth=10.0)
+        for index in range(30)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(5.0,),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_bilateral_opposite_side_markets=8,
+        selection_calibration_mode="OFF",
+        streaming_batch_size=16,
+    ).fit(rows)
+    receipt = model.training_receipt
+    support = receipt["bilateral_side_support"]
+    # 20% calibration markets are excluded from the final mean fit.
+    assert receipt["training_markets_used"] == 24
+    assert support["bilateral_markets"] == 24
+    assert support["minimum_required_markets"] == 8
+    assert support["opposite_side_ready"] is True
+    assert "MEAN_FIT_TRAINING_MARKET" in support["semantics"]
+
+
+def test_negative_bilateral_support_threshold_is_rejected():
+    try:
+        DirectActionValueModel(minimum_bilateral_opposite_side_markets=-1)
+    except ValueError as exc:
+        assert "minimum bilateral opposite-side markets" in str(exc)
+    else:
+        raise AssertionError("expected negative bilateral support threshold to fail")
