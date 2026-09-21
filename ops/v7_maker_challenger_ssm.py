@@ -23,6 +23,9 @@ INSTANCE_RE = re.compile(r"^i-[0-9a-f]+$")
 SOURCE_PATHS = (
     "research/walk_forward_v3/maker_challenger.py",
     "research/walk_forward_v3/maker_value_challenger.py",
+    "research/walk_forward_v2/__init__.py",
+    "research/walk_forward_v2/core.py",
+    "research/economic/causal_replay.py",
     "scripts/v7_maker_durable_learning.py",
     "scripts/v7_maker_fillability_report.py",
     "scripts/v7_maker_fill_conditioned_toxicity.py",
@@ -105,7 +108,8 @@ for action in JOIN IMPROVE1 FADE1; do
 done
 
 if ! python3 src/scripts/v7_maker_execution_horse_race.py \
-  --maker-evidence __RUN_ROOT__ \
+  --maker-evidence __RUN_ROOT__/ledger \
+  --maker-evidence __RUN_ROOT__/micro_maker \
   --output output/horse_race.json \
   --markout-horizon 1s \
   --placement-action JOIN \
