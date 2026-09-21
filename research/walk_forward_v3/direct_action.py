@@ -3007,11 +3007,13 @@ class DirectActionValueModel:
             for horizon in self.action_horizons_ms:
                 if horizon <= int(latency_ms):
                     continue
-                cell_support = int(
-                    getattr(self, "action_cell_target_counts", {}).get(
-                        action_cell_support_key(latency_ms, horizon, side), 0))
-                if cell_support <= 0:
-                    continue
+                cell_counts = getattr(self, "action_cell_target_counts", None)
+                if cell_counts is not None:
+                    cell_support = int(cell_counts.get(
+                        action_cell_support_key(
+                            latency_ms, horizon, side), 0))
+                    if cell_support <= 0:
+                        continue
                 probe = self._score_quantity(
                     row,
                     size=lower,
