@@ -189,8 +189,13 @@ def _transport_target_sha(command: dict[str, Any]) -> str | None:
     if not isinstance(payloads, list):
         return None
     text = "\n".join(str(value) for value in payloads)
+    # SSM RunShellScript payloads are multiline.  The deployment SHA is
+    # commonly delimited by a newline (for example "\nSHA=<sha>\n"), so
+    # proving transport identity must accept all shell whitespace, not only a
+    # literal space.  Keep punctuation boundaries explicit to avoid matching a
+    # SHA embedded inside an unrelated variable name.
     matches = set(re.findall(
-        r"(?:^|[ ;'\"])(?:SHA|POLYMARKET_EXPECTED_SHA)=([0-9a-f]{40})(?:$|[ ;'\"])",
+        r"(?:^|[\\s;'\"])(?:SHA|POLYMARKET_EXPECTED_SHA)=([0-9a-f]{40})(?:$|[\\s;'\"])",
         text,
     ))
     if len(matches) != 1:
