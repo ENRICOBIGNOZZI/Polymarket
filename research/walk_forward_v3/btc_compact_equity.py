@@ -13,7 +13,7 @@ import json
 import math
 from pathlib import Path
 
-from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, fee_per_share, json_lines
+from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, fee_per_share, json_lines, valid_book, book_from_row, json_lines
 from research.walk_forward_v3.direct_action import (
     DEFAULT_HARD_ORDER_NOTIONAL,
     _valid_state,
@@ -57,6 +57,63 @@ def compact_dirs(root):
         out.add(path.parent)
     return sorted(out)
 
+
+def jsonl_sessions(root, rows):
+    market_windows={}
+    for row in rows:
+        market=str(row["market_id"])
+        decision_ms=int(row["decision_ns"])//1_000_000
+        lo,hi=market_windows.get(market,(decision_ms,decision_ms))
+        market_windows[market]=(min(lo,decision_ms),max(hi,decision_ms))
+    candidates=[]
+    for base in (root, root.parent):
+        for pattern in (
+            "micro_maker/book_observations/*.jsonl*",
+            "research/repricing_book/book_observations/*.jsonl*",
+            "paper_v7_london_archives/**/micro_maker/book_observations/*.jsonl*",
+            "paper_v7_london_archives/**/research/repricing_book/book_observations/*.jsonl*",
+        ):
+            candidates.extend(base.glob(pattern))
+    paths=sorted({p.resolve() for p in candidates if p.is_file() and not p.is_symlink()})
+    rows_out=[]
+    scanned=retained=0
+    for path in paths:
+        for raw in json_lines(path):
+            scanned+=1
+            if raw is None or not valid_book(raw):
+                continue
+            market=str(raw.get("market_id") or "")
+            if market not in market_windows:
+                continue
+            wall=int(raw["receive_wall_ms"])
+            lo,hi=market_windows[market]
+            if wall < lo-1000 or wall > hi+max(EXITS)+1000:
+                continue
+            b=book_from_row(raw)
+            outcome=str(raw.get("outcome") or "").upper()
+            if outcome not in ("YES","NO"):
+                continue
+            rows_out.append({
+                "observer_sequence":b["sequence"],"instrument_handle":0,
+                "state_version":int(raw.get("state_version") or 0),
+                "connection_epoch":b["epoch"],"receive_wall_ms":wall,
+                "receive_monotonic_ns":int(raw.get("receive_monotonic_ns") or 0),
+                "best_bid":b["bid"],"best_ask":b["ask"],"tick_size":b["tick"],
+                "bid_depth_l1":float(raw.get("bid_depth_l1") or 0),
+                "ask_depth_l1":float(raw.get("ask_depth_l1") or 0),
+                "valid":True,"lineage_continuous":True,"event_kind":0,
+                "market_id":market,"event_id":str(raw.get("event_id") or ""),
+                "token_id":str(raw.get("token_id") or ""),"outcome":outcome,
+            })
+            retained+=1
+    if not rows_out:
+        return [],{"jsonl_paths":len(paths),"records_scanned":scanned,"records_retained":0}
+    indexed=build_indexed_timelines(rows_out)
+    first=min(r["receive_wall_ms"] for r in rows_out); last=max(r["receive_wall_ms"] for r in rows_out)
+    session={"session_id":"JSONL_CONTINUOUS","directory":"JSONL",
+             "watermark_ms":last,"first_wall_ms":first,"last_wall_ms":last,
+             "indexed":indexed,"records_scanned":scanned,"records_retained":retained}
+    return [session],{"jsonl_paths":len(paths),"records_scanned":scanned,"records_retained":retained}
 
 def stream_sessions(root, rows):
     market_windows={}
@@ -380,6 +437,9 @@ def analyze(root,minimum_wall_ns):
         return {"schema":SCHEMA,**SAFETY,"state":data.get("input_state")}
     rows=[r for r in data["decisions"] if _valid_state(r) and str(r.get("asset"))=="BTC"]
     sessions,tape_diag=stream_sessions(Path(root).resolve().parent,rows)
+    if not sessions:
+        sessions,jsonl_diag=jsonl_sessions(Path(root).resolve(),rows)
+        tape_diag={**tape_diag,**jsonl_diag,"fallback":"JSONL_BOOK_OBSERVATIONS"}
     if not sessions:
         sessions,tape_diag=stream_raw_sessions(Path(root),rows)
     discovery,validation=market_halves(rows)
