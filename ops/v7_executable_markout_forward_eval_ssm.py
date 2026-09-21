@@ -44,7 +44,17 @@ assert runtime.get('authenticated_execution') is False
 assert runtime.get('real_order_submission') is False
 pred=root/'research/executable_markout_forward_shadow/predictions.jsonl'
 assert pred.is_file()
-native=sorted((root/'research/native_observations').glob('*/*.jsonl'))
+native=[]
+for pattern in (
+    'research/native_observations/*/*.jsonl',
+    'research/hft_permanent/compact/*.jsonl',
+    'research/hft_permanent/compact/*.jsonl.gz',
+    'research/hft_permanent/compact_closed/*.jsonl',
+    'research/hft_permanent/compact_closed/*.jsonl.gz',
+):
+    native.extend(root.glob(pattern))
+# De-duplicate exact paths while preserving deterministic order.
+native=sorted({path.resolve() for path in native if path.is_file()})
 assert native
 
 with tempfile.TemporaryDirectory(prefix='pm-forward-eval-') as tmp:
