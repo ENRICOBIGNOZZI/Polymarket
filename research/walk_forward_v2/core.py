@@ -1173,7 +1173,8 @@ def replay_one(row, prediction, repricing, *, latency_ms, edge_threshold=.005, e
 def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
                   edge_threshold=.005, entry_cap=.75, shares=5.0,
                   execution_reserve=.005, ideal="REALISTIC",
-                  markout_horizon_ms=250, capital_budget=1000.0):
+                  markout_horizon_ms=250, capital_budget=1000.0,
+                  assume_sorted=False):
     """Sequential one-entry-per-market PAPER replay with bounded capital reservation.
 
     A market is consumed when an order is actually simulated, matching the
@@ -1184,7 +1185,9 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
     used_markets = set()
     reserved = 0.0
     outcomes = []
-    for event in sorted(evaluations, key=lambda value: (value["decision_ns"], value["decision_id"])):
+    sequence = evaluations if assume_sorted else sorted(
+        evaluations, key=lambda value: (value["decision_ns"], value["decision_id"]))
+    for event in sequence:
         row = event["row"]
         prediction, repricing = selector(event)
         available = row["market_id"] not in used_markets
@@ -1204,6 +1207,148 @@ def replay_policy(evaluations, selector, *, latency_ms, valuation_mode,
             reserved += float(outcome.get("reserved_cost") or 0.0)
         outcomes.append(outcome)
     return outcomes
+
+
+def _base_funnel_for_skipped(row):
+    funnel = {stage: False for stage in FUNNEL_STAGES}
+    funnel["native_decision_rows"] = True
+    funnel["valid_causal_signals"] = row["signal_valid"]
+    funnel["confirmed_signals"] = funnel["valid_causal_signals"] and row["confirmed"]
+    funnel["tte_valid"] = funnel["confirmed_signals"] and 30_000_000_000 <= row["tte_ns"] <= 120_000_000_000
+    funnel["fresh_book"] = funnel["tte_valid"] and row["book_valid"]
+    funnel["pm_pretrigger"] = funnel["fresh_book"] and row["pretrigger"]
+    return funnel
+
+
+def _aggregate_group(groups, key, outcome):
+    group = groups.setdefault(str(key), {
+        "opportunities": 0, "fills": 0, "marked_fills": 0,
+        "positive_markout_fills": 0, "markout_pnl": 0.0,
+    })
+    group["opportunities"] += 1
+    if outcome is None or outcome.get("filled", 0) <= 0:
+        return
+    group["fills"] += 1
+    if outcome.get("markout") is not None:
+        group["marked_fills"] += 1
+        group["positive_markout_fills"] += int(outcome["markout"] > 0)
+        group["markout_pnl"] += float(outcome["markout"])
+
+
+def _finalize_groups(groups):
+    result = {}
+    for key, value in groups.items():
+        item = dict(value)
+        if item["marked_fills"]:
+            item["markout_per_fill"] = item["markout_pnl"] / item["marked_fills"]
+        else:
+            item["markout_pnl"] = None
+            item["markout_per_fill"] = None
+        result[key] = item
+    return result
+
+
+def replay_policy_summary(evaluations, selector, *, latency_ms, valuation_mode,
+                          edge_threshold=.005, entry_cap=.75, shares=5.0,
+                          execution_reserve=.005, ideal="REALISTIC",
+                          markout_horizon_ms=250, capital_budget=1000.0,
+                          assume_sorted=False):
+    """Exact aggregate replay without retaining one outcome dict per opportunity.
+
+    Rows that cannot reach forecast/execution are aggregated directly. This is
+    materially faster for the horizon x latency surface where >90% of OOS rows
+    die before execution and raw per-row outcomes are never consumed.
+    """
+    sequence = evaluations if assume_sorted else sorted(
+        evaluations, key=lambda value: (value["decision_ns"], value["decision_id"]))
+    used_markets = set()
+    reserved = 0.0
+    funnel_counts = Counter()
+    status_counts = Counter()
+    by_asset, by_horizon = {}, {}
+    fills = partial_fills = censored = known = marked = positive_marked = 0
+    net_sum = observed_net_sum = markout_sum = markout_before_fee_sum = 0.0
+    entry_fee_sum = exit_fee_sum = roundtrip_fee_sum = fees_sum = turnover_sum = 0.0
+
+    for event in sequence:
+        row = event["row"]
+        prediction, repricing = selector(event)
+
+        # Fast path for the dominant rejected population. Preserve exact funnel
+        # semantics without constructing a full replay outcome.
+        base = _base_funnel_for_skipped(row)
+        if not base["pm_pretrigger"] or prediction is None:
+            for stage, value in base.items():
+                funnel_counts[stage] += int(bool(value))
+            status_counts["NO_SIGNAL"] += 1
+            _aggregate_group(by_asset, row["asset"], None)
+            _aggregate_group(by_horizon, row["horizon"], None)
+            continue
+
+        available = row["market_id"] not in used_markets
+        capital_available = reserved + min(3.75, shares * entry_cap) <= capital_budget + 1e-12
+        outcome = replay_one(
+            row, prediction, repricing, latency_ms=latency_ms,
+            edge_threshold=edge_threshold, entry_cap=entry_cap, shares=shares,
+            execution_reserve=execution_reserve, ideal=ideal,
+            valuation_mode=valuation_mode, markout_horizon_ms=markout_horizon_ms,
+            market_available=available, capital_available=capital_available,
+        )
+        if outcome["funnel"]["simulated_order"]:
+            used_markets.add(row["market_id"])
+            reserved += float(outcome.get("reserved_cost") or 0.0)
+        for stage, value in outcome["funnel"].items():
+            funnel_counts[stage] += int(bool(value))
+        status_counts[outcome["status"]] += 1
+        if outcome["status"].startswith("UNAVAILABLE"):
+            censored += 1
+        if outcome.get("filled", 0) > 0:
+            fills += 1
+            partial_fills += int(outcome["status"] == "PARTIAL_FILL")
+            fees_sum += float(outcome.get("fees", 0) or 0)
+            turnover_sum += float(outcome.get("turnover", 0) or 0)
+            if outcome.get("pnl") is not None:
+                known += 1
+                net_sum += float(outcome["pnl"])
+                observed_net_sum += float(outcome["pnl"])
+            if outcome.get("markout") is not None:
+                marked += 1
+                positive_marked += int(outcome["markout"] > 0)
+                markout_sum += float(outcome["markout"])
+                markout_before_fee_sum += float(outcome.get("markout_before_fee", 0) or 0)
+                entry_fee_sum += float(outcome.get("markout_entry_fee", 0) or 0)
+                exit_fee_sum += float(outcome.get("markout_exit_fee", 0) or 0)
+                roundtrip_fee_sum += float(outcome.get("markout_roundtrip_fees", 0) or 0)
+        _aggregate_group(by_asset, row["asset"], outcome)
+        _aggregate_group(by_horizon, row["horizon"], outcome)
+
+    simulated = funnel_counts["simulated_order"]
+    return {
+        "opportunities": len(sequence),
+        "simulated_orders": simulated,
+        "fills": fills,
+        "partial_fills": partial_fills,
+        "censored_execution": censored,
+        "fill_rate": fills / simulated if simulated else None,
+        "settled_fills": known,
+        "net_pnl": net_sum if known == fills else None,
+        "observed_net_pnl": observed_net_sum if known else None,
+        "marked_fills": marked,
+        "positive_markout_fills": positive_marked,
+        "markout_before_fee": markout_before_fee_sum if marked else None,
+        "markout_roundtrip_fees": roundtrip_fee_sum if marked else None,
+        "markout_entry_fees": entry_fee_sum if marked else None,
+        "markout_exit_fees": exit_fee_sum if marked else None,
+        "markout_pnl": markout_sum if marked else None,
+        "markout_per_fill": markout_sum / marked if marked else None,
+        "fees": fees_sum,
+        "turnover": turnover_sum,
+        "pnl_per_fill": observed_net_sum / known if known else None,
+        "funnel": {stage: int(funnel_counts[stage]) for stage in FUNNEL_STAGES},
+        "status_counts": dict(status_counts),
+        "by_asset": _finalize_groups(by_asset),
+        "by_contract_horizon": _finalize_groups(by_horizon),
+    }
 
 
 def _group_markout(outcomes, field):
@@ -1404,6 +1549,7 @@ def prediction_quality(evaluations):
 
 def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
     """OOS economics for settlement, midpoint and direct executable-markout targets."""
+    ordered = sorted(evaluations, key=lambda value: (value["decision_ns"], value["decision_id"]))
     result = {
         "schema": SCHEMA + "_economics_v2", **SAFETY,
         "models": {}, "latency": {}, "horizon_latency": {},
@@ -1432,8 +1578,8 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
 
     for name, (selector, valuation_mode, markout_horizon) in variants.items():
         outcomes = replay_policy(
-            evaluations, selector, latency_ms=100, valuation_mode=valuation_mode,
-            markout_horizon_ms=markout_horizon)
+            ordered, selector, latency_ms=100, valuation_mode=valuation_mode,
+            markout_horizon_ms=markout_horizon, assume_sorted=True)
         value = {
             "metrics": summarize(outcomes),
             "uncertainty": market_bootstrap(outcomes),
@@ -1457,11 +1603,11 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
                     "horizon_ms": horizon, "latency_ms": latency,
                 }
                 continue
-            outcomes = replay_policy(
-                evaluations, selector, latency_ms=latency,
+            metrics = replay_policy_summary(
+                ordered, selector, latency_ms=latency,
                 valuation_mode="EXECUTABLE_MARKOUT",
-                markout_horizon_ms=horizon)
-            cells[str(latency)] = {"state": "READY", **summarize(outcomes)}
+                markout_horizon_ms=horizon, assume_sorted=True)
+            cells[str(latency)] = {"state": "READY", **metrics}
         result["horizon_latency"][hkey] = cells
 
     # Backward-compatible latency chart uses a declared reference horizon only.
@@ -1471,10 +1617,9 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
     reference_selector = lambda event: (event["markout_predictions"].get("500"), None)
     for kind in ("ZERO_LATENCY_EXECUTION_UPPER_BOUND", "NO_SPREAD_FEE_EXECUTION_UPPER_BOUND",
                  "PERFECT_FILL_AT_CAUSAL_DECISION_ASK_UPPER_BOUND"):
-        outcomes = replay_policy(
-            evaluations, reference_selector, latency_ms=100,
+        upper[kind] = replay_policy_summary(
+            ordered, reference_selector, latency_ms=100,
             valuation_mode="EXECUTABLE_MARKOUT", markout_horizon_ms=500,
-            ideal=kind)
-        upper[kind] = summarize(outcomes)
+            ideal=kind, assume_sorted=True)
     result["idealized_upper_bounds"] = upper
     return result
