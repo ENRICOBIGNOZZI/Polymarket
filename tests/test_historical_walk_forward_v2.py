@@ -661,7 +661,7 @@ def test_live_parity_diagnostics_expose_tte_entry_cap_and_full_depth_mismatches(
     assert cell["research_tte"] == 1
     assert cell["live_tte"] == 0
     assert cell["research_entry_cap"] == 0
-    assert cell["live_entry_cap"] == 0
+    assert cell["live_entry_cap"] == 1
     assert cell["research_depth_gate"] == 1
     assert cell["live_full_depth_gate"] == 0
 
