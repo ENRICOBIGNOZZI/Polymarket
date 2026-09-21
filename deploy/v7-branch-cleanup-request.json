@@ -9,5 +9,6 @@
   "force_delete": [
     "codex/v7-trade-frequency-risk-sizing-v1",
     "codex/v7-independent-collection-deploy-v1"
-  ]
+  ],
+  "request_id": "cleanup-20260921T1918CEST"
 }
