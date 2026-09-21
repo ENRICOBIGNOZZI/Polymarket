@@ -6,7 +6,7 @@ missing evidence as censored rather than as a zero move, fill, or PnL.
 """
 from __future__ import annotations
 
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 import gzip
 import hashlib
@@ -25,6 +25,7 @@ SAFETY = {
 }
 SCHEMA = "historical_walk_forward_v2"
 HORIZONS_MS = (25, 50, 100, 250, 500, 1000, 2000)
+EXECUTION_LATENCIES_MS = (0, 10, 25, 50, 100, 250, 500)
 TARGET_TOLERANCE_NS = 50_000_000
 DEFAULT_EPOCH_NS = 1_789_921_800_000_000_000  # 2026-09-20 16:30:00 UTC
 REASON_NAMES = {
@@ -193,6 +194,10 @@ def numeric_features(row):
 def native_decision(row):
     if not valid_native(row) or row.get("kind") != 2:
         return None, "invalid_native"
+    if row.get("signal_valid") is not True or row.get("confirmed_non_opposing") is not True:
+        return None, "not_valid_confirmed_signal"
+    if row.get("book_valid") is not True:
+        return None, "invalid_book"
     required = (
         "server_id", "run_id", "capture_id", "market_id", "token_id", "asset",
         "horizon", "decision_monotonic_ns", "trigger_monotonic_ns",
@@ -296,7 +301,17 @@ def attach_labels(decisions, settlement_roots):
         record["label_provenance"] = label["provenance"]
 
 
+def _record_book_candidate(record, book, target_ns, *, tolerance_ns):
+    return (
+        book["time_ns"] >= target_ns
+        and book["time_ns"] - target_ns <= tolerance_ns
+        and (not record["epoch"] or book["epoch"] == record["epoch"])
+        and book["time_ns"] < record["decision_ns"] + record["tte_ns"]
+    )
+
+
 def book_targets(decisions, books, tolerance_ns=TARGET_TOLERANCE_NS):
+    """Small in-memory helper retained for deterministic unit tests."""
     by_key = defaultdict(list)
     for book in books:
         by_key[(book["market_id"], book["token_id"])].append(book)
@@ -337,13 +352,87 @@ def book_targets(decisions, books, tolerance_ns=TARGET_TOLERANCE_NS):
         record["timeline_times"] = times
 
 
-def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=None):
-    """Load immutable HFT objects from either a run root or hft_permanent.
+def attach_streamed_book_evidence(decisions, paths, *, tolerance_ns=TARGET_TOLERANCE_NS):
+    """Stream large PM windows and retain only snapshots V2 can actually use."""
+    by_key = defaultdict(list)
+    for record in decisions:
+        record["targets"] = {}
+        record["arrivals"] = {}
+        by_key[(record["market_id"], record["token_id"])].append(record)
+    decision_times = {}
+    for key, rows in by_key.items():
+        rows.sort(key=lambda row: (row["decision_ns"], row["decision_id"]))
+        decision_times[key] = [row["decision_ns"] for row in rows]
 
-    The production layout is RUN_ROOT/research/hft_permanent for compact/window
-    data and RUN_ROOT/research/public_settlements for settlement evidence.
-    Direct hft_permanent input remains supported for tests/offline copies.
-    """
+    observed_books = matched = 0
+    for path in paths:
+        for raw in json_lines(path):
+            if raw is None or raw.get("schema") != "polymarket_v7_causal_book_observation_v1":
+                continue
+            if not valid_book(raw):
+                continue
+            book = book_from_row(raw)
+            key = (book["market_id"], book["token_id"])
+            rows = by_key.get(key)
+            if not rows:
+                continue
+            observed_books += 1
+            times = decision_times[key]
+            for horizon in HORIZONS_MS:
+                delta = horizon * 1_000_000
+                left = bisect_left(times, book["time_ns"] - delta - tolerance_ns)
+                right = bisect_right(times, book["time_ns"] - delta)
+                for record in rows[left:right]:
+                    target = record["decision_ns"] + delta
+                    if not _record_book_candidate(record, book, target, tolerance_ns=tolerance_ns):
+                        continue
+                    current = record["targets"].get(str(horizon))
+                    if current and current.get("observed_time_ns", 1 << 63) <= book["time_ns"]:
+                        continue
+                    mid0 = (record["bid"] + record["ask"]) / 2
+                    mid1 = (book["bid"] + book["ask"]) / 2
+                    record["targets"][str(horizon)] = {
+                        "state": "OBSERVED", "observed_time_ns": book["time_ns"],
+                        "mid_change": mid1 - mid0, "ask_change": book["ask"] - record["ask"],
+                        "bid_change": book["bid"] - record["bid"], "arrival_ask": book["ask"],
+                        "arrival_bid": book["bid"], "arrival_quantity": book["quantity"],
+                    }
+                    matched += 1
+            for latency in EXECUTION_LATENCIES_MS:
+                delta = latency * 1_000_000
+                left = bisect_left(times, book["time_ns"] - delta - tolerance_ns)
+                right = bisect_right(times, book["time_ns"] - delta)
+                for record in rows[left:right]:
+                    target = record["decision_ns"] + delta
+                    if not _record_book_candidate(record, book, target, tolerance_ns=tolerance_ns):
+                        continue
+                    current = record["arrivals"].get(str(latency))
+                    if current and current["time_ns"] <= book["time_ns"]:
+                        continue
+                    record["arrivals"][str(latency)] = {
+                        "time_ns": book["time_ns"], "bid": book["bid"], "ask": book["ask"],
+                        "quantity": book["quantity"], "epoch": book["epoch"],
+                    }
+
+    short_pairs = arrival_pairs = 0
+    for record in decisions:
+        for horizon in HORIZONS_MS:
+            key = str(horizon)
+            if key not in record["targets"]:
+                record["targets"][key] = {"state": "UNAVAILABLE_NO_POST_BOOK"}
+            elif record["targets"][key].get("state") == "OBSERVED":
+                short_pairs += 1
+        arrival_pairs += len(record["arrivals"])
+    return {
+        "observed_book_rows_for_signal_keys": observed_books,
+        "short_horizon_observed_pairs": short_pairs,
+        "arrival_observed_pairs": arrival_pairs,
+        "matched_target_updates": matched,
+    }
+
+
+def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=None):
+    """Load causal signals first; stream PM evidence without materializing the full tape."""
     supplied_root = Path(root)
     run_layout = supplied_root / "research" / "hft_permanent"
     if run_layout.is_dir():
@@ -368,14 +457,17 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
                     for path in sorted(archives.glob("cutover-*"))
                     if path.is_dir() and not path.is_symlink()
                 )
+
     result = {"schema": SCHEMA + "_data_v1", **SAFETY, "root": str(supplied_root),
               "hft_root": str(hft_root), "settlement_roots": [str(path) for path in label_roots],
               "minimum_wall_ns": minimum_wall_ns, "sources": [], "decisions": [],
-              "books": [], "exclusions": Counter(), "input_state": "READY"}
-    compact = list((hft_root / "compact").glob("*.jsonl*")) + list((hft_root / "compact_closed").glob("*.jsonl*"))
-    windows = list((hft_root / "windows").glob("*.jsonl*"))
-    seen_sources, seen_decisions, seen_books = set(), set(), set()
-    for path in sorted(compact + windows):
+              "exclusions": Counter(), "input_state": "READY", "book_evidence": {}}
+    compact = sorted(list((hft_root / "compact").glob("*.jsonl*"))
+                     + list((hft_root / "compact_closed").glob("*.jsonl*")))
+    windows = sorted((hft_root / "windows").glob("*.jsonl*"))
+    seen_sources, seen_decisions = set(), set()
+
+    for path in compact:
         if path.is_symlink() or not path.is_file():
             continue
         content = source_hash(path)
@@ -388,47 +480,50 @@ def build_dataset(root, *, minimum_wall_ns=DEFAULT_EPOCH_NS, settlement_root=Non
             if row is None:
                 result["exclusions"]["INVALID_JSON"] += 1
                 continue
-            if row.get("schema") == "polymarket_v7_native_observation_v1":
-                if native_wall_ns(row) < minimum_wall_ns:
-                    result["exclusions"]["PRE_EPOCH_NATIVE"] += 1
-                    continue
-                decision, why = native_decision(row)
-                if decision is None:
-                    result["exclusions"][why] += 1
-                elif decision["decision_id"] in seen_decisions:
-                    result["exclusions"]["DUPLICATE_DECISION"] += 1
-                else:
-                    seen_decisions.add(decision["decision_id"])
-                    result["decisions"].append(decision)
-            elif row.get("schema") == "polymarket_v7_causal_book_observation_v1":
-                if not valid_book(row):
-                    result["exclusions"]["INVALID_OR_DISCONTINUOUS_BOOK"] += 1
-                    continue
-                book = book_from_row(row)
-                if book["time_ns"] < minimum_wall_ns:
-                    result["exclusions"]["PRE_EPOCH_BOOK"] += 1
-                    continue
-                identity = (book["market_id"], book["token_id"], book["session"], book["epoch"], book["sequence"])
-                if identity in seen_books:
-                    result["exclusions"]["DUPLICATE_BOOK"] += 1
-                else:
-                    seen_books.add(identity)
-                    result["books"].append(book)
+            if row.get("schema") != "polymarket_v7_native_observation_v1":
+                continue
+            if row.get("kind") == 2:
+                result["exclusions"]["NATIVE_DECISION_ROWS_TOTAL"] += 1
+            if native_wall_ns(row) < minimum_wall_ns:
+                result["exclusions"]["PRE_EPOCH_NATIVE"] += 1
+                continue
+            decision, why = native_decision(row)
+            if decision is None:
+                result["exclusions"][why] += 1
+            elif decision["decision_id"] in seen_decisions:
+                result["exclusions"]["DUPLICATE_DECISION"] += 1
+            else:
+                seen_decisions.add(decision["decision_id"])
+                result["decisions"].append(decision)
+
     result["decisions"].sort(key=lambda r: (r["decision_ns"], r["decision_id"]))
-    result["books"].sort(key=lambda r: (r["time_ns"], r["market_id"], r["token_id"], r["sequence"]))
     attach_labels(result["decisions"], label_roots)
-    book_targets(result["decisions"], result["books"])
+
+    unique_windows = []
+    for path in windows:
+        if path.is_symlink() or not path.is_file():
+            continue
+        content = source_hash(path)
+        if content in seen_sources:
+            result["exclusions"]["DUPLICATE_SOURCE_OBJECT"] += 1
+            continue
+        seen_sources.add(content)
+        result["sources"].append({"path": str(path.relative_to(hft_root)), "sha256": content})
+        unique_windows.append(path)
+    if result["decisions"]:
+        result["book_evidence"] = attach_streamed_book_evidence(result["decisions"], unique_windows)
+
     result["exclusions"] = dict(result["exclusions"])
     if not hft_root.is_dir():
         result["input_state"] = "ROOT_UNAVAILABLE"
     elif not result["decisions"]:
         result["input_state"] = "NO_ADMISSIBLE_NATIVE_DECISIONS"
-    elif not result["books"]:
+    elif result["book_evidence"].get("short_horizon_observed_pairs", 0) == 0:
         result["input_state"] = "NO_ADMISSIBLE_PM_BOOK_WINDOWS"
     result["data_sha256"] = digest({
         "minimum_wall_ns": minimum_wall_ns, "sources": result["sources"],
         "decision_ids": [r["decision_id"] for r in result["decisions"]],
-        "book_ids": [(r["market_id"], r["token_id"], r["session"], r["epoch"], r["sequence"]) for r in result["books"]],
+        "book_evidence": result["book_evidence"],
     })
     return result
 
@@ -624,6 +719,9 @@ def fee_per_share(row, price):
 
 
 def arrival(row, latency_ms):
+    cached = (row.get("arrivals") or {}).get(str(int(latency_ms)))
+    if cached is not None:
+        return cached, None
     timeline = row.get("timeline") or []
     target = row["decision_ns"] + int(latency_ms) * 1_000_000
     times = row.get("timeline_times")
