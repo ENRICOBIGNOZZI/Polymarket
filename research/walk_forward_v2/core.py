@@ -248,6 +248,15 @@ def native_decision(row):
             "tick": int(row["tick_e4"]) / 10000,
             "minimum": float(row["minimum_order_microunits"]) / 1_000_000,
             "fee_rate": float(row["fee_rate"]), "fee_exponent": float(row["fee_exponent"]),
+            "paper_venue_delay_ns": (
+                int(row["paper_venue_delay_ns"])
+                if isinstance(row.get("paper_venue_delay_ns"), int) else None
+            ),
+            "paper_assumed_transport_delay_ns": (
+                int(row["paper_assumed_transport_delay_ns"])
+                if isinstance(row.get("paper_assumed_transport_delay_ns"), int) else None
+            ),
+            "paper_terms_sha256": str(row.get("paper_terms_sha256") or ""),
             "epoch": int(row.get("connection_epoch") or 0),
             "features": numeric_features(row), "raw_probability": row.get("probability_forecast"),
             "label": None, "label_information_ns": None, "label_provenance": "UNAVAILABLE",
@@ -1006,6 +1015,8 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
             observed_targets, spreads, entry_fees, roundtrip_costs = [], [], [], []
             asks, depths, minimums, fee_rates, fee_exponents = [], [], [], [], []
             signal_returns, signal_ages_ms = [], []
+            venue_delays_ms, assumed_transport_delays_ms, configured_total_delays_ms = [], [], []
+            delay_state_counts = Counter()
             relative_required_edges = []
             size_capacity = {
                 str(size): {"base_valid_rows": 0, "decision_depth_ge_size": 0,
@@ -1051,6 +1062,19 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                 if finite(row.get("features", {}).get("binance_return_100ms_bp")):
                     signal_returns.append(abs(float(row["features"]["binance_return_100ms_bp"])))
                 signal_ages_ms.append(float(row.get("signal_age_ns") or 0) / 1_000_000)
+                venue_delay = row.get("paper_venue_delay_ns")
+                transport_delay = row.get("paper_assumed_transport_delay_ns")
+                if isinstance(venue_delay, int) and venue_delay >= 0:
+                    venue_delays_ms.append(venue_delay / 1_000_000)
+                if isinstance(transport_delay, int) and transport_delay >= 0:
+                    assumed_transport_delays_ms.append(transport_delay / 1_000_000)
+                if (
+                    isinstance(venue_delay, int) and venue_delay >= 0
+                    and isinstance(transport_delay, int) and transport_delay >= 0
+                ):
+                    total_ms = (venue_delay + transport_delay) / 1_000_000
+                    configured_total_delays_ms.append(total_ms)
+                    delay_state_counts[str(int(round(total_ms)))] += 1
                 relative_required_edges.append(required_prediction / ask if ask > 0 else math.nan)
                 for size in size_grid:
                     cell = size_capacity[str(size)]
@@ -1124,6 +1148,10 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                 "fee_schedule_counts": dict(fee_schedules),
                 "absolute_binance_return_100ms_bp_quantiles": q(signal_returns),
                 "signal_age_ms_quantiles": q(signal_ages_ms),
+                "paper_venue_delay_ms_quantiles": q(venue_delays_ms),
+                "paper_assumed_transport_delay_ms_quantiles": q(assumed_transport_delays_ms),
+                "paper_configured_total_delay_ms_quantiles": q(configured_total_delays_ms),
+                "paper_configured_total_delay_ms_counts": dict(delay_state_counts),
                 "visible_depth_quantiles": q(depths),
                 "venue_minimum_quantiles": q(minimums),
                 "required_prediction_as_fraction_of_price_quantiles": q(relative_required_edges),
