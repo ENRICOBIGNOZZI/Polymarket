@@ -1431,20 +1431,45 @@ def run_program(
             models[name], rich_splits["LOCAL_TEST_20"],
             latency_ms=latency, horizon_ms=horizon)
 
+    def compact_surface(surface):
+        return {
+            "latencies_ms": surface.get("latencies_ms"),
+            "exit_horizons_ms": surface.get("exit_horizons_ms"),
+            "cells": {
+                key: {
+                    k: v for k, v in cell.items()
+                    if k not in ("decisions", "equity_events")
+                }
+                for key, cell in (surface.get("cells") or {}).items()
+            },
+        }
+
     nested_artifact = {
         "schema": SCHEMA + "_nested_models",
         **SAFETY_PLUS,
         "nested_information_sets": {k: sorted(v) for k, v in NESTED.items()},
         "training_receipts": model_receipts,
-        "validation": validation_results,
-        "internal_test": test_results,
+        "validation": {
+            name: compact_surface(surface)
+            for name, surface in validation_results.items()
+        },
+        "internal_test": {
+            name: compact_surface(surface)
+            for name, surface in test_results.items()
+        },
     }
     family_artifact = {
         "schema": SCHEMA + "_univariate_family_additions",
         **SAFETY_PLUS,
         "base_information": ["baseline"],
         "family_training_receipts": family_receipts,
-        "results": family_results,
+        "results": {
+            family: {
+                "validation": compact_surface(result["validation"]),
+                "test": compact_surface(result["test"]),
+            }
+            for family, result in family_results.items()
+        },
     }
     cube = {
         "schema": SCHEMA + "_information_entry_exit_cube",
@@ -1472,7 +1497,26 @@ def run_program(
     }
     signal_decay = {}
     momentum_reversal = {}
-    equities = {"baseline": baseline["equity_events"], "candidates": {}}
+    baseline_reference_keys = {
+        candidate["validation_best_cell"] for candidate in shortlist
+    }
+    descriptive_baseline_key = max(
+        baseline["cells"],
+        key=lambda key: (
+            -1e100 if baseline["cells"][key]["total_pnl"] is None
+            else float(baseline["cells"][key]["total_pnl"])
+        ),
+    )
+    baseline_reference_keys.add(descriptive_baseline_key)
+    baseline_reference_equities = {
+        key: baseline["equity_events"].get(key, [])
+        for key in sorted(baseline_reference_keys)
+    }
+    equities = {
+        "baseline_reference_cells": baseline_reference_equities,
+        "descriptive_baseline_cell": descriptive_baseline_key,
+        "candidates": {},
+    }
     for candidate in shortlist:
         name = candidate["model"]
         key = candidate["validation_best_cell"]
@@ -1546,8 +1590,14 @@ def run_program(
     write_json(output / "01_2h_manifest.json", manifest)
     write_json(output / "02_data_coverage.json", coverage)
     write_json(output / "03_baseline_manifest.json", baseline_manifest)
+    baseline_compact = {
+        key: value for key, value in baseline.items()
+        if key != "equity_events"
+    }
+    baseline_compact["reference_equity_events"] = baseline_reference_equities
+    baseline_compact["descriptive_baseline_cell"] = descriptive_baseline_key
     write_json(output / "04_baseline_2h.json", {
-        "schema": SCHEMA + "_baseline_2h", **SAFETY_PLUS, **baseline})
+        "schema": SCHEMA + "_baseline_2h", **SAFETY_PLUS, **baseline_compact})
     write_json(output / "05_external_backfill.json", external_backfill)
     write_json(output / "06_causal_join.json", causal_join)
     write_json(output / "07_univariate_alpha.json", family_artifact)
