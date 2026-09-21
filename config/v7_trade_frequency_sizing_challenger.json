@@ -10,7 +10,8 @@
   "conditional_calibration": {
     "enabled": true,
     "minimum_markets": 12,
-    "shrinkage": 20
+    "shrinkage": 20,
+    "selection_insufficient_policy": "MAX_OBSERVED"
   },
   "sizing": {
     "context_count": 30,
@@ -39,7 +40,8 @@
         0.04,
         1
       ]
-    ]
+    ],
+    "support_probability_weighted": true
   },
   "objective": "CAUSAL_EXECUTABLE_NET_PNL_PER_UNIT_TIME",
   "selection": "RESEARCH_ONLY_NO_AUTOMATIC_PROMOTION"
