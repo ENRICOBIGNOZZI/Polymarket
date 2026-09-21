@@ -127,7 +127,7 @@ def test_forward_evaluator_blocks_sub_five_share_decision_depth():
 
 
 def test_forward_evaluator_rejects_prediction_after_label_availability():
-    pred = prediction(30)
+    pred = prediction(600)
     origin = origin_row()
     p25 = label_point(kind6(25, 4900, 5000))
     p500 = label_point(kind6(500, 5500, 5600))
