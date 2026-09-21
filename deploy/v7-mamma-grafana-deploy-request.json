@@ -1,0 +1,7 @@
+{
+  "schema": "polymarket_v7_mamma_grafana_deploy_v1",
+  "source_sha": "c7c4de15df26805f51b78733dcf755854ffc87e3",
+  "dashboard_uid": "polymarket-v7-pure-arb",
+  "folder_uid": "afyms0c1xjabkf",
+  "monitoring_only": true
+}
