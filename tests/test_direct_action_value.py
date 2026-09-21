@@ -190,7 +190,15 @@ def test_model_receipt_explicitly_disclaims_mean_covariance_and_l2_impact():
     receipt = model.training_receipt
     assert receipt["mean_covariance_estimation"] is False
     assert receipt["capacity_scope"] == "L1_ONLY_NO_COUNTERFACTUAL_IMPACT_BEYOND_VISIBLE_DEPTH"
-    assert receipt["calibration_state"] == "TEMPORAL_MARKET_BLOCK_CONFORMAL"
+    assert receipt["mean_calibration_market_overlap"] == 0
+    assert receipt["calibration_semantics"] == (
+        "FINAL_MEAN_NEVER_FITS_SELECTION_CALIBRATION_MARKETS;"
+        "CALIBRATION_RUNS_AFTER_CONTINUOUS_SIDE_Q_H_ARGMAX"
+    )
+    assert receipt["calibration_state"] in (
+        "TEMPORAL_MARKET_BLOCK_SELECTED_POLICY_ONE_SIDED",
+        "INSUFFICIENT_SELECTED_POLICY_CALIBRATION",
+    )
 
 
 
@@ -1029,3 +1037,93 @@ def test_nested_risk_frontier_skips_inner_blocks_with_zero_executable_actions():
             assert selection["qualified_policy_ids"] == []
             assert fold["inner_fit_failures"]
             assert fold["outer_oos"]["state"] == "NOT_EVALUATED_NO_VALIDATION_MODEL"
+
+
+
+def test_selected_policy_calibration_penalty_is_post_argmax_and_one_sided():
+    import numpy as np
+
+    rows = [
+        row(
+            "m" + str(index + 4000),
+            signal=2.0,
+            exit_bid=.40,
+            depth=20.0,
+        )
+        for index in range(24)
+    ]
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        friction_policy=FrictionPolicy(uncertainty_aversion=0.0),
+    )
+    model._configure_levels(rows)
+
+    class OptimisticModel:
+        def __init__(self, names):
+            self.names = tuple(names)
+            self.center = {name: 0.0 for name in self.names}
+            self.scale = {name: 1.0 for name in self.names}
+            self.beta = np.zeros(1 + 2 * len(self.names), dtype=float)
+            self.beta[0] = 1.0
+            self.beta[1 + self.names.index("action.size")] = .01
+
+        def predict(self, record):
+            value = float(self.beta[0])
+            for index, name in enumerate(self.names):
+                raw = record["features"].get(name)
+                if isinstance(raw, (int, float)) and math.isfinite(raw):
+                    value += float(self.beta[1 + index]) * float(raw)
+                else:
+                    value += float(
+                        self.beta[1 + len(self.names) + index])
+            return value
+
+    model.mean_model = OptimisticModel(model.model_feature_names)
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+    model.fitted = True
+
+    calibration = model._calibrate_selected_policy(
+        rows, {str(item["market_id"]) for item in rows})
+    assert calibration["state"] == (
+        "TEMPORAL_MARKET_BLOCK_SELECTED_POLICY_ONE_SIDED")
+    assert calibration["observed_selected_markets"] >= 10
+    assert calibration["penalty"] > 0
+    assert calibration["mean_optimism_after_base_scale"] > 0
+
+    probe = row("m4999", signal=2.0, exit_bid=.40, depth=20.0)
+    uncalibrated = model.select_action(probe, latency_ms=50)
+    assert uncalibrated["action"] == "TRADE"
+
+    model.selection_optimism_penalty = calibration["penalty"]
+    calibrated = model.select_action(probe, latency_ms=50)
+    assert calibrated["action"] == "NO_TRADE"
+
+
+def test_fit_never_uses_selection_calibration_markets_for_final_mean():
+    rows = [
+        row(
+            "m" + str(index + 5000),
+            signal=2.0 if index % 2 == 0 else -2.0,
+            exit_bid=.56 if index % 2 == 0 else .44,
+            depth=20.0,
+        )
+        for index in range(100)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(1.0, 5.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        streaming_batch_size=32,
+    ).fit(rows)
+    receipt = model.training_receipt
+    assert receipt["training_states_used"] == 100
+    assert receipt["mean_fit_states"] + receipt["selection_calibration_states"] == 100
+    assert receipt["selection_calibration_states"] > 0
+    assert receipt["mean_calibration_market_overlap"] == 0
+    assert receipt["mean_fit_markets"] + receipt["selection_calibration_markets"] == 100
+    assert receipt["calibration_multiplier"] == 1.0
+    assert "selection_optimism_penalty" in receipt
