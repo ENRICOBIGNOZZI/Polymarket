@@ -80,6 +80,7 @@ def public_economics(economics):
         "prediction_metrics": economics.get("prediction_metrics", {}),
         "pm_edge_distribution": economics.get("pm_edge_distribution", {}),
         "asset_selection_diagnostics": economics.get("asset_selection_diagnostics", {}),
+        "live_parity_policy_diagnostics": economics.get("live_parity_policy_diagnostics", {}),
         "models": {
             name: {
                 "metrics": value.get("metrics", {}),
