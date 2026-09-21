@@ -1872,6 +1872,9 @@ def summarize_direct_action(outcomes):
             float(row.get("total_residual_friction") or 0.0) for row in trades),
         "total_predicted_uncertainty_penalty": sum(
             float(row.get("uncertainty_penalty") or 0.0) for row in trades),
+        "total_predicted_selection_optimism_penalty": sum(
+            float(row.get("selection_optimism_penalty") or 0.0)
+            for row in trades),
         "selected_size_distribution": numeric_distribution(
             row.get("size") for row in trades),
         "selected_notional_distribution": numeric_distribution(
@@ -1904,6 +1907,7 @@ def merge_direct_action_summaries(summaries):
         "positive_observed_trades", "zero_observed_trades",
         "negative_observed_trades", "total_predicted_residual_friction",
         "total_predicted_uncertainty_penalty",
+        "total_predicted_selection_optimism_penalty",
     )
     result = {"schema": SCHEMA + "_summary_v2", **SAFETY}
     for key in additive:
@@ -1911,6 +1915,7 @@ def merge_direct_action_summaries(summaries):
         if key not in (
             "total_predicted_residual_friction",
             "total_predicted_uncertainty_penalty",
+            "total_predicted_selection_optimism_penalty",
         ):
             result[key] = int(result[key])
 
@@ -2013,7 +2018,8 @@ def walk_forward_direct_action(
                         "market_id", "asset", "contract_horizon", "decision_ns",
                         "side", "size", "exit_horizon_ms", "latency_ms", "notional",
                         "policy_utility", "predicted_total_net_cash_pnl",
-                        "uncertainty_penalty", "total_residual_friction",
+                        "uncertainty_penalty", "selection_optimism_penalty",
+                        "total_residual_friction",
                         "realized_pnl", "target_state",
                     )
                 })
