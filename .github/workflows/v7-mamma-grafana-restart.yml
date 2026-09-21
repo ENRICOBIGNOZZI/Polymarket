@@ -43,7 +43,6 @@ jobs:
         uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
-          ping: ${{ env.SERVER_HOST }}
       - name: Join tailnet oauth
         if: steps.ts.outputs.mode == 'oauth'
         uses: tailscale/github-action@v4
@@ -51,7 +50,6 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: ${{ vars.TS_TAGS || 'tag:ci' }}
-          ping: ${{ env.SERVER_HOST }}
       - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
