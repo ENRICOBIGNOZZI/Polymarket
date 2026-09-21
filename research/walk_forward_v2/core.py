@@ -1271,14 +1271,15 @@ def _serialize_ridge(model, eligible, names, key, target_name):
 
 
 def fit_full_repricing(records):
-    """Freeze midpoint and executable-markout models on all available history.
+    """Freeze pooled and per-asset research models on all available history.
 
-    These post-OOS fits are never used to score the historical folds and are
-    never automatically promoted. The executable-markout family is the next
-    forward-PAPER candidate because its target matches tradable exit economics.
+    Historical evaluation remains strictly OOS. These artifacts are fitted only
+    after evaluation and are eligible for the next PAPER research champion slot
+    if a preregistered promotion gate passes. No real execution authority is
+    encoded in this artifact.
     """
     names = feature_names(records)
-    midpoint_models, markout_models = {}, {}
+    midpoint_models, markout_models, asset_markout_models = {}, {}, {}
     for horizon in HORIZONS_MS:
         key = str(horizon)
         eligible = [
@@ -1301,13 +1302,39 @@ def fit_full_repricing(records):
         markout_models[key] = _serialize_ridge(
             markout_model, eligible, names, key,
             "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees")
+
+        per_asset = {}
+        for asset in sorted({row["asset"] for row in records}):
+            asset_rows = [row for row in eligible if row["asset"] == asset]
+            if len(asset_rows) < 8:
+                per_asset[asset] = {
+                    "state": "INSUFFICIENT_TRAINING_TARGETS",
+                    "rows": len(asset_rows),
+                    "ridge": 8.0,
+                }
+                continue
+            asset_model = Ridge(names, ridge=8.0).fit(
+                asset_rows, lambda row, h=key: executable_markout_target(row, h))
+            per_asset[asset] = _serialize_ridge(
+                asset_model, asset_rows, names, key,
+                "future_executable_bid_minus_decision_ask_minus_entry_and_exit_taker_fees")
+            per_asset[asset]["asset"] = asset
+            per_asset[asset]["pooling"] = "ASSET_SPECIFIC"
+        asset_markout_models[key] = per_asset
     return {
-        "schema": SCHEMA + "_full_window_repricing_models_v2",
+        "schema": SCHEMA + "_full_window_repricing_models_v3",
         **SAFETY,
         "automatic_promotion": False,
         "evaluation_role": "POST_OOS_FIT_FOR_NEXT_FORWARD_PAPER_ONLY",
+        "training_window": {
+            "mode": "EXPANDING_ALL_CAUSAL_HISTORY",
+            "minimum_wall_ns": min((row["decision_ns"] for row in records), default=None),
+            "maximum_decision_ns": max((row["decision_ns"] for row in records), default=None),
+            "decision_rows": len(records),
+        },
         "models": midpoint_models,
         "executable_markout_models": markout_models,
+        "asset_executable_markout_models": asset_markout_models,
     }
 
 
@@ -2007,6 +2034,52 @@ def economic_evaluation(evaluations, *, latency_ms=(10, 25, 50, 100, 250, 500)):
             }
         result["live_parity_horizon_latency"][hkey] = pooled_cells
         result["live_parity_asset_horizon_latency"][hkey] = asset_cells
+
+    # Preregistered promotion candidate set evaluated under exact current
+    # native PAPER geometry at one frozen reference latency. This avoids
+    # selecting a model and a latency jointly after seeing outcomes.
+    promotion_latency_ms = 50
+    result["promotion_reference_latency_ms"] = promotion_latency_ms
+    result["live_policy_promotion_candidates"] = {}
+    for family in ("POOLED", "ASSET_SPECIFIC"):
+        for horizon in (500, 1000, 2000):
+            hkey = str(horizon)
+            if family == "POOLED":
+                selector = lambda event, h=hkey: (
+                    event.get("markout_predictions", {}).get(h), None)
+            else:
+                selector = lambda event, h=hkey: (
+                    event.get("asset_markout_predictions", {}).get(h), None)
+            outcomes = replay_policy(
+                ordered, selector,
+                latency_ms=promotion_latency_ms,
+                valuation_mode="EXECUTABLE_MARKOUT",
+                markout_horizon_ms=horizon,
+                assume_sorted=True,
+                entry_cap=.80,
+                shares=5.0,
+                minimum_tte_ns=105_000_000_000,
+                maximum_tte_ns=120_000_000_000,
+                require_full_visible_depth=True,
+            )
+            cid = family.lower() + "_" + hkey + "ms"
+            result["live_policy_promotion_candidates"][cid] = {
+                "family": family,
+                "horizon_ms": horizon,
+                "reference_latency_ms": promotion_latency_ms,
+                "metrics": summarize(outcomes),
+                "uncertainty": market_bootstrap(outcomes),
+                "candidate_contract": {
+                    "ridge": 8.0,
+                    "edge_threshold": .005,
+                    "execution_reserve": .005,
+                    "entry_cap": .80,
+                    "shares": 5.0,
+                    "minimum_tte_ns": 105_000_000_000,
+                    "maximum_tte_ns": 120_000_000_000,
+                    "require_full_visible_depth": True,
+                },
+            }
 
     # Backward-compatible latency chart uses a declared reference horizon only.
     result["latency"] = result["horizon_latency"]["500"]
