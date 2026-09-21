@@ -13,22 +13,81 @@ from collections import Counter, defaultdict
 import json
 import math
 from pathlib import Path
-import statistics
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
 from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, finite
 from research.walk_forward_v3.direct_action import (
     _valid_state, decision_side_state, selected_action_side,
-)
-from research.walk_forward_v3.multi_alpha_2h import (
-    LATENCIES, EXITS, WINDOW_NS, candidate_windows, chronological_split,
-    equity_stats, native_execute_side_cell, row_features,
+    realized_action_economics,
 )
 
 SCHEMA="polymarket_v7_native_2h_alpha_library_v1"
+LATENCIES=(5,10,25,50,100,250)
+EXITS=(500,750,1000,1500,2000,3000,4000,5000,7500,10000)
+SIZE=5.0
+WINDOW_NS=2*60*60*1_000_000_000
+STEP_NS=15*60*1_000_000_000
+
+
+def candidate_windows(rows):
+    times=sorted(int(r["decision_ns"]) for r in rows)
+    if not times or times[-1]-times[0]<WINDOW_NS:
+        return []
+    first=(times[0]//STEP_NS)*STEP_NS
+    ordered=sorted(rows,key=lambda r:(int(r["decision_ns"]),str(r["decision_id"])))
+    output=[]
+    left=right=0
+    n=len(ordered)
+    for start in range(first,times[-1]-WINDOW_NS+1,STEP_NS):
+        end=start+WINDOW_NS
+        while left<n and int(ordered[left]["decision_ns"])<start:left+=1
+        if right<left:right=left
+        while right<n and int(ordered[right]["decision_ns"])<end:right+=1
+        subset=ordered[left:right]
+        if subset:
+            output.append({
+                "start_ns":start,"end_ns":end,"rows":subset,
+                "assets":len({str(r.get("asset") or "UNKNOWN") for r in subset}),
+                "contracts":len({str(r.get("horizon") or "UNKNOWN") for r in subset}),
+                "markets":len({str(r["market_id"]) for r in subset}),
+                "decisions":len(subset),
+            })
+    return output
+
+
+def chronological_split(rows):
+    ordered=sorted(rows,key=lambda r:(int(r["decision_ns"]),str(r["decision_id"])))
+    n=len(ordered)
+    a,b=max(1,int(n*.60)),max(2,int(n*.80))
+    b=min(max(a+1,b),n)
+    return {"TRAIN":ordered[:a],"VALIDATION":ordered[a:b],"LOCAL_TEST":ordered[b:]}
+
+
+def equity_stats(events):
+    equity=peak=max_dd=0.0
+    positive=negative=zero=0
+    for event in sorted(events,key=lambda e:(e["decision_ns"],e["decision_id"])):
+        pnl=float(event["cash_pnl"])
+        equity+=pnl
+        peak=max(peak,equity)
+        max_dd=max(max_dd,peak-equity)
+        positive+=pnl>1e-15
+        negative+=pnl<-1e-15
+        zero+=abs(pnl)<=1e-15
+    fills=len(events)
+    return {
+        "total_pnl":equity,"fills":fills,
+        "pnl_per_fill":equity/fills if fills else None,
+        "hit_rate":positive/(positive+negative) if positive+negative else None,
+        "max_drawdown":max_dd,"positive":positive,"negative":negative,"zero":zero,
+    }
+
+
+def native_execute_side_cell(row,latency_ms,exit_ms,side):
+    return realized_action_economics(
+        row,size=SIZE,horizon_ms=int(exit_ms),latency_ms=int(latency_ms),
+        side=side,entry_cap=.99,hard_order_notional=100.0,
+        require_full_decision_depth=True,
+    )
+
 
 
 def sign(value):
@@ -478,87 +537,47 @@ def evaluate_alpha(rows,rule,economics_cache):
 
 
 
-def cumulative(events):
-    total=0.0;xs=[];ys=[]
-    seq=sorted(events,key=lambda x:(x["decision_ns"],x["decision_id"]))
-    if not seq:return xs,ys
-    origin=int(seq[0]["decision_ns"])
-    for row in seq:
-        total+=float(row["cash_pnl"])
-        xs.append((int(row["decision_ns"])-origin)/60_000_000_000)
-        ys.append(total)
-    return xs,ys
-
-
-def plot_group(path,event_map,keys,title,legend=True):
-    path.parent.mkdir(parents=True,exist_ok=True)
-    plt.figure(figsize=(10,5))
-    drawn=False
-    for key in keys:
-        x,y=cumulative(event_map.get(key,[]))
-        if not x:continue
-        plt.plot(x,y,linewidth=1.0,label=key)
-        drawn=True
-    if drawn:
-        plt.axhline(0,linewidth=.7)
-        if legend:plt.legend(fontsize=6,ncol=2)
-        plt.xlabel("minutes since first fill")
-        plt.ylabel("cumulative PnL")
-    else:
-        plt.text(.5,.5,"No observed fills",ha="center",va="center",transform=plt.gca().transAxes)
-        plt.xticks([]);plt.yticks([])
-    plt.title(title)
-    plt.tight_layout()
-    plt.savefig(path,dpi=105,bbox_inches="tight")
-    plt.close()
-
-
-def write_equity_outputs(output,results,make_figures=True):
+def write_equity_outputs(output,results,window):
     gallery=output/"native_alpha_equity_gallery"
     gallery.mkdir(parents=True,exist_ok=True)
-    files=[]
-    with gzip.open(output/"22_native_alpha_equity_paths.csv.gz","wt",newline="",encoding="utf-8") as handle:
-        fields=["alpha","cell","decision_ns","cash_pnl","cumulative_pnl","asset","contract_horizon","side"]
-        writer=csv.DictWriter(handle,fieldnames=fields);writer.writeheader()
+    start_ns=int(window["start_ns"])
+    end_ns=int(window["end_ns"])
+    if end_ns-start_ns!=WINDOW_NS:
+        raise ValueError("WINDOW_NOT_EXACTLY_2H")
+    sample_ns=60*1_000_000_000
+    points=121
+    path=output/"22_native_alpha_equity_1m.csv.gz"
+    with gzip.open(path,"wt",newline="",encoding="utf-8") as handle:
+        fields=["alpha","cell","minute","cumulative_pnl"]
+        writer=csv.DictWriter(handle,fieldnames=fields)
+        writer.writeheader()
         for name,res in sorted(results.items()):
-            safe="".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
-            event_map=res["events"]
-            if make_figures:
-                all_name=gallery/safe/"00_all_60_cells.png"
-                plot_group(
-                    all_name,event_map,
-                    [f"{l}::{h}" for l in LATENCIES for h in EXITS],
-                    f"{name}: all 60 entry × exit equity lines",legend=False)
-                files.append(str(all_name.relative_to(output)))
-                for latency in LATENCIES:
-                    path=gallery/safe/f"latency_{latency}ms_all_exits.png"
-                    plot_group(
-                        path,event_map,[f"{latency}::{h}" for h in EXITS],
-                        f"{name}: entry {latency}ms, all exits",legend=True)
-                    files.append(str(path.relative_to(output)))
-            for cell,events in sorted(event_map.items()):
+            for cell,events in sorted(res["events"].items()):
+                seq=sorted(events,key=lambda x:(x["decision_ns"],x["decision_id"]))
+                pos=0
                 total=0.0
-                for row in sorted(events,key=lambda x:(x["decision_ns"],x["decision_id"])):
-                    total+=float(row["cash_pnl"])
+                for minute in range(points):
+                    cutoff=start_ns+minute*sample_ns
+                    while pos<len(seq) and int(seq[pos]["decision_ns"])<=cutoff:
+                        total+=float(seq[pos]["cash_pnl"])
+                        pos+=1
                     writer.writerow({
-                        "alpha":name,"cell":cell,"decision_ns":row["decision_ns"],
-                        "cash_pnl":row["cash_pnl"],"cumulative_pnl":total,
-                        "asset":row["asset"],"contract_horizon":row["contract_horizon"],
-                        "side":row["side"],
+                        "alpha":name,"cell":cell,"minute":minute,
+                        "cumulative_pnl":total,
                     })
     manifest={
-        "schema":"polymarket_v7_native_2h_alpha_equity_gallery_v1",
+        "schema":"polymarket_v7_native_2h_alpha_equity_gallery_v2",
         "alpha_count":len(results),
         "cells_per_alpha":len(LATENCIES)*len(EXITS),
-        "figures_per_alpha":1+len(LATENCIES),
-        "figure_count":len(files),
-        "figures":files,
-        "generation_deferred":not make_figures,
-        "raw_equity_paths":"22_native_alpha_equity_paths.csv.gz",
+        "generation_deferred":True,
+        "sample_seconds":60,
+        "points_per_cell":points,
+        "equity_paths":"22_native_alpha_equity_1m.csv.gz",
         "grid_csv":"21_native_alpha_grid.csv",
     }
     atomic_json(gallery/"gallery_manifest.json",manifest)
     return manifest
+
 
 
 def run(root,output,minimum_wall_ns,skip_figures=False):
@@ -575,7 +594,7 @@ def run(root,output,minimum_wall_ns,skip_figures=False):
     for name,rule in alphas.items():
         results[name]=evaluate_alpha(window_rows,rule,economics_cache)
 
-    gallery=write_equity_outputs(output,results,make_figures=not skip_figures)
+    gallery=write_equity_outputs(output,results,window)
     payload={
         "schema":SCHEMA,**SAFETY,"research_only":True,"automatic_promotion":False,
         "window":window,"thresholds_fit_on_first_60pct":th,
