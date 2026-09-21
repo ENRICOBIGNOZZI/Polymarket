@@ -28,29 +28,25 @@ def safe(value):
 
 def load_paths(root):
     out=defaultdict(lambda:defaultdict(list))
-    path=root/"22_native_alpha_equity_paths.csv.gz"
+    path=root/"22_native_alpha_equity_1m.csv.gz"
     with gzip.open(path,"rt",newline="",encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             out[row["alpha"]][row["cell"]].append({
-                "decision_ns":int(row["decision_ns"]),
+                "minute":int(row["minute"]),
                 "cumulative_pnl":float(row["cumulative_pnl"]),
             })
     for by_cell in out.values():
         for rows in by_cell.values():
-            rows.sort(key=lambda r:r["decision_ns"])
+            rows.sort(key=lambda r:r["minute"])
     return out
 
 
-def equity(rows,window_start_ns,window_end_ns):
+def equity(rows):
     if not rows:return [],[]
-    xs=[0.0]
-    ys=[0.0]
-    for r in rows:
-        xs.append((r["decision_ns"]-window_start_ns)/60_000_000_000)
-        ys.append(r["cumulative_pnl"])
-    xs.append((window_end_ns-window_start_ns)/60_000_000_000)
-    ys.append(ys[-1])
-    return xs,ys
+    return (
+        [r["minute"] for r in rows],
+        [r["cumulative_pnl"] for r in rows],
+    )
 
 
 def save(path):
@@ -60,11 +56,11 @@ def save(path):
     plt.close()
 
 
-def plot_lines(path,title,event_map,keys,window_start_ns,window_end_ns,legend=True):
+def plot_lines(path,title,event_map,keys,legend=True):
     plt.figure(figsize=(11,5.5))
     drawn=False
     for key in keys:
-        x,y=equity(event_map.get(key,[]),window_start_ns,window_end_ns)
+        x,y=equity(event_map.get(key,[]))
         if not x:continue
         plt.plot(x,y,label=key,linewidth=.95)
         drawn=True
@@ -106,8 +102,6 @@ def main(argv=None):
     root=a.root
     data=json.loads((root/"20_native_alpha_library.json").read_text(encoding="utf-8"))
     alphas=data.get("alphas") or {}
-    window_start_ns=int(data["window"]["start_ns"])
-    window_end_ns=int(data["window"]["end_ns"])
     paths=load_paths(root)
     gallery=root/"native_alpha_equity_gallery"
     gallery.mkdir(parents=True,exist_ok=True)
@@ -120,7 +114,7 @@ def main(argv=None):
         rel=f"native_alpha_equity_gallery/{stem}/00_all_60_cells.png"
         plot_lines(root/rel,f"{alpha_name}: all 60 equity lines",event_map,
                    [f"{l}::{h}" for l in LATENCIES for h in EXITS],
-                   window_start_ns,window_end_ns,legend=False)
+                   legend=False)
         figures.append(rel)
 
         rel=f"native_alpha_equity_gallery/{stem}/01_pnl_heatmap.png"
@@ -131,7 +125,7 @@ def main(argv=None):
             rel=f"native_alpha_equity_gallery/{stem}/latency_{latency}ms_all_exits.png"
             plot_lines(root/rel,f"{alpha_name}: entry {latency}ms, all exits",event_map,
                        [f"{latency}::{h}" for h in EXITS],
-                       window_start_ns,window_end_ns,legend=True)
+                       legend=True)
             figures.append(rel)
 
     # At each latency × exit cell, compare every alpha's equity over time.
@@ -142,7 +136,7 @@ def main(argv=None):
             plt.figure(figsize=(12,6))
             drawn=False
             for alpha_name in sorted(alphas):
-                x,y=equity(paths.get(alpha_name,{}).get(key,[]),window_start_ns,window_end_ns)
+                x,y=equity(paths.get(alpha_name,{}).get(key,[]))
                 if not x:continue
                 plt.plot(x,y,label=alpha_name,linewidth=.8)
                 drawn=True
@@ -161,7 +155,7 @@ def main(argv=None):
     manifest={
         "schema":"polymarket_v7_native_2h_alpha_gallery_v2",
         "research_only":True,
-        "source_paths":"22_native_alpha_equity_paths.csv.gz",
+        "source_paths":"22_native_alpha_equity_1m.csv.gz",
         "alpha_count":len(alphas),
         "cells_per_alpha":len(LATENCIES)*len(EXITS),
         "latencies_ms":list(LATENCIES),
