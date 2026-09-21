@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 import argparse
+import json
 import math
 from pathlib import Path
 
@@ -132,6 +133,46 @@ class EdgeSizingPolicy:
 
 
 DEFAULT_EDGE_SIZING_POLICY = EdgeSizingPolicy()
+
+
+def load_trade_frequency_challenger_config(path):
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if value.get("schema") != "polymarket_v7_trade_frequency_sizing_challenger_v1":
+        raise ValueError("invalid trade-frequency challenger schema")
+    if value.get("version") != 1:
+        raise ValueError("invalid trade-frequency challenger version")
+    if not (
+        value.get("paper_only") is True
+        and value.get("authenticated_execution") is False
+        and value.get("real_order_submission") is False
+        and value.get("real_capital_at_risk") is False
+        and value.get("automatic_promotion") is False
+    ):
+        raise ValueError("trade-frequency challenger must remain PAPER-only")
+    entry_policy = str(value.get("entry_policy") or "").upper()
+    if entry_policy != "ONE_ENTRY_PER_SHOCK":
+        raise ValueError("challenger requires independent-shock entry identity")
+    calibration = value.get("conditional_calibration") or {}
+    if calibration.get("enabled") is not True:
+        raise ValueError("challenger conditional calibration must be enabled")
+    sizing = value.get("sizing") or {}
+    policy = EdgeSizingPolicy(
+        context_count=int(sizing.get("context_count")),
+        knots=tuple(tuple(point) for point in sizing.get("knots") or ()),
+    ).validated()
+    model_kwargs = {
+        "conditional_calibration": True,
+        "conditional_calibration_min_markets": int(
+            calibration.get("minimum_markets")),
+        "conditional_calibration_shrinkage": float(
+            calibration.get("shrinkage")),
+    }
+    return {
+        "config": value,
+        "entry_policy": entry_policy,
+        "sizing_policy": policy,
+        "model_kwargs": model_kwargs,
+    }
 
 
 def _quantile(values, level):
@@ -3427,6 +3468,8 @@ def walk_forward_direct_action(
     model_kwargs=None,
     trade_frequency_challenger=False,
     challenger_sizing_policy=DEFAULT_EDGE_SIZING_POLICY,
+    challenger_model_kwargs=None,
+    challenger_entry_policy="ONE_ENTRY_PER_SHOCK",
 ):
     found, receipt = folds(records, desired_folds=desired_folds)
     result = {
@@ -3451,7 +3494,7 @@ def walk_forward_direct_action(
             "schema": SCHEMA + "_trade_frequency_challenger_v1",
             **SAFETY,
             "state": receipt.get("state"),
-            "entry_policy": "ONE_ENTRY_PER_SHOCK",
+            "entry_policy": str(challenger_entry_policy).upper(),
             "sizing_policy": {
                 "context_count": sizing.context_count,
                 "knots": [list(point) for point in sizing.knots],
@@ -3492,6 +3535,7 @@ def walk_forward_direct_action(
             challenger_kwargs["conditional_calibration"] = True
             challenger_kwargs.setdefault("conditional_calibration_min_markets", 12)
             challenger_kwargs.setdefault("conditional_calibration_shrinkage", 20.0)
+            challenger_kwargs.update(challenger_model_kwargs or {})
             challenger_model = DirectActionValueModel(**challenger_kwargs).fit(
                 fold["train_repricing"])
             challenger_outcomes = evaluate_direct_action_policy(
@@ -3500,7 +3544,7 @@ def walk_forward_direct_action(
                 latency_ms=latency_ms,
                 capital_budget=capital_budget,
                 live_geometry=True,
-                entry_policy="ONE_ENTRY_PER_SHOCK",
+                entry_policy=challenger_entry_policy,
                 sizing_policy=challenger_sizing_policy,
             )
             challenger_summary = summarize_direct_action(challenger_outcomes)
@@ -3627,7 +3671,15 @@ def main(argv=None):
             "edge/context-budget sizing as a PAPER-only OOS challenger."
         ),
     )
+    parser.add_argument("--challenger-config", type=Path, default=None)
     args = parser.parse_args(argv)
+
+    challenger = None
+    if args.trade_frequency_challenger:
+        config_path = args.challenger_config
+        if config_path is None:
+            config_path = Path("config/v7_trade_frequency_sizing_challenger.json")
+        challenger = load_trade_frequency_challenger_config(config_path)
 
     data = build_dataset(
         args.root,
@@ -3645,7 +3697,15 @@ def main(argv=None):
             data["decisions"], desired_folds=args.folds,
             latency_ms=args.latency_ms, capital_budget=args.capital_budget,
             model_kwargs={"support_policy_mode": args.support_policy_mode},
-            trade_frequency_challenger=args.trade_frequency_challenger)
+            trade_frequency_challenger=args.trade_frequency_challenger,
+            challenger_sizing_policy=(
+                challenger["sizing_policy"]
+                if challenger is not None else DEFAULT_EDGE_SIZING_POLICY),
+            challenger_model_kwargs=(
+                challenger["model_kwargs"] if challenger is not None else None),
+            challenger_entry_policy=(
+                challenger["entry_policy"]
+                if challenger is not None else "ONE_ENTRY_PER_SHOCK"))
         result["data_sha256"] = data.get("data_sha256")
     atomic_json(args.output, result)
     return 0 if result.get("state") == "READY" else 2
