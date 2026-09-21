@@ -12,6 +12,13 @@ def test_current_workflow_inventory_is_final_paper_only():
         "v7-freeze-maker-forward-window.yml", "v7-public-book-wire-probe.yml",
         "v7-london-aws-provision.yml", "v7-tailscale-oidc-cleanup.yml",
         "v7-deploy-paper-server-aws-oidc.yml", "v7-recent-research-read.yml",
+        "v7-direct-action-research.yml",
+        "v7-executable-markout-forward-eval.yml",
+        "v7-executable-markout-forward-shadow.yml",
+        "v7-executable-markout-shadow-health.yml",
+        "v7-hft-research-ssh.yml",
+        "v7-historical-walk-forward-v2.yml",
+        "v7-walk-forward-v2-ci.yml",
     }
 
 
