@@ -198,6 +198,14 @@ for path in selected:
                 v=row.get("signal_age_ns")
                 if isinstance(v,(int,float)) and not isinstance(v,bool) and v>=0:
                     signal_age.append(float(v)/1e6)
+                else:
+                    decision=row.get("decision_monotonic_ns")
+                    trigger=row.get("trigger_monotonic_ns")
+                    if (
+                        isinstance(decision,int) and isinstance(trigger,int)
+                        and decision>=trigger>0
+                    ):
+                        signal_age.append((decision-trigger)/1e6)
                 v=row.get("decision_compute_ns")
                 if isinstance(v,(int,float)) and not isinstance(v,bool) and v>=0:
                     decision_compute.append(float(v)/1e6)
