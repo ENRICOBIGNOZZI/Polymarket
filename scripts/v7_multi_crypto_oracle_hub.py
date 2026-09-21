@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from decimal import Decimal, InvalidOperation
 import os
 import signal
 import socket
@@ -213,6 +214,78 @@ def update_references(
         references[market_id] = base
 
 
+
+def update_outcomes(
+    contracts: list[dict[str, Any]],
+    history: dict[str, dict[int, dict[str, Any]]],
+    references: dict[str, dict[str, Any]],
+    outcomes: dict[str, dict[str, Any]], *,
+    now_ms: int,
+) -> None:
+    """Publish only exact-boundary, settlement-source-determined outcomes."""
+    live_ids = {row["market_id"] for row in contracts}
+    for market_id in list(outcomes):
+        if market_id not in live_ids:
+            outcomes.pop(market_id, None)
+    for contract in contracts:
+        market_id = contract["market_id"]
+        end_ms = int(contract["end_timestamp_ms"])
+        base = {
+            "asset": contract["asset"],
+            "horizon": contract["horizon"],
+            "market_id": market_id,
+            "end_boundary_timestamp_ms": end_ms,
+            "normalized_rules_hash": contract["normalized_rules_hash"],
+            "valid": False,
+            "winning_outcome": None,
+            "reference_price_decimal": None,
+            "final_price_decimal": None,
+            "reference_source_timestamp_ms": 0,
+            "final_source_timestamp_ms": 0,
+            "final_observation_received_wall_ns": 0,
+            "determined_wall_ns": 0,
+            "status": "AWAITING_END_BOUNDARY" if now_ms < end_ms else "MISSING_EXACT_FINAL_OBSERVATION",
+        }
+        if now_ms < end_ms:
+            outcomes[market_id] = base
+            continue
+        ref = references.get(market_id)
+        if not isinstance(ref, dict) or ref.get("valid") is not True:
+            base["status"] = "REFERENCE_NOT_EXACT"
+            outcomes[market_id] = base
+            continue
+        final = history.get(contract["asset"], {}).get(end_ms)
+        if not isinstance(final, dict):
+            outcomes[market_id] = base
+            continue
+        available = final.get("available_wall_ns")
+        if type(available) is not int or not 0 < available <= now_ms * 1_000_000:
+            base["status"] = "FINAL_RECEIVE_PROVENANCE_INVALID"
+            outcomes[market_id] = base
+            continue
+        try:
+            reference_decimal = Decimal(str(ref["price_decimal"]))
+            final_decimal = Decimal(str(final["price_decimal"]))
+        except (KeyError, InvalidOperation, ValueError):
+            base["status"] = "DECIMAL_PARSE_FAILED"
+            outcomes[market_id] = base
+            continue
+        winner = "YES" if final_decimal >= reference_decimal else "NO"
+        base.update({
+            "valid": True,
+            "winning_outcome": winner,
+            "reference_price_decimal": str(ref["price_decimal"]),
+            "final_price_decimal": str(final["price_decimal"]),
+            "reference_source_timestamp_ms": int(ref["source_timestamp_ms"]),
+            "final_source_timestamp_ms": end_ms,
+            "final_observation_received_wall_ns": available,
+            "determined_wall_ns": max(available, now_ms * 1_000_000),
+            "status": "OUTCOME_DETERMINED_EXACT_SETTLEMENT_SOURCE",
+            "source": "POLYMARKET_PUBLIC_RTDS_CHAINLINK",
+            "comparison_operator": "GREATER_THAN_OR_EQUAL",
+        })
+        outcomes[market_id] = base
+
 def apply_observation(
     state: dict[str, dict[str, Any]], row: dict[str, Any], *,
     receive_wall_ns: int, receive_monotonic_ns: int,
@@ -258,6 +331,7 @@ def snapshot(
     state: dict[str, dict[str, Any]], *, model_sha: str,
     transport_by_asset: dict[str, dict[str, Any]], maximum_receive_age_ms: int,
     running: bool, references: dict[str, dict[str, Any]] | None = None,
+    outcomes: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     now_ns = time.time_ns()
     assets: dict[str, Any] = {}
@@ -297,6 +371,7 @@ def snapshot(
         "one_way_latency_identified": False,
         "assets": assets,
         "settlement_references": dict(sorted((references or {}).items())),
+        "settlement_outcomes": dict(sorted((outcomes or {}).items())),
     }
 
 
@@ -412,6 +487,7 @@ def run(args: argparse.Namespace) -> None:
     state = empty_state(bindings)
     history: dict[str, dict[int, dict[str, Any]]] = {asset: {} for asset in ASSETS}
     references: dict[str, dict[str, Any]] = {}
+    outcomes: dict[str, dict[str, Any]] = {}
     contracts = load_contract_selection(load_json(args.selection)) if args.selection else []
     selection_mtime_ns = args.selection.stat().st_mtime_ns if args.selection else 0
     transport = {asset: {
@@ -447,13 +523,16 @@ def run(args: argparse.Namespace) -> None:
                     selection_error = type(exc).__name__ + ":" + str(exc)
             with lock:
                 if contracts:
+                    current_ms = time.time_ns() // 1_000_000
                     update_references(
-                        contracts, history, references, now_ms=time.time_ns() // 1_000_000,
+                        contracts, history, references, now_ms=current_ms,
                         maximum_gap_ms=args.reference_max_gap_ms)
+                    update_outcomes(
+                        contracts, history, references, outcomes, now_ms=current_ms)
                 value = snapshot(
                     state, model_sha=args.model_sha, transport_by_asset=transport,
                     maximum_receive_age_ms=args.maximum_receive_age_ms, running=True,
-                    references=references)
+                    references=references, outcomes=outcomes)
                 value["selection_error"] = selection_error
                 value["selection_market_count"] = len(contracts)
             atomic_json(args.output, value)
@@ -465,7 +544,7 @@ def run(args: argparse.Namespace) -> None:
             value = snapshot(
                 state, model_sha=args.model_sha, transport_by_asset=transport,
                 maximum_receive_age_ms=args.maximum_receive_age_ms, running=False,
-                references=references)
+                references=references, outcomes=outcomes)
         atomic_json(args.output, value)
 
 def main() -> int:
