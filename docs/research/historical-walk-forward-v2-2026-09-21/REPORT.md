@@ -2,20 +2,28 @@
 
 ## Direct answers
 
-- Positive gross alpha: **UNKNOWN / INSUFFICIENT EVIDENCE**
-- Positive net executable alpha: **UNKNOWN / INSUFFICIENT EVIDENCE**
+- Positive gross/net executable alpha: **ZERO POINT ESTIMATE / INSUFFICIENT EVIDENCE**
 - PM lag after causal external signal: **UNKNOWN / INSUFFICIENT EVIDENCE**
-- Prior zero-trade diagnosis: **OOS PM executable-edge distribution is in economic_metrics.json.**
-- Principal bottleneck: **ADMISSIBLE_HFT_INPUT_UNAVAILABLE**
+- Prior zero-trade diagnosis: **see PM executable-edge distribution and funnel below.**
+- Principal bottleneck: **SEE_FUNNEL_AND_FRICTION_DECOMPOSITION**
 
 ## Identity
 
-- Starting SHA: 223f8fa3b9ec885d6f1e9f8cef1f114bfe105c8d
-- Data SHA: fca27fb39309620953aadbc804380e74f4dd35ddea56322b5eb26f7a467f5079
-- Input state: ROOT_UNAVAILABLE
-- Decisions: 0
-- Markets: 0
-- Short-horizon pairs: 0
+- Starting SHA: 92167499de26a9f7daf7891c8a0a284af7064a76
+- Data SHA: a6f5806690c74fd77442f8943b1644d053475bcaf040a83e310b0ab064c22649
+- Input state: READY
+- Decisions: 280669
+- Markets: 1552
+- Short-horizon pairs: 146473
+- OOS predictions: 194968
+
+## Selected combined-policy economics
+
+- Simulated orders: 0
+- Fills: 0
+- Settled fills: 0
+- Net/observed PnL: 0
+- Fill rate: None
 
 The report never converts unavailable books, labels, forecasts, or fills into zero.
 
