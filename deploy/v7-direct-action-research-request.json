@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_direct_action_research_ssm_request_v1",
   "version": 1,
-  "request_id": "direct-action-latency-regime-surface-20260921T1650CEST",
+  "request_id": "direct-action-five-levers-20260921T1702CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "minimum_wall_ns": 1789921800000000000,
   "folds": 3,
