@@ -9,6 +9,7 @@ from research.walk_forward_v3.bilateral import (
 from research.walk_forward_v3.risk_frontier import (
     empirical_var_cvar_from_losses,
     pareto_frontier,
+    robust_pareto_frontier,
     scenario_risk_metrics,
     select_policy_under_risk_budget,
     nested_walk_forward_risk_frontier,
@@ -659,6 +660,8 @@ def _risk_outcome(index, pnl, *, censored=False, horizon_ms=500):
         "notional": 2.5,
         "exit_horizon_ms": horizon_ms,
         "realized_pnl": None if censored else float(pnl),
+        "censored_worst_case_pnl": -2.5 if censored else float(pnl),
+        "censored_worst_case_loss_bound": 2.5 if censored else max(0.0, -float(pnl)),
         "replay_max_active_positions": 3,
         "replay_max_gross_notional": 75.0,
     }
@@ -701,6 +704,12 @@ def test_scenario_risk_metrics_fail_closed_on_censored_selected_trade():
     assert risk["selected_trades"] == 2
     assert risk["observed_selected_trades"] == 1
     assert risk["censored_selected_trades"] == 1
+    robust = risk["censored_worst_case"]
+    assert robust["state"] == "READY"
+    assert robust["bounded_censored_trades"] == 1
+    assert math.isclose(
+        robust["total_net_pnl_lower_bound"], -1.5, abs_tol=1e-12)
+    assert robust["tail_loss"]["0.95"]["cvar"] >= 0
 
 
 def test_pareto_frontier_keeps_more_pnl_only_when_tail_risk_is_not_worse():
@@ -1181,3 +1190,44 @@ def test_post_argmax_calibration_holdout_is_disjoint_from_action_conformal():
         "ACTION_CONFORMAL_FIRST_HALF_OF_FINAL_20;"
         "POST_ARGMAX_CALIBRATION_SECOND_HALF_OF_FINAL_20"
     )
+
+
+
+def test_censored_trade_without_causal_loss_bound_keeps_robust_risk_unavailable():
+    outcome = _risk_outcome(0, 1.0, censored=True)
+    outcome.pop("censored_worst_case_pnl")
+    outcome.pop("censored_worst_case_loss_bound")
+    risk = scenario_risk_metrics([outcome], block_ms=500)
+    assert risk["state"] == "PARTIAL_CENSORED_NO_PROMOTION_CLAIM"
+    robust = risk["censored_worst_case"]
+    assert robust["state"] == "UNAVAILABLE_MISSING_CAUSAL_LOSS_BOUND"
+    assert robust["missing_bound_trades"] == 1
+    assert robust["total_net_pnl_lower_bound"] is None
+
+
+def test_robust_pareto_frontier_uses_lower_bound_without_promoting_censored_policy():
+    def entry(name, lower_pnl, cvar, drawdown):
+        return {
+            "policy_id": name,
+            "risk": {
+                "state": "PARTIAL_CENSORED_NO_PROMOTION_CLAIM",
+                "censored_worst_case": {
+                    "state": "READY",
+                    "total_net_pnl_lower_bound": lower_pnl,
+                    "max_drawdown": drawdown,
+                    "tail_loss": {"0.95": {"cvar": cvar}},
+                },
+            },
+        }
+
+    entries = [
+        entry("dominated", -5.0, 4.0, 5.0),
+        entry("safe", -3.0, 2.0, 3.0),
+        entry("profit_floor", 1.0, 3.0, 4.0),
+    ]
+    robust = set(robust_pareto_frontier(entries))
+    assert "dominated" not in robust
+    assert robust == {"safe", "profit_floor"}
+    # The ordinary promotion-grade Pareto remains empty because every policy
+    # still has censored selected trades.
+    assert pareto_frontier(entries) == []
