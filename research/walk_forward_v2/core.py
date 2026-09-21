@@ -310,12 +310,20 @@ def native_repricing_point(row):
         if observed_mono < target_mono or close_mono <= target_mono or epoch <= 0:
             return None
         decision_wall = row.get("decision_wall_ns")
-        if not isinstance(decision_wall, int) or decision_wall <= 0:
+        information_wall = native_wall_ns(row)
+        target_wall = decision_wall + horizon * 1_000_000 if isinstance(decision_wall, int) else 0
+        if (not isinstance(decision_wall, int) or decision_wall <= 0
+                or information_wall <= 0 or target_wall <= 0
+                or information_wall < target_wall):
             return None
         return key, horizon, {
             "state": "OBSERVED",
             "source": "NATIVE_REPRICING_KIND6_ASOF_HORIZON",
-            "observed_time_ns": decision_wall + horizon * 1_000_000,
+            # Economic state is as-of the nominal horizon; label availability is
+            # when the producer actually emitted the causal evidence.
+            "target_time_ns": target_wall,
+            "observed_time_ns": target_wall,
+            "information_ns": information_wall,
             "label_observed_monotonic_ns": observed_mono,
             "bid": bid, "ask": ask, "quantity": quantity,
             "tick": tick, "epoch": epoch,
@@ -348,7 +356,9 @@ def _attach_native_repricing_point(record, horizon, point):
     value = {
         "state": "OBSERVED",
         "source": point["source"],
+        "target_time_ns": point.get("target_time_ns", point["observed_time_ns"]),
         "observed_time_ns": point["observed_time_ns"],
+        "information_ns": point.get("information_ns", point["observed_time_ns"]),
         "mid_change": mid1 - mid0,
         "ask_change": point["ask"] - record["ask"],
         "bid_change": point["bid"] - record["bid"],
@@ -362,7 +372,8 @@ def _attach_native_repricing_point(record, horizon, point):
     record["targets"][hkey] = value
     if horizon in EXECUTION_LATENCIES_MS:
         record["arrivals"][hkey] = {
-            "time_ns": point["observed_time_ns"],
+            "time_ns": point.get("target_time_ns", point["observed_time_ns"]),
+            "information_ns": point.get("information_ns", point["observed_time_ns"]),
             "bid": point["bid"], "ask": point["ask"],
             "quantity": point["quantity"], "epoch": point["epoch"],
         }
@@ -378,6 +389,9 @@ def _finalize_native_repricing(decisions, *, native_label_rows, matched, duplica
                 record["targets"][key] = {"state": "UNAVAILABLE_NO_NATIVE_REPRICING_LABEL"}
             elif record["targets"][key].get("state") == "OBSERVED":
                 short_pairs += 1
+                information = record["targets"][key].get("information_ns")
+                if isinstance(information, int) and information > 0:
+                    record["information_end_ns"] = max(record["information_end_ns"], information)
         arrival_pairs += len(record["arrivals"])
     return {
         "source": "NATIVE_KIND6_CAUSAL_ASOF_HORIZON",
@@ -924,7 +938,9 @@ def _serialize_ridge(model, eligible, names, key, target_name):
         "training_start_ns": min(row["decision_ns"] for row in eligible),
         "training_end_ns": max(row["decision_ns"] for row in eligible),
         "label_information_end_ns": max(
-            int(row["targets"][key]["observed_time_ns"]) for row in eligible),
+            int(row["targets"][key].get(
+                "information_ns", row["targets"][key]["observed_time_ns"]))
+            for row in eligible),
         "training_decision_sha256": digest([row["decision_id"] for row in eligible]),
         "center": {name: float(model.center[name]) for name in names},
         "scale": {name: float(model.scale[name]) for name in names},
