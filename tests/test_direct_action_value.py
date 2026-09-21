@@ -28,6 +28,7 @@ from research.walk_forward_v3.direct_action import (
     summarize_direct_action,
     merge_direct_action_summaries,
     bilateral_evidence_summary,
+    regime_support_key,
     evaluate_latency_age_surface,
     summarize_effective_age_buckets,
 )
@@ -1549,3 +1550,66 @@ def test_effective_age_bucket_summary_separates_observed_and_censored():
     assert result["50_100"]["censored_selected_trades"] == 1
     assert result["100_250"]["observed_selected_trades"] == 1
     assert math.isclose(result["100_250"]["total_observed_net_pnl"], -.1)
+
+
+
+def test_side_specific_support_gate_rejects_unsupported_bilateral_leg():
+    r = bilateral_row("m12001", no_depth=10.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_side_regime_action_targets=2,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+    key_yes = "YES::" + regime_support_key(r, 50)
+    key_no = "NO::" + regime_support_key(r, 50)
+    model.side_regime_action_target_counts = {key_yes: 5, key_no: 0}
+    model.regime_action_target_counts = {regime_support_key(r, 50): 5}
+    model.mean_model = None
+    model.scale_model = None
+    model.fitted = True
+
+    class FlatModel:
+        def predict(self, record):
+            return 1.0
+    model.mean_model = FlatModel()
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+
+    scored, state = model.score_actions(r, latency_ms=50)
+    assert state == "READY"
+    assert scored
+    assert all(item["side"] == "YES" for item in scored)
+    assert all(item["side_regime_action_target_support"] >= 2 for item in scored)
+
+
+def test_side_specific_support_gate_fails_closed_when_all_bilateral_legs_unsupported():
+    r = bilateral_row("m12002", no_depth=10.0)
+    model = DirectActionValueModel(
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+        minimum_side_regime_action_targets=2,
+        selection_calibration_mode="OFF",
+    )
+    model._configure_levels([r])
+    model.regime_action_target_counts = {regime_support_key(r, 50): 10}
+    model.side_regime_action_target_counts = {}
+    model.fitted = True
+
+    class FlatModel:
+        def predict(self, record):
+            return 1.0
+    model.mean_model = FlatModel()
+    model.scale_model = None
+    model.uncertainty_floor = 0.0
+    model.calibration_multiplier = 1.0
+    model.selection_optimism_penalty = 0.0
+
+    scored, state = model.score_actions(r, latency_ms=50)
+    assert scored == []
+    assert state == "INSUFFICIENT_SIDE_REGIME_SUPPORT"
+    selected = model.select_action(r, latency_ms=50)
+    assert selected["action"] == "NO_TRADE"
+    assert selected["reason"] == "INSUFFICIENT_SIDE_REGIME_SUPPORT"
