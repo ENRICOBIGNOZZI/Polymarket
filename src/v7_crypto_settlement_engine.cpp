@@ -4,6 +4,8 @@
 #include "pm/fast_ws.hpp"
 #include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
+#include "pm/v7_event_leadlag.hpp"
+#include "pm/v7_latency_arb.hpp"
 #include "pm/v7_probability_model.hpp"
 #include "pm/v7_external_ingress.hpp"
 #include "pm/v7_external_ws.hpp"
@@ -132,6 +134,11 @@ struct Options {
     bool capture_native_observations = false;
     bool capture_execution_windows = false;
     std::int64_t execution_window_ns = 2'000'000'000LL;
+    bool latency_arb = false;
+    std::int64_t latency_arb_signal_ttl_ns = 100'000'000LL;
+    std::int64_t latency_arb_hard_timeout_ns = 500'000'000LL;
+    std::int32_t latency_arb_max_spread_ticks = 2;
+    std::int32_t latency_arb_min_profit_ticks = 1;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -205,6 +212,17 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--execution-window-ns")
             out.execution_window_ns = bounded_integer<std::int64_t>(
                 next(), 1'000'000LL, 10'000'000'000LL);
+        else if (arg == "--latency-arb") out.latency_arb = true;
+        else if (arg == "--latency-arb-signal-ttl-ns")
+            out.latency_arb_signal_ttl_ns = bounded_integer<std::int64_t>(
+                next(), 1'000'000LL, 500'000'000LL);
+        else if (arg == "--latency-arb-hard-timeout-ns")
+            out.latency_arb_hard_timeout_ns = bounded_integer<std::int64_t>(
+                next(), 10'000'000LL, 5'000'000'000LL);
+        else if (arg == "--latency-arb-max-spread-ticks")
+            out.latency_arb_max_spread_ticks = bounded_integer<std::int32_t>(next(), 1, 20);
+        else if (arg == "--latency-arb-min-profit-ticks")
+            out.latency_arb_min_profit_ticks = bounded_integer<std::int32_t>(next(), 0, 20);
         else throw std::invalid_argument("unknown option");
     }
     return out;
@@ -268,6 +286,8 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("strict signal policy hash required");
         const auto probability_model = options.probability_model.empty() ? NativeProbabilityModel{}
             : NativeProbabilityModel::load(options.probability_model, options.model_sha);
+        if (options.latency_arb && probability_model.loaded)
+            throw std::invalid_argument("latency arb is deterministic and rejects probability models");
         if (probability_model.loaded && options.probability_evaluation_end_wall_ns <= 0)
             throw std::invalid_argument("probability model requires fixed evaluation end");
         if (!probability_model.loaded && options.probability_evaluation_end_wall_ns != 0)
@@ -387,6 +407,28 @@ int main(int argc, char** argv) {
         external_policy.external_cancel_confirmation_venue =
             options.confirmation_venue == "BYBIT" ? VenueId::BybitSpot : VenueId::CoinbaseSpot;
         ExternalAssetState external_state(kAsset);
+        leadlag::EventLeadLagPolicy latency_trigger_policy{};
+        latency_trigger_policy.shock_window_ns = 100'000'000LL;
+        latency_trigger_policy.cooldown_ns = 250'000'000LL;
+        latency_trigger_policy.warmup_ns = 300'000'000LL;
+        latency_trigger_policy.signal_ttl_ns = options.latency_arb_signal_ttl_ns;
+        latency_trigger_policy.minimum_absolute_binance_return_bp =
+            options.minimum_absolute_binance_return_bp;
+        leadlag::EventLeadLagEngine latency_trigger(latency_trigger_policy);
+
+        LatencyArbPolicy latency_policy{};
+        latency_policy.minimum_tte_ns = options.minimum_tte_ns;
+        latency_policy.maximum_tte_ns = options.maximum_tte_ns;
+        latency_policy.maximum_signal_age_ns = options.latency_arb_signal_ttl_ns;
+        latency_policy.hard_timeout_ns = options.latency_arb_hard_timeout_ns;
+        latency_policy.target_quantity_microunits = options.target_quantity_microunits;
+        latency_policy.maximum_entry_price_e4 = options.maximum_entry_price_e4;
+        latency_policy.maximum_spread_ticks = options.latency_arb_max_spread_ticks;
+        latency_policy.minimum_profit_ticks = options.latency_arb_min_profit_ticks;
+        latency_policy.minimum_absolute_binance_return_bp =
+            options.minimum_absolute_binance_return_bp;
+        LatencyArbLane latency_lane(latency_policy);
+        leadlag::EventLeadLagSignal latency_signal{};
 
         NativeCryptoDecisionPolicy decision_policy;
         // The experimental per-asset policy makes signal lifetime explicit.
@@ -515,6 +557,8 @@ int main(int argc, char** argv) {
         decision_compute.reserve(4096);
         std::array<std::uint64_t, 32> reasons{};
         std::uint64_t evaluations = 0, accepted = 0, latency_overflow = 0;
+        std::uint64_t latency_arb_evaluations = 0, latency_arb_accepted = 0;
+        std::uint64_t latency_arb_entries = 0, latency_arb_exits = 0;
         std::uint64_t taker_accepted = 0, maker_accepted = 0;
         std::uint64_t adapter_handoff_failures = 0;
         std::uint64_t maker_decisions = 0, maker_candidates = 0;
@@ -648,6 +692,7 @@ int main(int argc, char** argv) {
         };
         const auto publish_order = [&](const NativeOrderCommand& command,
                                        ExecutionPolicyId policy,
+                                       StrategyId strategy,
                                        std::int64_t exchange_event_ns,
                                        std::int64_t receive_monotonic_ns) noexcept {
             NativeEvidenceEvent evidence{};
@@ -660,8 +705,7 @@ int main(int argc, char** argv) {
                 evidence.probability_input_instrument = probability_input_instrument;
             }
             evidence.command = command;
-            evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
-                ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
+            evidence.strategy_id = strategy;
             evidence.policy = policy;
             evidence.causal_exchange_event_ns = exchange_event_ns;
             evidence.causal_receive_monotonic_ns = receive_monotonic_ns;
@@ -670,6 +714,7 @@ int main(int argc, char** argv) {
         };
         const auto publish_state = [&](const NativeOrderCommand& command,
                                        ExecutionPolicyId policy,
+                                       StrategyId strategy,
                                        OrderState state,
                                        NativePaperReason reason = NativePaperReason::Accepted,
                                        bool censored = false) noexcept {
@@ -678,21 +723,20 @@ int main(int argc, char** argv) {
             evidence.paper_reason = reason;
             evidence.paper_censored = censored;
             evidence.command = command;
-            evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
-                ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
+            evidence.strategy_id = strategy;
             evidence.policy = policy;
             evidence.order_state = state;
             evidence.recorded_monotonic_ns = monotonic_now_ns();
             return evidence_writer.publish(evidence);
         };
         const auto publish_fill = [&](const NativePaperFillRecord& fill,
-                                      ExecutionPolicyId policy) noexcept {
+                                      ExecutionPolicyId policy,
+                                      StrategyId strategy) noexcept {
             NativeEvidenceEvent evidence{};
             evidence.kind = NativeEvidenceKind::Fill;
             evidence.command = fill.command;
             evidence.fill = fill;
-            evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
-                ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
+            evidence.strategy_id = strategy;
             evidence.policy = policy;
             evidence.order_state = fill.order_state;
             evidence.recorded_monotonic_ns = monotonic_now_ns();
@@ -716,14 +760,28 @@ int main(int argc, char** argv) {
             for (std::size_t i = 0; i < batch.count; ++i) {
                 const auto& item = batch.records[i];
                 const auto& result = item.result;
+                const bool latency_order = latency_lane.owns_order(item.command.client_order_id);
+                const auto strategy = latency_order
+                    ? StrategyId::CryptoLatencyArb : StrategyId::CryptoInformedTaker;
                 if (result.filled_microunits > 0) {
                     ++paper_fill_events;
-                    lane.mark_market_traded(kMarket);
-                    if (!publish_fill(result.fill, ExecutionPolicyId::AggressiveTaker)) ++adapter_handoff_failures;
+                    if (latency_order) {
+                        latency_lane.on_fill(item.command.client_order_id,
+                            result.fill.instrument_handle, result.fill.side,
+                            result.fill.fill_microunits,
+                            static_cast<std::int32_t>(result.fill.price_tick * result.fill.tick_size_e4),
+                            result.fill.receive_monotonic_ns);
+                    } else {
+                        lane.mark_market_traded(kMarket);
+                    }
+                    if (!publish_fill(result.fill, ExecutionPolicyId::AggressiveTaker, strategy))
+                        ++adapter_handoff_failures;
                 } else if (result.censored) ++paper_arrival_censored;
                 else ++paper_arrival_observed_nonfills;
-                if (!publish_state(item.command, ExecutionPolicyId::AggressiveTaker,
-                                   result.final_state, result.reason, result.censored != 0)) ++adapter_handoff_failures;
+                if (!publish_state(item.command, ExecutionPolicyId::AggressiveTaker, strategy,
+                                   result.final_state, result.reason, result.censored != 0))
+                    ++adapter_handoff_failures;
+                if (latency_order) latency_lane.on_terminal(item.command.client_order_id);
             }
         };
 
@@ -806,7 +864,7 @@ int main(int argc, char** argv) {
             refill_bybit();
             refill_pm();
             if (!binance_ready && !coinbase_ready && !bybit_ready && !pm_ready) {
-                (void)wakeup.wait_for(2ms);
+                (void)wakeup.wait_for(options.latency_arb ? 250us : 2ms);
                 continue;
             }
             std::int64_t receive_ns = std::numeric_limits<std::int64_t>::max();
@@ -838,6 +896,7 @@ int main(int argc, char** argv) {
             for (std::size_t i = 0; i < paper_advance.cancellation_count; ++i) {
                 if (!publish_state(paper_advance.cancellations[i].command,
                                    ExecutionPolicyId::PassiveMaker,
+                                   StrategyId::ProfessionalMaker,
                                    OrderState::Cancelled)) {
                     ++adapter_handoff_failures;
                     break;
@@ -856,10 +915,12 @@ int main(int argc, char** argv) {
             std::array<ExecutionPlan, 8> alpha_candidates{};
             std::array<std::int64_t, 8> candidate_trigger_ns{};
             std::array<std::uint8_t, 8> candidate_is_taker{};
+            std::array<StrategyId, 8> candidate_strategy{};
             std::size_t alpha_candidate_count = 0;
             const auto append_candidate = [&](const ExecutionPlan& plan,
                                               std::int64_t trigger_ns,
-                                              bool is_taker) noexcept {
+                                              bool is_taker,
+                                              StrategyId strategy) noexcept {
                 if (alpha_candidate_count >= alpha_candidates.size()) {
                     ++latency_overflow;
                     return;
@@ -867,6 +928,7 @@ int main(int argc, char** argv) {
                 alpha_candidates[alpha_candidate_count] = plan;
                 candidate_trigger_ns[alpha_candidate_count] = trigger_ns;
                 candidate_is_taker[alpha_candidate_count] = is_taker ? 1 : 0;
+                candidate_strategy[alpha_candidate_count] = strategy;
                 ++alpha_candidate_count;
             };
             bool progressed = false;
@@ -874,10 +936,27 @@ int main(int argc, char** argv) {
                 progressed = false;
                 if (binance_ready && pending_binance.local_receive_monotonic_ns == receive_ns) {
                     (void)external_state.on_venue_event(pending_binance, external_policy);
+                    if (options.latency_arb
+                        && pending_binance.event_type == ExternalEventType::Trade
+                        && pending_binance.trade_price > 0.0) {
+                        latency_signal = latency_trigger.on_binance_trade(
+                            pending_binance.local_receive_monotonic_ns,
+                            pending_binance.trade_price);
+                    }
                     binance_ready = false; refill_binance(); progressed = true;
                 }
                 if (coinbase_ready && pending_coinbase.local_receive_monotonic_ns == receive_ns) {
                     (void)external_state.on_venue_event(pending_coinbase, external_policy);
+                    if (options.latency_arb
+                        && pending_coinbase.event_type == ExternalEventType::BookTop
+                        && pending_coinbase.bid > 0.0
+                        && pending_coinbase.ask > pending_coinbase.bid) {
+                        (void)latency_trigger.on_coinbase_mid(
+                            pending_coinbase.local_receive_monotonic_ns,
+                            0.5 * (pending_coinbase.bid + pending_coinbase.ask));
+                        latency_signal = latency_trigger.snapshot(
+                            pending_coinbase.local_receive_monotonic_ns);
+                    }
                     coinbase_ready = false; refill_coinbase(); progressed = true;
                 }
                 if (bybit_ready && pending_bybit.local_receive_monotonic_ns == receive_ns) {
@@ -923,18 +1002,21 @@ int main(int argc, char** argv) {
                         paper_invalid_trades += paper_result.invalid;
                         for (std::size_t i = 0; i < paper_result.fills; ++i) {
                             if (!publish_fill(paper_result.records[i],
-                                              ExecutionPolicyId::PassiveMaker)) {
+                                              ExecutionPolicyId::PassiveMaker,
+                                              StrategyId::ProfessionalMaker)) {
                                 ++adapter_handoff_failures;
                                 break;
                             }
                             if (!publish_state(paper_result.records[i].command,
                                                ExecutionPolicyId::PassiveMaker,
+                                               StrategyId::ProfessionalMaker,
                                                paper_result.records[i].order_state)) {
                                 ++adapter_handoff_failures;
                                 break;
                             }
                         }
                     }
+                    if (!options.latency_arb) {
                     maker::MakerDecision maker_decision;
                     bool maker_event = false;
                     if (event.book.tick_size_e4 > 0) maker_model.tick_size = event.book.tick_size_e4 / 10'000.0;
@@ -1006,9 +1088,10 @@ int main(int argc, char** argv) {
                             plan.tick_size_e4 = event.book.tick_size_e4;
                             plan.market_state_version = event.state_version;
                             plan.policy = ExecutionPolicyId::PassiveMaker;
-                            append_candidate(plan, event.receive_monotonic_ns, false);
+                            append_candidate(plan, event.receive_monotonic_ns, false, StrategyId::ProfessionalMaker);
                             ++maker_candidates;
                         }
+                    }
                     }
                     pm_ready = false; refill_pm(); progressed = true;
                 }
@@ -1025,7 +1108,7 @@ int main(int argc, char** argv) {
                 protective_cancel(kNo, current_signal.direction > 0 ? Side::Buy : Side::Sell, protect_now);
             }
 
-            if (current_signal.signal_version != 0 && paper_execution.pending_arrivals() == 0) {
+            if (!options.latency_arb && current_signal.signal_version != 0 && paper_execution.pending_arrivals() == 0) {
                 NativeCryptoDecisionInput input;
                 input.signal = current_signal;
                 input.market = market;
@@ -1157,7 +1240,35 @@ int main(int argc, char** argv) {
                     plan.tick_size_e4 = (result.selected_yes != 0 ? yes_book : no_book).tick_size_e4;
                     plan.market_state_version = result.intent.state_version;
                     plan.policy = ExecutionPolicyId::AggressiveTaker;
-                    append_candidate(plan, current_signal.trigger_receive_monotonic_ns, true);
+                    append_candidate(plan, current_signal.trigger_receive_monotonic_ns, true, StrategyId::CryptoInformedTaker);
+                }
+            }
+
+            LatencyArbDecision latency_decision{};
+            if (options.latency_arb && paper_execution.pending_arrivals() == 0) {
+                latency_signal = latency_trigger.snapshot(monotonic_now_ns());
+                LatencyArbInput latency_input{};
+                latency_input.signal = latency_signal;
+                latency_input.market = market;
+                latency_input.yes_book = yes_book;
+                latency_input.no_book = no_book;
+                latency_input.now_monotonic_ns = monotonic_now_ns();
+                latency_input.taker_fee_rate = options.taker_fee_rate;
+                latency_input.taker_fee_exponent = options.taker_fee_exponent;
+                latency_decision = latency_lane.construct_candidate(latency_input);
+                ++latency_arb_evaluations;
+                if (latency_decision.accepted != 0) {
+                    ExecutionPlan plan;
+                    plan.intent = latency_decision.intent;
+                    const auto& selected_book =
+                        latency_decision.selected_instrument_handle == kYes ? yes_book : no_book;
+                    plan.tick_size_e4 = selected_book.tick_size_e4;
+                    plan.market_state_version = latency_decision.intent.state_version;
+                    plan.policy = ExecutionPolicyId::AggressiveTaker;
+                    alpha_candidate_count = 0;
+                    append_candidate(plan,
+                        latency_decision.intent.causal_trigger_receive_monotonic_ns,
+                        true, StrategyId::CryptoLatencyArb);
                 }
             }
 
@@ -1173,7 +1284,9 @@ int main(int argc, char** argv) {
                 }
                 alpha_candidates[retained_candidates] = alpha_candidates[i];
                 candidate_trigger_ns[retained_candidates] = candidate_trigger_ns[i];
-                candidate_is_taker[retained_candidates++] = candidate_is_taker[i];
+                candidate_is_taker[retained_candidates] = candidate_is_taker[i];
+                candidate_strategy[retained_candidates] = candidate_strategy[i];
+                ++retained_candidates;
             }
             alpha_candidate_count = retained_candidates;
             if (!evidence_writer.healthy()) { ++adapter_handoff_failures; break; }
@@ -1215,8 +1328,11 @@ int main(int argc, char** argv) {
                     // Only the sole new-risk owner consumes a taker signal.
                     // Arbitration conflicts and admission rejection leave a
                     // still-fresh signal available for causal reevaluation.
-                    if (candidate_is_taker[index] != 0) {
+                    if (candidate_strategy[index] == StrategyId::CryptoInformedTaker) {
                         lane.commit_signal(kMarket, current_signal.signal_version);
+                    } else if (candidate_strategy[index] == StrategyId::CryptoLatencyArb) {
+                        latency_lane.on_submitted(
+                            authority_result.tx.command.client_order_id, latency_decision);
                     }
                     const auto& paper_book = authority_result.tx.command.instrument_handle == kYes
                         ? yes_book : no_book;
@@ -1230,6 +1346,7 @@ int main(int argc, char** argv) {
                     }
                     if (!publish_order(authority_result.tx.command,
                                        alpha_candidates[index].policy,
+                                       candidate_strategy[index],
                                        paper_book.exchange_event_ns,
                                        paper_book.receive_monotonic_ns)) {
                         ++adapter_handoff_failures;
@@ -1240,6 +1357,7 @@ int main(int argc, char** argv) {
                             || paper_result.final_state == OrderState::Expired)) {
                         if (!publish_state(authority_result.tx.command,
                                            alpha_candidates[index].policy,
+                                           candidate_strategy[index],
                                            paper_result.final_state, paper_result.reason,
                                            paper_result.censored != 0)) {
                             ++adapter_handoff_failures;
@@ -1250,10 +1368,20 @@ int main(int argc, char** argv) {
                     paper_arrival_censored += paper_result.censored != 0;
                     if (paper_result.accepted != 0 && paper_result.filled_microunits > 0) {
                         ++paper_fill_events;
+                        if (candidate_strategy[index] == StrategyId::CryptoLatencyArb) {
+                            latency_lane.on_fill(authority_result.tx.command.client_order_id,
+                                paper_result.fill.instrument_handle, paper_result.fill.side,
+                                paper_result.fill.fill_microunits,
+                                static_cast<std::int32_t>(paper_result.fill.price_tick
+                                    * paper_result.fill.tick_size_e4),
+                                paper_result.fill.receive_monotonic_ns);
+                        }
                         if (!publish_fill(paper_result.fill,
-                                          alpha_candidates[index].policy)
+                                          alpha_candidates[index].policy,
+                                          candidate_strategy[index])
                             || !publish_state(authority_result.tx.command,
                                               alpha_candidates[index].policy,
+                                              candidate_strategy[index],
                                               paper_result.fill.order_state,
                                               paper_result.reason)) {
                             ++adapter_handoff_failures;
@@ -1262,6 +1390,7 @@ int main(int argc, char** argv) {
                         if (paper_result.final_state != paper_result.fill.order_state
                             && !publish_state(authority_result.tx.command,
                                               alpha_candidates[index].policy,
+                                              candidate_strategy[index],
                                               paper_result.final_state,
                                               paper_result.reason)) {
                             ++adapter_handoff_failures;
@@ -1270,7 +1399,19 @@ int main(int argc, char** argv) {
                     }
                     if (candidate_is_taker[index] != 0) {
                         ++taker_accepted;
-                        if (paper_result.filled_microunits > 0) lane.mark_market_traded(kMarket);
+                        if (candidate_strategy[index] == StrategyId::CryptoLatencyArb) {
+                            ++latency_arb_accepted;
+                            if (latency_decision.action == LatencyArbAction::Enter) ++latency_arb_entries;
+                            else if (latency_decision.action == LatencyArbAction::Exit) ++latency_arb_exits;
+                            if (paper_result.pending_arrival == 0
+                                && (paper_result.final_state == OrderState::Filled
+                                    || paper_result.final_state == OrderState::Rejected
+                                    || paper_result.final_state == OrderState::Expired)) {
+                                latency_lane.on_terminal(authority_result.tx.command.client_order_id);
+                            }
+                        } else if (paper_result.filled_microunits > 0) {
+                            lane.mark_market_traded(kMarket);
+                        }
                         if (accepted_signal_to_admission.size() < accepted_signal_to_admission.capacity()) {
                             const auto trigger_ns = candidate_trigger_ns[index];
                             accepted_signal_to_admission.push_back(std::max<std::int64_t>(
@@ -1326,6 +1467,7 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0; i < shutdown_advance.cancellation_count; ++i) {
             if (!publish_state(shutdown_advance.cancellations[i].command,
                                ExecutionPolicyId::PassiveMaker,
+                               StrategyId::ProfessionalMaker,
                                OrderState::Cancelled)) {
                 ++adapter_handoff_failures;
             }
@@ -1398,6 +1540,17 @@ int main(int argc, char** argv) {
             {"maker_blocked_by_fast_shock", maker_blocked_by_fast_shock},
             {"clean_capture", clean}, {"duration_seconds", options.duration_seconds},
             {"evaluations", evaluations}, {"accepted_candidates", accepted},
+            {"latency_arb_enabled", options.latency_arb},
+            {"latency_arb_evaluations", latency_arb_evaluations},
+            {"latency_arb_accepted", latency_arb_accepted},
+            {"latency_arb_entries", latency_arb_entries},
+            {"latency_arb_exits", latency_arb_exits},
+            {"latency_arb_position_microunits", latency_lane.position_microunits()},
+            {"latency_arb_trigger_metrics", {
+                {"binance_events", latency_trigger.metrics().binance_events},
+                {"coinbase_events", latency_trigger.metrics().coinbase_events},
+                {"evaluations", latency_trigger.metrics().evaluations},
+                {"triggers", latency_trigger.metrics().triggers}}},
             {"taker_accepted", taker_accepted}, {"maker_accepted", maker_accepted},
             {"maker_decisions", maker_decisions}, {"maker_candidates", maker_candidates},
             {"maker_inadmissible_quantity", maker_inadmissible_quantity},
