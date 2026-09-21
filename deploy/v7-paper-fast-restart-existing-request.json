@@ -1,8 +1,8 @@
 {
   "schema": "polymarket_v7_paper_fast_restart_existing_request_v1",
   "version": 1,
-  "request_id": "fast-restart-existing-2ab25442-maker-contract-1",
-  "expected_sha": "2ab254420b914ae178cb868124255f2a52c0d599",
+  "request_id": "fast-restart-existing-c7c4de15-pure-arb-20260921",
+  "expected_sha": "c7c4de15df26805f51b78733dcf755854ffc87e3",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
