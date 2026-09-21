@@ -40,7 +40,8 @@ def load_request(path: Path) -> dict:
         "output_directory", "paper_only", "authenticated_execution",
         "real_order_submission", "real_capital_at_risk",
     }
-    if set(value) != required:
+    optional = {"support_policy_mode"}
+    if not required.issubset(value) or not set(value).issubset(required | optional):
         raise ValueError("unexpected request fields")
     if value["schema"] != "polymarket_v7_direct_action_research_ssm_request_v1":
         raise ValueError("invalid request schema")
@@ -61,10 +62,14 @@ def load_request(path: Path) -> dict:
     if not 1 <= float(value["capital_budget"]) <= 100_000:
         raise ValueError("capital budget outside bounded research range")
     if not re.fullmatch(
-        r"docs/research/direct-action-value-[0-9]{4}-[0-9]{2}-[0-9]{2}",
+        r"docs/research/direct-action-(?:value|support-robust)-[0-9]{4}-[0-9]{2}-[0-9]{2}",
         value["output_directory"],
     ):
         raise ValueError("invalid output directory")
+    mode = str(value.get("support_policy_mode") or "DIAGNOSTIC").upper()
+    if mode not in ("DIAGNOSTIC", "ROBUST_WORST_CASE"):
+        raise ValueError("invalid support policy mode")
+    value["support_policy_mode"] = mode
     if not (
         value["paper_only"] is True
         and value["authenticated_execution"] is False
@@ -141,7 +146,8 @@ PYTHONPATH={remote}/src:{app_dir} venv/bin/python -m research.walk_forward_v3.di
   --minimum-wall-ns {request['minimum_wall_ns']} \
   --folds {request['folds']} \
   --latency-ms {request['latency_ms']} \
-  --capital-budget {request['capital_budget']}
+  --capital-budget {request['capital_budget']} \
+  --support-policy-mode {request['support_policy_mode']}
 tar -C {remote}/output -czf {remote}/results.tgz .
 python3 - <<'PY'
 import hashlib,json
