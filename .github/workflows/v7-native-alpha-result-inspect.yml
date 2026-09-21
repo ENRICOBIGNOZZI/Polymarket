@@ -1,0 +1,62 @@
+name: V7 native alpha result inspect
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-native-alpha-result-inspect.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: native-alpha-result-inspect
+          aws-region: eu-west-2
+      - name: Inspect completed native-alpha SSM command
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance="$(python3 -c 'import json;print(json.load(open("deploy/v7-native-alpha-result-inspect.json"))["instance_id"])')"
+          needle="$(python3 -c 'import json;print(json.load(open("deploy/v7-native-alpha-result-inspect.json"))["remote_prefix"])')"
+          aws ssm list-commands --instance-id "$instance" --max-results 50 --no-paginate --output json >/tmp/cmds.json
+          python3 - "$instance" "$needle" <<'PY'
+          import json,subprocess,sys
+          instance,needle=sys.argv[1:3]
+          cmds=json.load(open('/tmp/cmds.json')).get('Commands',[])
+          matches=[]
+          for c in cmds:
+              params=json.dumps(c.get('Parameters') or {},sort_keys=True)
+              if needle in params:
+                  matches.append(c)
+          matches.sort(key=lambda c:str(c.get('RequestedDateTime') or ''),reverse=True)
+          print('MATCHES='+json.dumps([
+              {'id':c.get('CommandId'),'status':c.get('Status'),'requested':str(c.get('RequestedDateTime'))}
+              for c in matches[:5]
+          ],sort_keys=True))
+          for c in matches[:3]:
+              cid=str(c['CommandId'])
+              p=subprocess.run(
+                  ['aws','ssm','get-command-invocation','--command-id',cid,'--instance-id',instance,'--output','json'],
+                  text=True,capture_output=True,
+              )
+              if p.returncode==0:
+                  v=json.loads(p.stdout)
+                  print('INVOCATION='+json.dumps({
+                      'id':cid,'status':v.get('Status'),
+                      'stdout_tail':str(v.get('StandardOutputContent') or '')[-8000:],
+                      'stderr_tail':str(v.get('StandardErrorContent') or '')[-4000:],
+                  },sort_keys=True))
+          PY
