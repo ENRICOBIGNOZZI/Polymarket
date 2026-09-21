@@ -22,6 +22,7 @@ INSTANCE = re.compile(r"^i-[0-9a-f]+$")
 SOURCE_PATHS = (
     "research/walk_forward_v3/__init__.py",
     "research/walk_forward_v3/multi_alpha_2h.py",
+    "research/walk_forward_v3/multi_alpha_2h_figures.py",
     "research/walk_forward_v3/btc_compact_equity.py",
     "research/walk_forward_v3/direct_action.py",
     "research/walk_forward_v3/dynamic_exit.py",
@@ -101,6 +102,8 @@ PYTHONPATH={remote}/src:{ctx['app_dir']} nice -n 18 venv/bin/python -m research.
   --minimum-wall-ns {req['minimum_wall_ns']} \
   --baseline-code-sha {req['baseline_code_sha']} \
   --source-sha {a.source_sha}
+PYTHONPATH={remote}/src:{ctx['app_dir']} venv/bin/python -m research.walk_forward_v3.multi_alpha_2h_figures \\
+  --root {remote}/output
 python3 - {remote}/output <<'PY'
 import json,sys
 from pathlib import Path
@@ -119,6 +122,14 @@ required=[f'{i:02d}_' for i in range(20)]
 names=[p.name for p in root.iterdir()]
 for prefix in required:
     assert any(name.startswith(prefix) for name in names), prefix
+figures=[
+'01_baseline_equity.png','02_best_enriched_equity.png','03_baseline_vs_enriched_equity.png',
+'04_baseline_entry_exit_heatmap.png','05_rich_entry_exit_heatmap.png','06_incremental_heatmap.png',
+'07_information_latency_frontier.png','08_signal_decay.png','09_momentum_reversal_map.png',
+'10_alpha_family_contribution.png','11_dynamic_exit.png','12_pnl_by_asset.png','13_pnl_by_contract_horizon.png']
+for name in figures:
+    assert (root/name).is_file(), name
+assert (root/'figures_manifest.json').is_file()
 print('MULTI_ALPHA_ARTIFACTS_VALID')
 PY
 tar -C {remote}/output -czf {remote}/results.tgz .
