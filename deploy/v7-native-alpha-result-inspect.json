@@ -1,0 +1,8 @@
+{
+  "schema": "polymarket_v7_native_alpha_result_inspect_v1",
+  "version": 1,
+  "request_id": "native-alpha-result-inspect-20260922-a",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "remote_prefix": "/tmp/polymarket-native-alpha-2h-45ba8718af30",
+  "read_only": true
+}
