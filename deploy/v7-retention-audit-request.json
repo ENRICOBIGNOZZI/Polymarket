@@ -1,0 +1,8 @@
+{
+  "schema": "polymarket_v7_retention_readonly_audit_request_v1",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "operation": "audit",
+  "output": "docs/research/retention-audit-2026-09-21.json"
+}
