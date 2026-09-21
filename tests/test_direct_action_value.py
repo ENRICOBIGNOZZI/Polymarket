@@ -938,7 +938,10 @@ def test_exit_horizon_respects_observed_bid_capacity_and_values_residual_at_zero
 
 
 def test_bilateral_exit_capacity_is_side_specific():
-    r = bilateral_row("m983", no_depth=3.0)
+    r = bilateral_row("m983", no_depth=7.0)
+    # Entry/arrival can execute five NO shares, but the future NO bid can
+    # liquidate only three. This isolates exit capacity from entry capacity.
+    r["targets"]["500"]["pair"]["no"]["bid_quantity"] = 3.0
     yes, yes_state = realized_action_economics(
         r, size=5.0, horizon_ms=500, latency_ms=50, side="YES")
     no, no_state = realized_action_economics(
