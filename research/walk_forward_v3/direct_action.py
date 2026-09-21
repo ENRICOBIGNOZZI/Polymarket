@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 import argparse
-import copy
 import math
 from pathlib import Path
 from statistics import median
@@ -208,8 +207,9 @@ class DirectActionValueModel:
             "action.log_size", "action.depth_fraction", "action.notional",
             "action.notional_fraction_of_cap", "action.exit_horizon_ms",
             "action.log_exit_horizon", "system.latency_ms",
-            "system.log_latency", "interaction.size_abs_signal",
-            "interaction.size_spread", "interaction.size2_over_depth",
+            "system.log_latency", "interaction.size_signal",
+            "interaction.size_abs_signal", "interaction.size_spread",
+            "interaction.size2_over_depth", "interaction.horizon_signal",
             "interaction.horizon_abs_signal",
         ]
         names.extend("x." + name for name in self.base_names)
@@ -251,9 +251,11 @@ class DirectActionValueModel:
             "action.log_exit_horizon": math.log1p(float(horizon_ms)),
             "system.latency_ms": float(latency_ms),
             "system.log_latency": math.log1p(float(latency_ms)),
+            "interaction.size_signal": float(size) * signal,
             "interaction.size_abs_signal": float(size) * abs(signal),
             "interaction.size_spread": float(size) * (ask - bid),
             "interaction.size2_over_depth": float(size) ** 2 / depth,
+            "interaction.horizon_signal": math.log1p(float(horizon_ms)) * signal,
             "interaction.horizon_abs_signal": math.log1p(float(horizon_ms)) * abs(signal),
         }
         source = row.get("features", {})
