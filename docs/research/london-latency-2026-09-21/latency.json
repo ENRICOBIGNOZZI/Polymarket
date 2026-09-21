@@ -1,0 +1,155 @@
+{
+  "authenticated_execution": false,
+  "interpretation": "PUBLIC_NETWORK_HANDSHAKE_AND_NATIVE_COMPUTE_ONLY;DO_NOT_TREAT_AS_ORDER_ACK_OR_ONE_WAY_VENUE_LATENCY",
+  "network": {
+    "clob_market_ws": {
+      "cold_connection_total_ms": {
+        "count": 20,
+        "max": 151.976736,
+        "mean": 82.0400796,
+        "min": 64.971979,
+        "p50": 79.751501,
+        "p90": 86.552176,
+        "p99": 151.976736
+      },
+      "dns_ms": {
+        "count": 20,
+        "max": 77.924147,
+        "mean": 4.94474065,
+        "min": 0.533411,
+        "p50": 0.606281,
+        "p90": 3.492308,
+        "p99": 77.924147
+      },
+      "failures": {},
+      "host": "ws-subscriptions-clob.polymarket.com",
+      "request_to_first_byte_ms": {
+        "count": 20,
+        "max": 78.977539,
+        "mean": 66.9527244,
+        "min": 56.833612,
+        "p50": 67.525764,
+        "p90": 74.283219,
+        "p99": 78.977539
+      },
+      "samples_requested": 20,
+      "tcp_connect_ms": {
+        "count": 20,
+        "max": 3.160036,
+        "mean": 2.1589165,
+        "min": 1.578343,
+        "p50": 1.835774,
+        "p90": 2.866226,
+        "p99": 3.160036
+      },
+      "tls_handshake_ms": {
+        "count": 20,
+        "max": 10.887773,
+        "mean": 7.7967080499999994,
+        "min": 5.136001,
+        "p50": 7.388245,
+        "p90": 9.930022,
+        "p99": 10.887773
+      }
+    },
+    "clob_rest": {
+      "cold_connection_total_ms": {
+        "count": 20,
+        "max": 230.146053,
+        "mean": 109.45657645000001,
+        "min": 68.611337,
+        "p50": 84.517381,
+        "p90": 192.306042,
+        "p99": 230.146053
+      },
+      "dns_ms": {
+        "count": 20,
+        "max": 14.722762,
+        "mean": 1.50989975,
+        "min": 0.472141,
+        "p50": 0.543951,
+        "p90": 1.863544,
+        "p99": 14.722762
+      },
+      "failures": {},
+      "host": "clob.polymarket.com",
+      "request_to_first_byte_ms": {
+        "count": 20,
+        "max": 116.171229,
+        "mean": 73.71355945,
+        "min": 61.520162,
+        "p50": 68.717957,
+        "p90": 90.018593,
+        "p99": 116.171229
+      },
+      "samples_requested": 20,
+      "tcp_connect_ms": {
+        "count": 20,
+        "max": 11.125844,
+        "mean": 2.63222865,
+        "min": 1.625523,
+        "p50": 1.919944,
+        "p90": 3.224377,
+        "p99": 11.125844
+      },
+      "tls_handshake_ms": {
+        "count": 20,
+        "max": 124.888518,
+        "mean": 27.60669515,
+        "min": 4.505099,
+        "p50": 6.474464,
+        "p90": 101.544638,
+        "p99": 124.888518
+      }
+    }
+  },
+  "network_probe_only": true,
+  "order_path_latency_measured": false,
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "recent_native": {
+    "decision_compute_ms": {
+      "count": 0,
+      "max": null,
+      "mean": null,
+      "min": null,
+      "p50": null,
+      "p90": null,
+      "p99": null
+    },
+    "kind2_rows": 0,
+    "paper_assumed_transport_delay_ms": {
+      "count": 0,
+      "max": null,
+      "mean": null,
+      "min": null,
+      "p50": null,
+      "p90": null,
+      "p99": null
+    },
+    "paper_venue_delay_ms": {
+      "count": 0,
+      "max": null,
+      "mean": null,
+      "min": null,
+      "p50": null,
+      "p90": null,
+      "p99": null
+    },
+    "scan_truncated": true,
+    "scanned_bytes": 5014328,
+    "scanned_files": 96,
+    "signal_age_ms": {
+      "count": 0,
+      "max": null,
+      "mean": null,
+      "min": null,
+      "p50": null,
+      "p90": null,
+      "p99": null
+    },
+    "window_seconds": 900
+  },
+  "schema": "polymarket_v7_london_latency_probe_v1"
+}
