@@ -14,7 +14,7 @@ Environment=PM_V7_COLLECTION_ROOT=@COLLECTION_ROOT@
 Environment=PM_V7_COLLECTION_SHA=@EXPECTED_SHA@
 Environment=PM_V7_AUTHENTICATED_EXECUTION=0
 Environment=PM_V7_REAL_ORDER_SUBMISSION=0
-ExecStart=@APP_DIR@/scripts/v7_collection_plane.sh
+ExecStart=/usr/bin/bash @APP_DIR@/scripts/v7_collection_plane.sh
 Restart=always
 RestartSec=3
 TimeoutStopSec=30
