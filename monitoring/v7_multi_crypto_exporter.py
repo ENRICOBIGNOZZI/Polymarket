@@ -40,6 +40,66 @@ def _pid_alive(value: Any) -> bool:
         return False
 
 
+
+def _prom_label(value: Any) -> str:
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _finite_number(value: Any, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return result if math.isfinite(result) else default
+
+
+def render_pure_arb_prometheus(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_pure_arb_paper_status_v1"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+    )
+    lines = [
+        f"polymarket_pure_arb_up {1 if safe and status.get('state') == 'running' else 0}",
+        f"polymarket_pure_arb_cycles_total {_finite_number(status.get('cycles_total'))}",
+        f"polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total {_finite_number(status.get('paper_locked_pnl_pre_gas_total'))}",
+        f"polymarket_pure_arb_evaluations_total {_finite_number(status.get('evaluations'))}",
+        f"polymarket_pure_arb_fee_blocked_evaluations_total {_finite_number(status.get('fee_blocked_evaluations'))}",
+        f"polymarket_pure_arb_fee_ready_contexts {_finite_number(status.get('fee_ready_contexts'))}",
+        f"polymarket_pure_arb_last_decision_compute_ns {_finite_number(status.get('last_decision_compute_ns'))}",
+        f"polymarket_pure_arb_max_decision_compute_ns {_finite_number(status.get('max_decision_compute_ns'))}",
+        f"polymarket_pure_arb_last_receive_to_decision_ns {_finite_number(status.get('last_receive_to_decision_ns'))}",
+        f"polymarket_pure_arb_max_receive_to_decision_ns {_finite_number(status.get('max_receive_to_decision_ns'))}",
+    ]
+    if not safe:
+        return lines
+    for row in status.get("contexts") or []:
+        if not isinstance(row, dict):
+            continue
+        asset = _prom_label(row.get("asset"))
+        horizon = _prom_label(row.get("horizon"))
+        for field, kind in (
+            ("buy_complete_set", "BUY_COMPLETE_SET"),
+            ("sell_complete_set", "SELL_COMPLETE_SET"),
+        ):
+            value = row.get(field)
+            if not isinstance(value, dict):
+                continue
+            labels = f'asset="{asset}",horizon="{horizon}",kind="{kind}"'
+            lines.extend([
+                f"polymarket_pure_arb_context_active{{{labels}}} {1 if value.get('active') is True else 0}",
+                f"polymarket_pure_arb_context_cycles_total{{{labels}}} {_finite_number(value.get('cycles'))}",
+                f"polymarket_pure_arb_context_paper_locked_pnl_pre_gas_usd_total{{{labels}}} {_finite_number(value.get('paper_locked_pnl_pre_gas'))}",
+                f"polymarket_pure_arb_context_last_edge_per_share{{{labels}}} {_finite_number(value.get('last_edge_per_share'))}",
+                f"polymarket_pure_arb_context_max_edge_per_share{{{labels}}} {_finite_number(value.get('max_edge_per_share'))}",
+                f"polymarket_pure_arb_context_last_executable_shares_l1{{{labels}}} {_finite_number(value.get('last_executable_shares_l1'))}",
+                f"polymarket_pure_arb_context_last_locked_pnl_pre_gas_usd{{{labels}}} {_finite_number(value.get('last_locked_pnl_pre_gas'))}",
+            ])
+    return lines
+
+
 def collect_snapshot(run_root: Path, repository_root: Path, shadow_run_root: Path | None, *, now_ns: int | None = None) -> dict[str, Any]:
     run_root = Path(run_root).resolve()
     repository_root = Path(repository_root).resolve()
@@ -60,12 +120,14 @@ def collect_snapshot(run_root: Path, repository_root: Path, shadow_run_root: Pat
         canonical_mtime_ms=(canonical_path.stat().st_mtime * 1000.0 if canonical_path.is_file() else None),
     )
     shadow = summarize_shadow_runtime(shadow_run_root, now_ns=now_ns)
-    return {"runtime": runtime, "performance": performance, "shadow": shadow}
+    pure_arb = _json(run_root / "research/repricing_book/pure_arb_status.json")
+    return {"runtime": runtime, "performance": performance, "shadow": shadow, "pure_arb": pure_arb}
 
 
 def render_prometheus(snapshot: dict[str, Any]) -> str:
     lines = render_multi_crypto_prometheus(snapshot.get("performance") or {})
     lines.extend(render_shadow_prometheus(snapshot.get("shadow") or {}))
+    lines.extend(render_pure_arb_prometheus(snapshot.get("pure_arb") or {}))
     return "\n".join(lines) + "\n"
 
 
