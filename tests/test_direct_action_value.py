@@ -26,6 +26,7 @@ from research.walk_forward_v3.direct_action import (
     residual_policy_friction,
     summarize_direct_action,
     merge_direct_action_summaries,
+    bilateral_evidence_summary,
 )
 
 
@@ -948,3 +949,23 @@ def test_bilateral_exit_capacity_is_side_specific():
     assert no["exit_filled"] == 3.0
     assert no["residual_inventory"] == 2.0
     assert no["fully_exitable_at_horizon"] is False
+
+
+
+def test_bilateral_evidence_summary_never_promotes_prices_only_to_executable():
+    legacy = row("m984")
+    ready = bilateral_row("m985", no_depth=7.0)
+    prices_only = bilateral_row("m986", no_depth=7.0)
+    prices_only["pair"] = {
+        "state": "PRICES_ONLY",
+        "yes": {"bid": .49, "ask": .50, "bid_quantity": None, "ask_quantity": None},
+        "no": {"bid": .48, "ask": .51, "bid_quantity": None, "ask_quantity": None},
+    }
+    result = bilateral_evidence_summary([legacy, ready, prices_only])
+    states = result["decision_pair_states"]
+    assert states["BILATERAL_EXECUTABLE_READY"] == 1
+    assert states["PRICES_ONLY"] == 1
+    assert states["UNAVAILABLE"] == 1
+    assert math.isclose(result["bilateral_ready_decision_fraction"], 1 / 3)
+    target = result["target_pair_states_by_horizon_ms"]["500"]
+    assert target["BILATERAL_EXECUTABLE_READY"] == 2
