@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_stale_benchmark_cleanup_request_v1",
   "version": 1,
-  "request_id": "stale-benchmark-cleanup-20260921T2036CEST",
+  "request_id": "active-benchmark-probe-20260921T2040CEST",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "stale_prefix": "/tmp/polymarket-decomposed-benchmark-ff9a4fcd5987",
+  "stale_prefix": "/tmp/polymarket-decomposed-benchmark-111111111111",
   "active_prefix": "/tmp/polymarket-decomposed-benchmark-4edfa07abf71",
   "paper_only": true,
   "real_order_submission": false,
