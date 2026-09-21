@@ -28,6 +28,18 @@ namespace {
         && now_ns - book.receive_monotonic_ns <= maximum_age_ns;
 }
 
+[[nodiscard]] std::int64_t quantity_for_notional_microdollars(
+    std::int64_t notional_microdollars,
+    std::int32_t price_e4) noexcept {
+    if (notional_microdollars <= 0 || price_e4 <= 0
+        || price_e4 >= kCanonicalPriceScale) return 0;
+    constexpr std::int64_t kPriceScale = 10'000;
+    if (notional_microdollars
+        > std::numeric_limits<std::int64_t>::max() / kPriceScale) return 0;
+    return (notional_microdollars * kPriceScale)
+        / static_cast<std::int64_t>(price_e4);
+}
+
 } // namespace
 NativeCryptoDecisionLane::NativeCryptoDecisionLane(
     NativeCryptoDecisionPolicy policy) noexcept
@@ -179,12 +191,6 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
         || book.best_ask_e4 > policy_.maximum_entry_price_e4) {
         return finish(NativeCryptoDecisionReason::EntryPriceTooHigh);
     }
-    if (selected_quantity <= 0
-        || instrument.min_order_microunits > selected_quantity
-        || (policy_.require_full_visible_depth != 0
-            && book.best_ask_microunits < selected_quantity)) {
-        return finish(NativeCryptoDecisionReason::InsufficientDepth);
-    }
     if (book.best_ask_e4 % book.tick_size_e4 != 0) {
         return finish(NativeCryptoDecisionReason::InvalidTick);
     }
@@ -193,6 +199,17 @@ NativeCryptoDecisionResult NativeCryptoDecisionLane::construct_candidate(
     if (intended_limit_e4 <= 0 || intended_limit_e4 > policy_.maximum_entry_price_e4
         || intended_limit_e4 % book.tick_size_e4 != 0) {
         return finish(NativeCryptoDecisionReason::InvalidTick);
+    }
+    if (policy_.probability_ev_enabled == 0
+        && policy_.target_notional_microdollars > 0) {
+        selected_quantity = quantity_for_notional_microdollars(
+            policy_.target_notional_microdollars, intended_limit_e4);
+    }
+    if (selected_quantity <= 0
+        || instrument.min_order_microunits > selected_quantity
+        || (policy_.require_full_visible_depth != 0
+            && book.best_ask_microunits < selected_quantity)) {
+        return finish(NativeCryptoDecisionReason::InsufficientDepth);
     }
     const auto price_tick = intended_limit_e4 / book.tick_size_e4;
     if (price_tick <= 0) return finish(NativeCryptoDecisionReason::InvalidTick);
