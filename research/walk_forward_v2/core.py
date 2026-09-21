@@ -1005,6 +1005,7 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
             pooled_predictions, asset_predictions = [], []
             observed_targets, spreads, entry_fees, roundtrip_costs = [], [], [], []
             asks, depths, minimums, fee_rates, fee_exponents = [], [], [], [], []
+            signal_returns, signal_ages_ms = [], []
             relative_required_edges = []
             size_capacity = {
                 str(size): {"base_valid_rows": 0, "decision_depth_ge_size": 0,
@@ -1047,6 +1048,9 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                 fee_rates.append(rate)
                 fee_exponents.append(exponent)
                 fee_schedules[f"{rate:.12g}|{exponent:.12g}"] += 1
+                if finite(row.get("features", {}).get("binance_return_100ms_bp")):
+                    signal_returns.append(abs(float(row["features"]["binance_return_100ms_bp"])))
+                signal_ages_ms.append(float(row.get("signal_age_ns") or 0) / 1_000_000)
                 relative_required_edges.append(required_prediction / ask if ask > 0 else math.nan)
                 for size in size_grid:
                     cell = size_capacity[str(size)]
@@ -1118,6 +1122,8 @@ def asset_selection_diagnostics(evaluations, *, horizons=(500, 1000, 2000),
                 "fee_rate_quantiles": q(fee_rates),
                 "fee_exponent_quantiles": q(fee_exponents),
                 "fee_schedule_counts": dict(fee_schedules),
+                "absolute_binance_return_100ms_bp_quantiles": q(signal_returns),
+                "signal_age_ms_quantiles": q(signal_ages_ms),
                 "visible_depth_quantiles": q(depths),
                 "venue_minimum_quantiles": q(minimums),
                 "required_prediction_as_fraction_of_price_quantiles": q(relative_required_edges),
