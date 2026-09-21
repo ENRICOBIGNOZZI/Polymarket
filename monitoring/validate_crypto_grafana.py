@@ -124,8 +124,10 @@ def validate(root: Path) -> None:
         fail("Grafana datasource display name must be explicitly crypto")
 
     provider = (root / "monitoring/grafana/provisioning/dashboards/v7.yml").read_text(encoding="utf-8")
-    if "name: Polymarket V7 Crypto" not in provider or "folder: Polymarket V7 Crypto" not in provider:
-        fail("Grafana provider/folder must be explicitly crypto")
+    if "name: Polymarket V7 Crypto" not in provider:
+        fail("Grafana provider must remain explicitly crypto")
+    if "folder: Polymarket London" not in provider or "folderUid: afyms0c1xjabkf" not in provider:
+        fail("Grafana provider must target the canonical Polymarket London folder")
     if "disableDeletion: false" not in provider or "allowUiUpdates: false" not in provider:
         fail("Grafana provider must delete removed provisioned dashboards and reject UI edits")
 
