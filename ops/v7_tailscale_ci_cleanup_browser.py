@@ -302,12 +302,18 @@ def main() -> int:
     removed: list[str] = []
     candidates: list[str] = []
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=True, executable_path=chrome,
-            args=["--disable-dev-shm-usage", "--no-sandbox"],
-        )
-        context = browser.new_context()
-        page = context.new_page()
+        if a.cdp_url:
+            browser = pw.chromium.connect_over_cdp(a.cdp_url)
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            pages = context.pages
+            page = pages[0] if pages else context.new_page()
+        else:
+            browser = pw.chromium.launch(
+                headless=True, executable_path=chrome,
+                args=["--disable-dev-shm-usage", "--no-sandbox"],
+            )
+            context = browser.new_context()
+            page = context.new_page()
         login(page, value["email"], value["password"])
         candidates = candidate_names(page)
         for name in candidates:
@@ -323,7 +329,8 @@ def main() -> int:
                 continue
             remove_one(page, name)
             removed.append(name)
-        context.close()
+        if not a.cdp_url:
+            context.close()
         browser.close()
 
     if not candidates:
