@@ -1,0 +1,60 @@
+name: V7 London deploy process probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-london-process-probe-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate request
+        run: |
+          python3 - deploy/v7-london-process-probe-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v=={"schema":"polymarket_v7_london_process_probe_v1","read_only":True}
+          PY
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-process-probe
+          aws-region: eu-west-2
+      - name: Inspect London deploy owner
+        run: |
+          set -euo pipefail
+          payload='set -euo pipefail
+          echo "=== LOCKS ==="
+          lslocks -o COMMAND,PID,TYPE,MODE,PATH 2>/dev/null | grep -E "polymarket-v7-london-deploy|COMMAND" || true
+          echo "=== FUSER ==="
+          fuser -v /home/ubuntu/.cache/polymarket-v7-london-deploy.lock 2>&1 || true
+          echo "=== PROCESSES ==="
+          ps -eo pid,ppid,etime,stat,pcpu,pmem,args --sort=-etime | grep -E "v7_london_stage_release|v7_london_cutover|pmv7-|cmake|ninja|ctest|g\+\+|clang\+\+|verify_v7|polymarket-v7-deploy" | grep -v grep | tail -80 || true
+          echo "=== SERVICE ==="
+          systemctl is-active polymarket-v7-paper.service || true
+          systemctl show polymarket-v7-paper.service -p ActiveEnterTimestamp -p MainPID -p Environment --no-pager | head -20 || true'
+          params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["90"]},separators=(",",":")))' "$payload")"
+          cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$params" --comment "Polymarket V7 read-only process probe" --region "$AWS_REGION" --query 'Command.CommandId' --output text)"
+          for i in $(seq 1 45); do
+            status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query Status --output text 2>/dev/null || true)"
+            if [[ "$status" == "Success" ]]; then
+              aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardOutputContent --output text
+              exit 0
+            fi
+            case "$status" in Failed|Cancelled|TimedOut) exit 1;; esac
+            sleep 1
+          done
+          exit 1
