@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_multi_alpha_2h_request_v1",
   "version": 1,
-  "request_id": "multi-alpha-2h-causal-delay-20260921",
+  "request_id": "multi-alpha-2h-workflow-fix-20260921",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "3e979518112f0947cad44150c8955d3eae569966",
+  "expected_research_sha": "06582145a935ccc0db67a573d468c1b45b20eb6c",
   "baseline_code_sha": "0f115313c80c72fd9ee52afc36a5f3a8af85f981",
   "minimum_wall_ns": 1790007780000000000,
   "output_directory": "docs/research/multi-alpha-2h-2026-09-21",
