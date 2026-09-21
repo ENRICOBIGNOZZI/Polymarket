@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -10,10 +12,11 @@ import re
 import tarfile
 
 from v7_london_ssm_deploy import REGION, run
-from v7_direct_action_research_ssm import remote_context, upload, download, extract
+from v7_direct_action_research_ssm import remote_context, upload, extract
 
 SHA=re.compile(r"^[0-9a-f]{40}$")
 INSTANCE=re.compile(r"^i-[0-9a-f]+$")
+CHUNK=9000
 PATHS=(
     "research/walk_forward_v3/__init__.py",
     "research/walk_forward_v3/native_equity_grid_2h.py",
@@ -35,6 +38,24 @@ def archive(repo):
                 raise FileNotFoundError(rel)
             tf.add(path,arcname=rel,recursive=False)
     return buf.getvalue()
+
+
+def download_large(instance,remote,info):
+    size=int(info["bytes"])
+    if size<=0 or size>160*1024*1024:
+        raise ValueError("native equity archive outside bounded research size")
+    chunks=[]
+    for offset in range(0,size,CHUNK):
+        code=(
+            "import base64;f=open("+repr(remote+"/results.tgz")+",'rb');"
+            "f.seek("+str(offset)+");print(base64.b64encode(f.read("+str(CHUNK)+")).decode())"
+        )
+        stdout,_=run(REGION,instance,"python3 -c "+repr(code),60)
+        chunks.append(base64.b64decode(stdout.strip().splitlines()[-1],validate=True))
+    payload=b"".join(chunks)
+    if len(payload)!=size or hashlib.sha256(payload).hexdigest()!=info["sha256"]:
+        raise RuntimeError("native equity archive identity mismatch")
+    return payload
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -94,7 +115,7 @@ PY"""
     stdout,_=run(REGION,a.instance_id,command,5400)
     marker=next(x for x in stdout.splitlines() if x.startswith("NATIVE_EQUITY_RESULT="))
     info=json.loads(marker.split("=",1)[1])
-    payload=download(a.instance_id,remote,info)
+    payload=download_large(a.instance_id,remote,info)
     extract(payload,a.output_dir)
     run(REGION,a.instance_id,f"rm -rf {remote}",60)
     print("native_equity_output="+str(a.output_dir))
