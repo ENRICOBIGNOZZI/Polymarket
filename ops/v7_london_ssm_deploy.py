@@ -31,6 +31,7 @@ MAX_CANDIDATES = 16
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 CHUNK_CHARS = 12000
 DEPLOY_COMMENT = "Polymarket V7 exact-SHA PAPER SSM transport"
+GENERIC_SSM_COMMENT = "Polymarket V7 auxiliary SSM command"
 
 
 class SsmDeployError(RuntimeError):
@@ -124,7 +125,8 @@ def candidate_instances(region: str, stack_name: str) -> list[str]:
     return candidates
 
 
-def send(region: str, instance: str, command: str, timeout_s: int = 600) -> str:
+def send(region: str, instance: str, command: str, timeout_s: int = 600,
+         comment: str = GENERIC_SSM_COMMENT) -> str:
     if not INSTANCE_RE.fullmatch(instance):
         raise SsmDeployError("invalid instance id")
     parameters = json.dumps({
@@ -136,7 +138,7 @@ def send(region: str, instance: str, command: str, timeout_s: int = 600) -> str:
         "--instance-ids", instance,
         "--document-name", "AWS-RunShellScript",
         "--parameters", parameters,
-        "--comment", DEPLOY_COMMENT,
+        "--comment", comment,
     ])
     command_id = (value.get("Command") or {}).get("CommandId")
     if not isinstance(command_id, str) or not command_id:
@@ -165,8 +167,9 @@ def wait(region: str, instance: str, command_id: str,
 
 
 def run(region: str, instance: str, command: str,
-        timeout_s: int = 900) -> tuple[str, str]:
-    command_id = send(region, instance, command, timeout_s)
+        timeout_s: int = 900,
+        comment: str = GENERIC_SSM_COMMENT) -> tuple[str, str]:
+    command_id = send(region, instance, command, timeout_s, comment)
     value = wait(region, instance, command_id, timeout_s + 120)
     stdout = str(value.get("StandardOutputContent") or "")
     stderr = str(value.get("StandardErrorContent") or "")
@@ -235,9 +238,17 @@ def cancel_prior_deploy_transports(region: str, instance: str,
             raise SsmDeployError("in-flight deploy command id missing")
         target_sha = _transport_target_sha(command)
         if target_sha is None:
-            raise SsmDeployError(
-                f"cannot prove in-flight London deploy target: {command_id}"
-            )
+            # Legacy auxiliary/research SSM jobs used the same comment. They do
+            # not contain the explicit cutover SHA assignment and must never be
+            # cancelled by deployment recovery.
+            continue
+        parameters = command.get("Parameters") or {}
+        payloads = parameters.get("commands") or []
+        if isinstance(payloads, str):
+            payloads = [payloads]
+        payload_text = "\n".join(str(value) for value in payloads)
+        if "V7_SSM_CUTOVER=" not in payload_text:
+            continue
         if target_sha == expected_sha:
             raise SsmDeployError(
                 f"same-SHA London deploy already in flight: {command_id}"
@@ -612,6 +623,7 @@ def deploy(region: str, stack_name: str, expected_sha: str,
         region, selected["instance_id"],
         cutover_command(expected_sha, selected),
         3600,
+        DEPLOY_COMMENT,
     )
     receipt = parse_marker(stdout, "V7_SSM_CUTOVER=")
     if receipt.get("sha") != expected_sha:
