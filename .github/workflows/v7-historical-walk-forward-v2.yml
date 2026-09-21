@@ -1,0 +1,82 @@
+name: V7 historical walk-forward V2 London
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-historical-walk-forward-v2-request.json]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: v7-historical-walk-forward-v2
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      REQUEST: deploy/v7-historical-walk-forward-v2-request.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: \${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-walk-forward-v2
+          aws-region: eu-west-2
+
+      - name: Run V2 against active London PAPER evidence
+        run: python3 ops/v7_historical_walk_forward_v2_ssm.py "$REQUEST" "$GITHUB_SHA"
+
+      - name: Require real admissible evidence
+        run: |
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          req=json.loads(Path(sys.argv[1]).read_text())
+          root=Path(req['output_directory'])
+          data=json.loads((root/'data_manifest.json').read_text())
+          folds=json.loads((root/'walk_forward_folds.json').read_text())
+          assert data['paper_only'] is True and data['authenticated_execution'] is False
+          assert data['real_order_submission'] is False and data['real_capital_at_risk'] is False
+          assert data['input_state']=='READY', data['input_state']
+          assert data['deduplicated_decisions']>0
+          assert data['unique_markets']>0
+          assert data['short_horizon_observed_pairs']>0
+          assert folds['oos_predictions']>0
+          print(json.dumps({'decisions':data['deduplicated_decisions'],
+                            'markets':data['unique_markets'],
+                            'short_horizon_pairs':data['short_horizon_observed_pairs'],
+                            'oos_predictions':folds['oos_predictions']},sort_keys=True))
+          PY
+
+      - name: Publish research report and PNGs
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json;print(json.load(open("deploy/v7-historical-walk-forward-v2-request.json"))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Research results unchanged."
+            exit 0
+          fi
+          git commit -m "Publish London historical walk-forward V2 results"
+          if ! git push origin HEAD:main; then
+            branch="research/historical-walk-forward-v2-results-\${GITHUB_RUN_ID}"
+            git push origin "HEAD:\${branch}"
+            gh pr create --base main --head "$branch" --title "research: publish London walk-forward V2 results" --body "Automated PAPER-only London historical walk-forward V2 results. Generated from exact main SHA \${GITHUB_SHA}; no runtime or execution authority changes."
+          fi
