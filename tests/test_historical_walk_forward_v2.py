@@ -661,7 +661,7 @@ def test_live_parity_diagnostics_expose_tte_entry_cap_and_full_depth_mismatches(
     assert cell["research_tte"] == 1
     assert cell["live_tte"] == 0
     assert cell["research_entry_cap"] == 0
-    assert cell["live_entry_cap"] == 0
+    assert cell["live_entry_cap"] == 1
     assert cell["research_depth_gate"] == 1
     assert cell["live_full_depth_gate"] == 0
 
@@ -725,3 +725,61 @@ def test_asset_diagnostics_expose_configured_paper_delay_components():
     assert cell["paper_assumed_transport_delay_ms_quantiles"]["0.5"] == 250.0
     assert cell["paper_configured_total_delay_ms_quantiles"]["0.5"] == 500.0
     assert cell["paper_configured_total_delay_ms_counts"] == {"500": 1}
+
+
+
+def test_exact_live_policy_replay_geometry_differs_from_research_geometry():
+    row = record("live-geometry")
+    row["fee_rate"] = 0.0
+    row["tte_ns"] = 110_000_000_000
+    row["ask"] = .78
+    row["bid"] = .77
+    row["quantity"] = 5.0
+    row["minimum"] = 5.0
+    row["arrivals"] = {
+        "25": {
+            "time_ns": row["decision_ns"] + 25_000_000,
+            "bid": .77, "ask": .78, "quantity": 5.0, "epoch": 7,
+        }
+    }
+    row["targets"] = {
+        "500": {
+            "state": "OBSERVED",
+            "arrival_bid": .82,
+            "observed_time_ns": row["decision_ns"] + 500_000_000,
+        }
+    }
+    research = replay_one(
+        row, .03, None, latency_ms=25,
+        valuation_mode="EXECUTABLE_MARKOUT", markout_horizon_ms=500,
+        edge_threshold=.005, execution_reserve=.005,
+        entry_cap=.75, shares=5.0,
+    )
+    live = replay_one(
+        row, .03, None, latency_ms=25,
+        valuation_mode="EXECUTABLE_MARKOUT", markout_horizon_ms=500,
+        edge_threshold=.005, execution_reserve=.005,
+        entry_cap=.80, shares=5.0,
+        minimum_tte_ns=105_000_000_000,
+        maximum_tte_ns=120_000_000_000,
+        require_full_visible_depth=True,
+    )
+    assert research["funnel"]["price_cap"] is False
+    assert live["funnel"]["price_cap"] is True
+    assert live["funnel"]["tte_valid"] is True
+    assert live["funnel"]["sufficient_depth"] is True
+    assert live["funnel"]["simulated_order"] is True
+
+    too_early = copy.deepcopy(row)
+    too_early["tte_ns"] = 100_000_000_000
+    live_early = replay_one(
+        too_early, .03, None, latency_ms=25,
+        valuation_mode="EXECUTABLE_MARKOUT", markout_horizon_ms=500,
+        edge_threshold=.005, execution_reserve=.005,
+        entry_cap=.80, shares=5.0,
+        minimum_tte_ns=105_000_000_000,
+        maximum_tte_ns=120_000_000_000,
+        require_full_visible_depth=True,
+    )
+    assert live_early["funnel"]["tte_valid"] is False
+    assert live_early["funnel"]["simulated_order"] is False
