@@ -56,6 +56,55 @@ assert v.get('runtime_training') is False
 print('artifact_gate=ready')
 PY
 
+TARGET_MODEL_IDENTITY="$(python3 "$TARGET_RUNTIME/scripts/v7_model_runtime_approval.py" \
+  --manifest "$TARGET_ARTIFACT/manifest.json" --artifact-root "$TARGET_ARTIFACT" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["economic_model_identity_sha256"])')"
+[[ "$TARGET_MODEL_IDENTITY" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "target economic model identity unavailable" >&2; exit 78;
+}
+
+ACTIVE_MODEL_IDENTITY="$(
+python3 - "$TARGET_RUNTIME/scripts" "$RUN_ROOT/control/runtime_artifact_receipt.json" "$RUN_ROOT/micro_maker/execution_model.json" <<'PYACTIVE' 2>/dev/null || true
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from v7_model_runtime_approval import economic_identity_from_models
+receipt_path=Path(sys.argv[2]); maker_path=Path(sys.argv[3])
+if not receipt_path.is_file() or receipt_path.is_symlink() or not maker_path.is_file() or maker_path.is_symlink():
+    raise SystemExit(1)
+receipt=json.loads(receipt_path.read_text(encoding='utf-8'))
+assert receipt.get('schema')=='polymarket_v7_runtime_artifact_receipt_v1'
+assert receipt.get('paper_only') is True
+assert receipt.get('authenticated_execution') is False
+assert receipt.get('real_order_submission') is False
+state=str(receipt.get('rich_model_state') or 'UNAVAILABLE')
+rich=None
+if state=='AVAILABLE':
+    raw=receipt.get('rich_model_path')
+    assert isinstance(raw,str) and raw
+    rich=Path(raw)
+value=economic_identity_from_models(maker_path,state,rich)
+print(value['economic_model_identity_sha256'])
+PYACTIVE
+)"
+if [[ "$ACTIVE_MODEL_IDENTITY" != "$TARGET_MODEL_IDENTITY" ]]; then
+  MODEL_APPROVAL="$TARGET_ARTIFACT/model_runtime_approval.json"
+  REVIEWED_BACKTEST="$TARGET_ARTIFACT/reviewed_backtest_report"
+  [[ -f "$MODEL_APPROVAL" && ! -L "$MODEL_APPROVAL" ]] || {
+    echo "new economic model requires explicit reviewed approval" >&2; exit 67;
+  }
+  [[ -f "$REVIEWED_BACKTEST" && ! -L "$REVIEWED_BACKTEST" ]] || {
+    echo "new economic model requires reviewed backtest bytes" >&2; exit 67;
+  }
+  python3 "$TARGET_RUNTIME/scripts/v7_model_runtime_approval.py" \
+    --manifest "$TARGET_ARTIFACT/manifest.json" --artifact-root "$TARGET_ARTIFACT" \
+    --approval "$MODEL_APPROVAL" --reviewed-report "$REVIEWED_BACKTEST" \
+    --target-sha "$EXPECTED_SHA" >/dev/null
+  echo "model_activation_approval=EXPLICIT_REVIEWED_APPROVAL_VERIFIED"
+else
+  echo "model_activation_approval=NOT_REQUIRED_SAME_ECONOMIC_MODEL"
+fi
+
 PROBABILITY_MODEL_SOURCE="${POLYMARKET_PROBABILITY_MODEL_SOURCE:-}"
 if [[ -n "$PROBABILITY_MODEL_SOURCE" ]]; then
   [[ "$PROBABILITY_MODEL_SOURCE" == /* && -f "$PROBABILITY_MODEL_SOURCE" && ! -L "$PROBABILITY_MODEL_SOURCE" ]] || {
