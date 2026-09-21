@@ -2487,6 +2487,139 @@ class DirectActionValueModel:
         selected["reason"] = "DIRECT_ACTION_VALUE_MAXIMUM"
         return selected
 
+    def select_action_edge_sized(
+        self, row, *, latency_ms=50, available_capital=None,
+        live_geometry=True, minimum_lower_value=0.0,
+        portfolio_state=None, capital_budget=10_000.0,
+        sizing_policy=DEFAULT_EDGE_SIZING_POLICY,
+    ):
+        """Research challenger: admit on marginal edge, then size monotonically.
+
+        The baseline select_action remains unchanged.  This challenger uses the
+        venue minimum as a small-q marginal probe for each causal side/horizon,
+        converts conservative utility per dollar into a desired context-budget
+        fraction, then reapplies all hard L1/capital/order bounds and requires
+        the final resized action itself to retain positive conservative utility.
+        """
+        policy = sizing_policy.validated()
+        baseline, state = self.score_actions(
+            row,
+            latency_ms=latency_ms,
+            available_capital=available_capital,
+            live_geometry=live_geometry,
+            portfolio_state=portfolio_state,
+            capital_budget=capital_budget,
+        )
+        if not baseline:
+            return {
+                "action": "NO_TRADE",
+                "reason": state,
+                "latency_ms": int(latency_ms),
+                "calibrated_lower_value": 0.0,
+                "predicted_total_net_pnl": 0.0,
+                "policy_utility": 0.0,
+                "policy_loss": 0.0,
+                "sizing_mode": "EDGE_CONTEXT_BUDGET",
+            }
+
+        candidates = []
+        for side in decision_action_sides(row):
+            lower, upper = self._quantity_bounds(row, available_capital, side)
+            if upper + 1e-12 < lower or upper <= 0:
+                continue
+            side_state = decision_side_state(row, side)
+            if side_state is None:
+                continue
+            ask = float(side_state["ask"])
+            for horizon in self.action_horizons_ms:
+                if horizon <= int(latency_ms):
+                    continue
+                probe = self._score_quantity(
+                    row,
+                    size=lower,
+                    horizon_ms=horizon,
+                    latency_ms=latency_ms,
+                    side=side,
+                    portfolio_state=portfolio_state,
+                    capital_budget=capital_budget,
+                )
+                probe_notional = max(1e-12, float(probe["notional"]))
+                edge_per_dollar = float(probe["calibrated_lower_value"]) / probe_notional
+                if edge_per_dollar <= 0:
+                    continue
+                desired = policy.desired_notional(
+                    edge_per_dollar, capital_budget)
+                if available_capital is not None:
+                    desired = min(desired, max(0.0, float(available_capital)))
+                desired = min(
+                    desired,
+                    self.hard_order_notional,
+                    upper * ask,
+                )
+                target_q = min(upper, max(lower, desired / ask))
+                quantity_candidates = {float(lower), float(target_q)}
+                final_scores = [
+                    self._score_quantity(
+                        row,
+                        size=q,
+                        horizon_ms=horizon,
+                        latency_ms=latency_ms,
+                        side=side,
+                        portfolio_state=portfolio_state,
+                        capital_budget=capital_budget,
+                    )
+                    for q in sorted(quantity_candidates)
+                ]
+                positive = [
+                    value for value in final_scores
+                    if value["calibrated_lower_value"] > float(minimum_lower_value)
+                ]
+                if not positive:
+                    continue
+                final = max(
+                    positive,
+                    key=lambda value: (
+                        value["policy_utility"],
+                        value["predicted_total_net_cash_pnl"],
+                        value["notional"],
+                    ),
+                )
+                final = dict(final)
+                final.update({
+                    "reason": "EDGE_ADMISSION_CONTEXT_BUDGET_SIZING",
+                    "sizing_mode": "EDGE_CONTEXT_BUDGET",
+                    "admission_probe_size": float(lower),
+                    "admission_edge_per_dollar": float(edge_per_dollar),
+                    "desired_notional_before_constraints": float(
+                        policy.desired_notional(edge_per_dollar, capital_budget)),
+                    "desired_notional_after_constraints": float(desired),
+                    "context_budget": float(capital_budget) / policy.context_count,
+                    "context_capital_fraction": float(
+                        policy.capital_fraction(edge_per_dollar)),
+                })
+                candidates.append(final)
+
+        if not candidates:
+            return {
+                "action": "NO_TRADE",
+                "reason": "NO_POSITIVE_MARGINAL_EDGE_AFTER_RESIZING",
+                "latency_ms": int(latency_ms),
+                "calibrated_lower_value": 0.0,
+                "predicted_total_net_pnl": 0.0,
+                "policy_utility": 0.0,
+                "policy_loss": 0.0,
+                "sizing_mode": "EDGE_CONTEXT_BUDGET",
+            }
+        candidates.sort(
+            key=lambda value: (
+                value["policy_utility"],
+                value["predicted_total_net_cash_pnl"],
+                value["notional"],
+            ),
+            reverse=True,
+        )
+        return candidates[0]
+
 
 def _bounded_quantity_point(value, lower, upper):
     if not finite(value):
@@ -2701,10 +2834,24 @@ def evaluate_direct_action_policy(
     capital_budget=10_000.0,
     one_entry_per_market=True,
     live_geometry=True,
+    entry_policy=None,
+    max_entries_per_market=1,
+    sizing_policy=None,
 ):
-    """Sequential OOS portfolio replay with horizon-aware capital release."""
+    """Sequential OOS replay with explicit entry identity and optional sizing challenger."""
     ordered = sorted(rows, key=lambda row: (row["decision_ns"], row["decision_id"]))
+    if entry_policy is None:
+        entry_policy = "ONE_ENTRY_PER_MARKET" if one_entry_per_market else "UNBOUNDED"
+    entry_policy = str(entry_policy).upper()
+    if entry_policy not in (
+        "ONE_ENTRY_PER_MARKET", "ONE_ENTRY_PER_SHOCK", "BOUNDED_PER_MARKET", "UNBOUNDED",
+    ):
+        raise ValueError("unknown entry policy")
+    if type(max_entries_per_market) is not int or max_entries_per_market <= 0:
+        raise ValueError("positive max entries per market required")
     used_markets = set()
+    used_shocks = set()
+    market_entry_counts = Counter()
     active = []
     outcomes = []
     max_active_positions = 0
@@ -2729,26 +2876,56 @@ def evaluate_direct_action_policy(
         max_gross_notional = max(max_gross_notional, gross_notional)
 
         market = str(row["market_id"])
-        if one_entry_per_market and market in used_markets:
+        shock_id = str(
+            row.get("parent_shock_id")
+            or (row.get("features") or {}).get("parent_shock_id")
+            or ""
+        )
+        duplicate_reason = None
+        if entry_policy == "ONE_ENTRY_PER_MARKET" and market in used_markets:
+            duplicate_reason = "MARKET_ALREADY_TRADED"
+        elif entry_policy == "BOUNDED_PER_MARKET" and market_entry_counts[market] >= max_entries_per_market:
+            duplicate_reason = "MARKET_ENTRY_LIMIT_REACHED"
+        elif entry_policy == "ONE_ENTRY_PER_SHOCK":
+            # Fail closed when a causal shock identity is unavailable: do not
+            # silently reinterpret every decision row as an independent shock.
+            shock_key = (market, shock_id) if shock_id else (market, "MISSING_SHOCK_FALLBACK")
+            if shock_key in used_shocks:
+                duplicate_reason = "SHOCK_ALREADY_TRADED"
+        if duplicate_reason is not None:
             outcomes.append({
                 "market_id": market, "asset": row["asset"], "decision_ns": now_ns,
-                "action": "NO_TRADE", "reason": "MARKET_ALREADY_TRADED",
+                "action": "NO_TRADE", "reason": duplicate_reason,
                 "realized_pnl": 0.0, "observed": True,
                 "portfolio_state_before": portfolio_state,
+                "entry_policy": entry_policy,
+                "parent_shock_id": shock_id or None,
             })
             continue
 
         available = max(0.0, float(capital_budget) - gross_notional)
-        selected = model.select_action(
-            row, latency_ms=latency_ms, available_capital=available,
-            live_geometry=live_geometry, portfolio_state=portfolio_state,
-            capital_budget=capital_budget)
+        if sizing_policy is None:
+            selected = model.select_action(
+                row, latency_ms=latency_ms, available_capital=available,
+                live_geometry=live_geometry, portfolio_state=portfolio_state,
+                capital_budget=capital_budget)
+        else:
+            selected = model.select_action_edge_sized(
+                row, latency_ms=latency_ms, available_capital=available,
+                live_geometry=live_geometry, portfolio_state=portfolio_state,
+                capital_budget=capital_budget, sizing_policy=sizing_policy)
         outcome = {
             "market_id": market,
             "asset": row["asset"],
             "contract_horizon": row["horizon"],
             "decision_ns": now_ns,
             "portfolio_state_before": portfolio_state,
+            "entry_policy": entry_policy,
+            "parent_shock_id": shock_id or None,
+            "available_capital_before": float(available),
+            "capital_utilization_before": (
+                gross_notional / float(capital_budget)
+                if float(capital_budget) > 0 else None),
             **selected,
         }
         if selected["action"] == "NO_TRADE":
@@ -2756,8 +2933,11 @@ def evaluate_direct_action_policy(
             outcomes.append(outcome)
             continue
 
-        if one_entry_per_market:
-            used_markets.add(market)
+        used_markets.add(market)
+        market_entry_counts[market] += 1
+        if entry_policy == "ONE_ENTRY_PER_SHOCK":
+            shock_key = (market, shock_id) if shock_id else (market, "MISSING_SHOCK_FALLBACK")
+            used_shocks.add(shock_key)
 
         selected_side = str(
             selected.get("side") or selected_action_side(row))
