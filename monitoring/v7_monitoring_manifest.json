@@ -31,7 +31,8 @@
     "latency_dashboard": "monitoring/grafana/dashboards/polymarket-v7-latency.json",
     "multi_crypto_dashboard": "monitoring/grafana/dashboards/polymarket-v7-multi-crypto.json",
     "port": 3000,
-    "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml"
+    "provider_file": "monitoring/grafana/provisioning/dashboards/v7.yml",
+    "pure_arb_dashboard": "monitoring/grafana/dashboards/polymarket-v7-pure-arb.json"
   },
   "legacy_algorithm_count": 0,
   "live_algorithm_count": 1,
