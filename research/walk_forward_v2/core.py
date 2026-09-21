@@ -1322,7 +1322,7 @@ def fit_full_repricing(records):
             per_asset[asset]["pooling"] = "ASSET_SPECIFIC"
         asset_markout_models[key] = per_asset
     return {
-        "schema": SCHEMA + "_full_window_repricing_models_v3",
+        "schema": SCHEMA + "_full_window_repricing_models_v2",
         **SAFETY,
         "automatic_promotion": False,
         "evaluation_role": "POST_OOS_FIT_FOR_NEXT_FORWARD_PAPER_ONLY",
