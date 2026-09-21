@@ -1,0 +1,9 @@
+{
+  "schema": "polymarket_v7_tailscale_api_cleanup_v1",
+  "maximum_deletions": 1200,
+  "preserve_ips": [
+    "100.102.9.16",
+    "100.104.183.109",
+    "100.65.195.111"
+  ]
+}
