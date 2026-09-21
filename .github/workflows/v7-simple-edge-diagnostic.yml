@@ -84,18 +84,34 @@ jobs:
           req=json.load(open(sys.argv[1]))
           v=json.load(open(Path(req['output_directory'])/'simple_edge.json'))
           assert v['state']=='READY'
-          table=v['groups']['VALIDATION']
-          rows=[]
-          for key,val in table.items():
-              if key.startswith('latency_exit::') or key.startswith('asset::') or key.startswith('signal::'):
-                  rows.append((val.get('pnl') or 0.0,val.get('actions') or 0,key,val))
-          rows.sort(reverse=True)
-          print(json.dumps({
+          output={
               'eligible_decisions':v['eligible_decisions'],
-              'top_validation_cells':[{'key':k,**x} for _,_,k,x in rows[:40]],
-              'bottom_validation_cells':[{'key':k,**x} for _,_,k,x in rows[-20:]],
+              'independent_shocks':v.get('independent_shocks'),
               'unavailable':v['unavailable_reasons']['VALIDATION'],
-          },sort_keys=True))
+              'views':{},
+          }
+          groups=v['groups']
+          if 'VALIDATION' in groups:
+              groups={'ALL_DECISIONS':groups}
+          for view,splits in groups.items():
+              table=splits['VALIDATION']
+              rows=[]
+              for key,val in table.items():
+                  if (
+                      key.startswith('latency_exit::')
+                      or key.startswith('asset::')
+                      or key.startswith('contract::')
+                      or key.startswith('asset_contract::')
+                      or key.startswith('asset_contract_signal::')
+                      or key.startswith('signal::')
+                  ):
+                      rows.append((val.get('pnl') or 0.0,val.get('actions') or 0,key,val))
+              rows.sort(reverse=True)
+              output['views'][view]={
+                  'top_validation_cells':[{'key':k,**x} for _,_,k,x in rows[:80]],
+                  'bottom_validation_cells':[{'key':k,**x} for _,_,k,x in rows[-40:]],
+              }
+          print(json.dumps(output,sort_keys=True))
           PY
 
       - name: Publish simple-edge diagnostic
