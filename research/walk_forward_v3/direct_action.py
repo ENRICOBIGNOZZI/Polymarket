@@ -1777,7 +1777,25 @@ def evaluate_direct_action_policy(
 
         if one_entry_per_market:
             used_markets.add(market)
-        direction = action_side_sign(row, str(selected.get("side") or selected_action_side(row)))
+
+        selected_side = str(
+            selected.get("side") or selected_action_side(row))
+        side_state = decision_side_state(row, selected_side)
+        if side_state is None:
+            raise ValueError("selected action missing causal decision-side state")
+        entry_limit = float(side_state["ask"])
+        selected_size = float(selected["size"])
+        entry_fee_bound = fee_per_share(row, entry_limit) * selected_size
+        worst_case_loss_bound = (
+            float(selected["notional"]) + float(entry_fee_bound))
+        outcome["censored_worst_case_loss_bound"] = worst_case_loss_bound
+        outcome["censored_worst_case_pnl"] = -worst_case_loss_bound
+        outcome["censored_worst_case_semantics"] = (
+            "ASSUME_FILL_AT_DECISION_LIMIT_AND_ZERO_TERMINAL_VALUE;"
+            "ENTRY_FEE_BOUND_INCLUDED"
+        )
+
+        direction = action_side_sign(row, selected_side)
         active.append({
             "market_id": market,
             "asset": str(row["asset"]),
@@ -2063,6 +2081,8 @@ def walk_forward_direct_action(
                         "uncertainty_penalty", "selection_optimism_penalty",
                         "total_residual_friction",
                         "realized_pnl", "target_state",
+                        "censored_worst_case_pnl",
+                        "censored_worst_case_loss_bound",
                     )
                 })
                 remaining -= 1
