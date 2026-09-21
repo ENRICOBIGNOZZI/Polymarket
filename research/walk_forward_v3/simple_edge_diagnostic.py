@@ -222,7 +222,12 @@ def main(argv=None):
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--minimum-wall-ns",type=int,required=True)
     args=parser.parse_args(argv)
-    data=build_dataset(args.root,minimum_wall_ns=args.minimum_wall_ns)
+    data=build_dataset(
+        args.root,
+        minimum_wall_ns=args.minimum_wall_ns,
+        include_settlement_labels=False,
+        use_compact_window_index=True,
+    )
     if data.get("input_state")!="READY":
         value={
             "schema":SCHEMA,**SAFETY,"state":data.get("input_state"),
