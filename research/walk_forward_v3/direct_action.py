@@ -407,14 +407,13 @@ def economics_from_execution_kernel(kernel, size):
     gross = exit_fill * exit_bid - fill * entry_price
     cash = gross - entry_fee - exit_fee
 
-    if fill + 1e-12 < size and residual > 1e-12:
-        state = "OBSERVED_PARTIAL_ENTRY_AND_EXIT_LIQUIDATION"
-    elif fill + 1e-12 < size:
-        state = "OBSERVED_PARTIAL_ENTRY_FILL"
-    elif residual > 1e-12:
-        state = "OBSERVED_PARTIAL_EXIT_LIQUIDATION"
-    else:
-        state = "OBSERVED_FULLY_EXECUTABLE_ROUND_TRIP"
+    # Preserve the historical entry-fill state taxonomy for funnel parity.
+    # Exit feasibility is orthogonal and recorded explicitly below.
+    state = (
+        "OBSERVED_FULL_FILL"
+        if fill + 1e-12 >= size
+        else "OBSERVED_PARTIAL_FILL"
+    )
 
     exit_half = kernel["exit_half_spread_per_share"]
     ideal_alpha = kernel["ideal_midpoint_alpha_per_share"]
