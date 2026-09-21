@@ -1,0 +1,92 @@
+name: V7 London retention read-only audit
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-retention-audit-request.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-retention-readonly-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Require PAPER-only read request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          v=json.load(open('deploy/v7-retention-audit-request.json'))
+          assert v=={
+              'schema':'polymarket_v7_retention_readonly_audit_request_v1',
+              'paper_only':True,
+              'authenticated_execution':False,
+              'real_order_submission':False,
+              'operation':'audit',
+              'output':'docs/research/retention-audit-2026-09-21.json',
+          }
+          PY
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-retention-readonly-audit
+          aws-region: eu-west-2
+
+      - name: Read retention status
+        run: python3 ops/v7_retention_status_ssm.py --output docs/research/retention-audit-2026-09-21.json
+
+      - name: Validate read-only receipt
+        run: |
+          python3 - <<'PY'
+          import json
+          v=json.load(open('docs/research/retention-audit-2026-09-21.json'))
+          assert v['schema']=='polymarket_v7_retention_readonly_audit_v1'
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert isinstance(v.get('timer'),dict)
+          assert isinstance(v.get('service'),dict)
+          print(json.dumps({
+              'retention_state':v.get('retention_state'),
+              'status_age_seconds':v.get('retention_status_age_seconds'),
+              'timer_active':v['timer'].get('ActiveState'),
+              'timer_enabled':v['timer'].get('UnitFileState'),
+              'service_result':v['service'].get('Result'),
+              'service_exec_status':v['service'].get('ExecMainStatus'),
+              'rolling_state':v.get('rolling_state'),
+              'rolling_failures':v.get('rolling_failures_count'),
+              'compression_failures':v.get('compression_failures_count'),
+          },sort_keys=True))
+          PY
+
+      - name: Publish read-only audit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f docs/research/retention-audit-2026-09-21.json
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish London retention read-only audit"
+          git pull --rebase origin main
+          git push origin HEAD:main
