@@ -2071,3 +2071,46 @@ def test_serialized_trade_frequency_challenger_is_paper_only_and_explicit():
     assert policy.context_count == 30
     assert policy.capital_fraction(0.0) == 0.0
     assert policy.capital_fraction(0.04) == 1.0
+
+
+
+def test_shock_reentry_respects_active_per_market_exposure_cap():
+    training = [
+        row(
+            "m" + str(index + 9100),
+            signal=3.0 if index % 2 == 0 else -3.0,
+            exit_bid=.60 if index % 2 == 0 else .40,
+        )
+        for index in range(90)
+    ]
+    model = DirectActionValueModel(
+        size_grid=(1.0, 5.0),
+        action_horizons_ms=(500,),
+        train_latencies_ms=(50,),
+    ).fit(training)
+    rows = []
+    for suffix in ("a", "b", "c"):
+        value = row("m9990", signal=3.0, exit_bid=.60)
+        value["decision_id"] = "m9990-" + suffix
+        value["parent_shock_id"] = "shock-" + suffix
+        rows.append(value)
+    outcomes = evaluate_direct_action_policy(
+        model,
+        rows,
+        latency_ms=50,
+        capital_budget=10_000.0,
+        entry_policy="ONE_ENTRY_PER_SHOCK",
+        max_market_exposure=5.0,
+    )
+    for value in outcomes:
+        if value.get("action") != "TRADE":
+            continue
+        assert (
+            float(value["market_active_notional_before"])
+            + float(value["notional"])
+            <= 5.0 + 1e-12
+        )
+    assert max(
+        (float(value.get("replay_max_gross_notional") or 0.0) for value in outcomes),
+        default=0.0,
+    ) <= 5.0 + 1e-12
