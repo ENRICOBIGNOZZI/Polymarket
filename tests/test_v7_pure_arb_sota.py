@@ -429,7 +429,8 @@ def test_cpp_detector_uses_venue_fee_precision():
     observer=(ROOT/"src/v7_maker_fillability_observer.cpp").read_text()
     lane=(ROOT/"include/pm/v7_pure_arb_lane.hpp").read_text()
     assert '#include "pm/v7_pure_arb_lane.hpp"' in observer
-    assert "pm::v7::pure_arb::fee_usdc" in observer
+    assert "pm::v7::pure_arb::evaluate_pair" in observer
+    assert "pm::v7::pure_arb::fee_usdc" not in observer
     assert "raw < 0.00001" in lane
     assert "std::round(raw * 100000.0) / 100000.0" in lane
 
