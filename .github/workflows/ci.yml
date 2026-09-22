@@ -281,6 +281,10 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           if [[ "${{ needs.classify.outputs.full_required }}" == "true" ]]; then
             cmake --build build-${{ matrix.build_type }} --parallel "$(nproc)"
+            # This integration driver is EXCLUDE_FROM_ALL but its Python test is
+            # part of the full suite. Build it explicitly before ctest.
+            cmake --build build-${{ matrix.build_type }} --parallel "$(nproc)" --target \
+              pm_v7_native_clob_order_lane_driver
             ctest --test-dir build-${{ matrix.build_type }} --parallel "$(nproc)" --output-on-failure
           else
             cmake --build build-${{ matrix.build_type }} --parallel "$(nproc)" --target \
