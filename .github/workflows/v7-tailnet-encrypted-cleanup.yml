@@ -7,7 +7,7 @@ on:
       - deploy/v7-tailnet-encrypted-cleanup-request.json
       - .github/workflows/v7-tailnet-encrypted-cleanup.yml
 
-# recovery-trigger
+# recovery-trigger-20260922-final
 permissions:
   contents: read
   actions: read
