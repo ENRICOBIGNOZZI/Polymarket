@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 31,
-  "expected_launcher_child_count": 30,
+  "expected_process_count": 32,
+  "expected_launcher_child_count": 31,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -428,7 +428,9 @@
         "control/az_fencing_guard.json",
         "az_fencing_guard.log"
       ],
-      "dependencies": [],
+      "dependencies": [
+        "multi_az_fencing_supervisor"
+      ],
       "exact_sha_required": true,
       "config_identity_required": true,
       "launcher_log": "az_fencing_guard.log",
@@ -637,14 +639,16 @@
         "--model-sha",
         "${SHA}",
         "--server-id",
-        "${SERVER_ID}"
+        "${SERVER_ID}",
+        "--run-id",
+        "${RUN_ID}"
       ],
       "profile": "core",
       "inputs": [
-        "config/v7_multi_az_fencing.json"
+        "config/v7_failover_fencing.json"
       ],
       "outputs": [
-        "control/fencing_receipt.json",
+        "control/az_fencing_lease.json",
         "control/fencing_supervisor_status.json",
         "fencing_supervisor.log"
       ],
@@ -929,32 +933,6 @@
     },
     {
       "id": "pure_arb_maker_self_fill_calibration",
-      "executable": "scripts/v7_maker_self_fill_calibration.py",
-      "arguments": [
-        "--model-sha",
-        "${SHA}"
-      ],
-      "profile": "observer",
-      "inputs": [
-        "process:pure_arb_maker_shadow",
-        "control/verified_self_fill_evidence.jsonl"
-      ],
-      "outputs": [
-        "research/repricing_book/maker_self_fill_calibration.json",
-        "research/repricing_book/maker_self_fill_calibration.log"
-      ],
-      "dependencies": [
-        "pure_arb_maker_shadow"
-      ],
-      "exact_sha_required": true,
-      "config_identity_required": true,
-      "launcher_log": "research/repricing_book/maker_self_fill_calibration.log",
-      "london_deployed": true,
-      "runtime_class": "COLLECTOR",
-      "authority_overrides": {}
-    },
-    {
-      "id": "maker_self_fill_calibration",
       "executable": "scripts/v7_maker_self_fill_calibration.py",
       "arguments": [
         "--model-sha",
