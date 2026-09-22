@@ -6,6 +6,7 @@ on:
     paths:
       - deploy/v7-tailnet-login.envelope.json
       - .github/workflows/v7-tailnet-browser-cleanup.yml
+      - ops/v7_tailscale_browser_cleanup.py
 
 permissions:
   contents: read
