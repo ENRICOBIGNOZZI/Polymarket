@@ -357,10 +357,7 @@ def row_is_stale(row):
     # Fail closed: only an explicit offline/last-seen row is deletable.
     return ("offline" in text) or ("last seen" in text)
 
-def remove_one(page,name):
-    row=row_for_name(page,name)
-    if not row_is_stale(row):
-        return False
+def remove_row(page,row,label):
     buttons=row.locator("button")
     choices=[]
     for i in range(buttons.count()):
@@ -394,6 +391,39 @@ def remove_one(page,name):
     confirm.click()
     page.wait_for_timeout(600)
     return True
+
+def remove_one(page,name):
+    row=row_for_name(page,name)
+    if not row_is_stale(row):
+        return False
+    return remove_row(page,row,name)
+
+def row_for_ip(page,ip):
+    search=first_visible(page.locator('input[type="search"]'))
+    if search is None:
+        search=first_visible(page.get_by_placeholder(re.compile(r"search",re.I)))
+    if search is not None:
+        search.fill(ip)
+        page.wait_for_timeout(1200)
+    label=first_visible(page.get_by_text(ip,exact=True))
+    if label is None:
+        return None
+    for xpath in ("xpath=ancestor::tr[1]","xpath=ancestor::*[@role='row'][1]","xpath=ancestor::div[.//button][1]"):
+        row=label.locator(xpath)
+        if row.count() and row.first.is_visible():
+            return row.first
+    return None
+
+def remove_stale_ip(page,ip):
+    row=row_for_ip(page,ip)
+    if row is None:
+        print("tailnet_cleanup_target_ip_absent="+ip,flush=True)
+        return False
+    text=" ".join(row.inner_text(timeout=5000).split())
+    print("tailnet_cleanup_target_ip_row="+ip+" "+text[:240],flush=True)
+    if not row_is_stale(row):
+        raise RuntimeError("target_ip_is_not_stale:"+ip)
+    return remove_row(page,row,"ip:"+ip)
 
 def main():
     p=argparse.ArgumentParser()
@@ -439,6 +469,12 @@ def main():
         print("tailnet_cleanup_stage=LOGIN_BEGIN", flush=True)
         login(page,value["email"],value["password"])
         print("tailnet_cleanup_stage=LOGIN_OK", flush=True)
+        # This IP was positively identified from mamma-portfolio's own tailnet
+        # state as the offline duplicate "enrico’s MacBook Air (2)". Delete it
+        # in the same bounded admin session so it cannot consume node quota.
+        if remove_stale_ip(page,"100.102.9.16"):
+            print("tailnet_cleanup_removed_ip=100.102.9.16",flush=True)
+            removed.append("ip:100.102.9.16")
         names=candidate_names(page)
         print("tailnet_cleanup_stage=CANDIDATES count="+str(len(names)), flush=True)
         for name in names:
