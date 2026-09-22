@@ -1,5 +1,6 @@
 #include "pm/v7_pure_arb_lane.hpp"
 #include "pm/v7_spsc.hpp"
+#include <boost/json.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -13,6 +14,7 @@
 #include <vector>
 
 using namespace pm::v7;
+namespace json = boost::json;
 
 namespace {
 std::int64_t now_ns() noexcept {
@@ -90,13 +92,14 @@ std::int64_t q(std::vector<std::int64_t> values, double p) {
     return values[idx];
 }
 
-void emit_dist(std::string_view name, const std::vector<std::int64_t>& v) {
-    std::cout << '"' << name << "":{"
-              << ""p50":" << q(v,.50) << ','
-              << ""p95":" << q(v,.95) << ','
-              << ""p99":" << q(v,.99) << ','
-              << ""p999":" << q(v,.999) << ','
-              << ""max":" << q(v,1.0) << '}';
+json::object dist(const std::vector<std::int64_t>& v) {
+    return {
+        {"p50", q(v,.50)},
+        {"p95", q(v,.95)},
+        {"p99", q(v,.99)},
+        {"p999", q(v,.999)},
+        {"max", q(v,1.0)},
+    };
 }
 
 std::size_t parse_samples(int argc, char** argv) {
@@ -167,26 +170,31 @@ bool parity(const Digest& a,const Digest& b) {
 int main(int argc,char**argv) {
     const auto n=parse_samples(argc,argv);
     if(n==0) return 64;
-    // Warm both code paths before measurement.
     (void)direct(5'000);
     (void)spsc(5'000);
     auto a=direct(n);
     auto b=spsc(n);
     const bool same=parity(a.digest,b.digest)
         && a.latency.size()==n && b.latency.size()==n;
-    std::cout << "{"schema":"polymarket_v7_pure_arb_handoff_bench_v1","
-              << ""paper_only":true,"authenticated_execution":false,"
-              << ""real_order_submission":false,"
-              << ""scope":"SYNTHETIC_SAME_KERNEL_HANDOFF_ONLY_NOT_NETWORK","
-              << ""samples":" << n << ","economic_parity":"
-              << (same?"true":"false") << ","latency_ns":{";
-    emit_dist("direct",a.latency); std::cout << ',';
-    emit_dist("spsc_decision_core",b.latency);
-    std::cout << "},"digest":{"
-              << ""evaluations":" << a.digest.evaluations << ','
-              << ""positive":" << a.digest.positive << ','
-              << ""shares_microunits":" << a.digest.shares_microunits << ','
-              << ""gross_pnl":" << a.digest.pnl << "}}
-";
+    json::object out{
+        {"schema","polymarket_v7_pure_arb_handoff_bench_v1"},
+        {"paper_only",true},
+        {"authenticated_execution",false},
+        {"real_order_submission",false},
+        {"scope","SYNTHETIC_SAME_KERNEL_HANDOFF_ONLY_NOT_NETWORK"},
+        {"samples",n},
+        {"economic_parity",same},
+        {"latency_ns",json::object{
+            {"direct",dist(a.latency)},
+            {"spsc_decision_core",dist(b.latency)},
+        }},
+        {"digest",json::object{
+            {"evaluations",a.digest.evaluations},
+            {"positive",a.digest.positive},
+            {"shares_microunits",a.digest.shares_microunits},
+            {"gross_pnl",a.digest.pnl},
+        }},
+    };
+    std::cout << json::serialize(out) << '\n';
     return same?0:2;
 }
