@@ -2,7 +2,7 @@ name: V7 Tailscale encrypted browser cleanup
 
 on:
   push:
-    branches: [main]
+    branches: [ops/v7-tailnet-final-recovery-20260922]
     paths:
       - deploy/v7-tailnet-login.envelope.json
       - .github/workflows/v7-tailnet-browser-cleanup.yml
