@@ -129,6 +129,34 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Prove the decomposed benchmark is byte-identical to the production
+    // composite helper before timing it.
+    {
+        const auto a = clob_order::marketable_limit_amounts(
+            Side::Buy, 5000, 100, 5'000'000);
+        if (!a.valid) return 76;
+        constexpr std::uint64_t parity_salt = 9'999;
+        constexpr std::uint64_t parity_ts = 1'710'123'456'789ULL;
+        std::array<char, poly1271::kWrappedSignatureHexChars> composite{};
+        std::array<char, poly1271::kWrappedSignatureHexChars> decomposed{};
+        if (!poly1271::sign_prepared_poly1271_hex(
+                order_hasher, poly_hasher, signer, parity_salt,
+                a.maker_amount, a.taker_amount, parity_ts, composite)) {
+            return 77;
+        }
+        clob_eip712::Hash32 contents{}, digest{};
+        std::array<std::uint8_t, poly1271::kEvmSignatureBytes> inner{};
+        if (!order_hasher.struct_hash_u64(
+                parity_salt, a.maker_amount, a.taker_amount, parity_ts, contents)
+            || !poly_hasher.digest(contents, digest)
+            || !signer.sign_digest(digest, inner)
+            || !poly1271::wrap_signature_hex(
+                inner, order_hasher.domain_separator(), contents, decomposed)
+            || composite != decomposed) {
+            return 78;
+        }
+    }
+
     constexpr std::int64_t limiter_origin_ns = 1'000'000'000LL;
     constexpr std::int64_t limiter_step_ns = 25'000'000LL; // Standard refill = 1 token.
 
