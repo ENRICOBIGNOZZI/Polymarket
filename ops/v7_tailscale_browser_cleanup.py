@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# recovery diagnostic trigger
 from __future__ import annotations
 import argparse, json, re, shutil, time, urllib.request
 from datetime import datetime, timezone
