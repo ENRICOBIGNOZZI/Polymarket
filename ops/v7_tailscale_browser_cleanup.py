@@ -299,9 +299,18 @@ def login(page,email,password):
         if "/admin/machines" in url and "login.tailscale.com" in url:
             return
 
-        if is_google_accounts_url(url) and ("/accounts/SetSID" in url or "/SetSID" in url):
-            if resume_tailscale_after_google(page):
-                return
+        if is_google_accounts_url(url):
+            if "/accounts/SetSID" in url or "/SetSID" in url:
+                if resume_tailscale_after_google(page):
+                    return
+                page.wait_for_timeout(1000)
+                continue
+
+            # A Google re-entry can land back on password / challenge /
+            # selection screens. Run the same bounded human-2SV state machine
+            # here instead of idling until the outer login timeout.
+            if not wait_for_human_2sv(page, timeout_s=900):
+                raise RuntimeError("interactive_auth_timeout")
             page.wait_for_timeout(1000)
             continue
 
