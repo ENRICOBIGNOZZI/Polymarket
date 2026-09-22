@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# quota-retry-2sv
+# quota-retry-2sv-2
   actions: read
 
 jobs:
