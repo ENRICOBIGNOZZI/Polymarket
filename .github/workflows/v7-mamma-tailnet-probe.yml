@@ -61,6 +61,26 @@ jobs:
           if not found:
               raise SystemExit('mamma-portfolio peer not found')
           PY
+          echo '=== PROMETHEUS PEER 100.102.9.16 ==='
+          python3 - <<'PY'
+          import json
+          v=json.load(open('/tmp/ts.json'))
+          hits=[]
+          for _,p in (v.get('Peer') or {}).items():
+              ips=[str(x) for x in (p.get('TailscaleIPs') or [])]
+              if '100.102.9.16' in ips:
+                  hits.append({k:p.get(k) for k in ('HostName','DNSName','TailscaleIPs','Online','Active','Expired','Tags')})
+          print(json.dumps(hits,sort_keys=True))
+          if not hits:
+              print('PROMETHEUS_PEER_NOT_FOUND=1')
+          PY
+          echo '=== PROMETHEUS ENDPOINT 19091 ==='
+          curl -sv --max-time 8 http://100.102.9.16:19091/-/healthy -o /tmp/prom-health 2>&1 || true
+          cat /tmp/prom-health 2>/dev/null || true
+          echo
+          curl -sv --max-time 8 --get --data-urlencode 'query=polymarket_pure_arb_up' http://100.102.9.16:19091/api/v1/query -o /tmp/prom-query 2>&1 || true
+          cat /tmp/prom-query 2>/dev/null || true
+          echo
           echo '=== PING ==='
           tailscale ping --timeout=10s mamma-portfolio.tail1bae85.ts.net || true
           echo '=== HTTP ==='
