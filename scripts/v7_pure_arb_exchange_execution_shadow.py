@@ -270,6 +270,7 @@ class Shadow:
             "scenario_id":item["scenario_id"],"market_id":mid,
             "asset":str(c.get("asset") or ""),"horizon":str(c.get("horizon") or ""),
             "kind":kind,"transport_delay_ms":item["transport_ms"],
+            "market_end_ms":int(m.get("end_timestamp_ms") or 0),
             "mandatory_taker_delay_ns":item["terms"].get("mandatory_taker_delay_ns") if item["terms"] else None,
             "inter_leg_skew_ms":item["skew_ms"],"leg_order":item["order"],
             "target_shares":q,"state":"CENSORED",
