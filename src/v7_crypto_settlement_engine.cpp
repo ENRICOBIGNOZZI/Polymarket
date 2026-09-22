@@ -9,6 +9,7 @@
 #include "pm/v7_external_ws.hpp"
 #include "pm/v7_ingress_wakeup.hpp"
 #include "pm/v7_market_ws.hpp"
+#include "pm/v7_pure_arb_lane.hpp"
 #include "pm/v7_maker_lane.hpp"
 #include "pm/v7_native_settlement_authority.hpp"
 #include "pm/v7_native_maker_context.hpp"
@@ -132,6 +133,11 @@ struct Options {
     bool capture_native_observations = false;
     bool capture_execution_windows = false;
     std::int64_t execution_window_ns = 2'000'000'000LL;
+    bool pure_arb_shadow = false;
+    double pure_arb_reserve_per_share = 0.0005;
+    std::int64_t pure_arb_max_leg_skew_ns = 100'000'000LL;
+    std::int64_t pure_arb_max_receive_to_decision_ns = 50'000'000LL;
+    double pure_arb_prefunded_complete_set_shares = 1000.0;
 };
 
 Options parse_options(int argc, char** argv) {
@@ -205,6 +211,18 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--execution-window-ns")
             out.execution_window_ns = bounded_integer<std::int64_t>(
                 next(), 1'000'000LL, 10'000'000'000LL);
+        else if (arg == "--pure-arb-shadow") out.pure_arb_shadow = true;
+        else if (arg == "--pure-arb-reserve-per-share")
+            out.pure_arb_reserve_per_share = bounded_double(next(), 0.0, 0.999999);
+        else if (arg == "--pure-arb-max-leg-skew-ns")
+            out.pure_arb_max_leg_skew_ns = bounded_integer<std::int64_t>(
+                next(), 0, 5'000'000'000LL);
+        else if (arg == "--pure-arb-max-receive-to-decision-ns")
+            out.pure_arb_max_receive_to_decision_ns = bounded_integer<std::int64_t>(
+                next(), 1'000'000LL, 5'000'000'000LL);
+        else if (arg == "--pure-arb-prefunded-complete-set-shares")
+            out.pure_arb_prefunded_complete_set_shares = bounded_double(
+                next(), 0.000001, 1'000'000.0);
         else throw std::invalid_argument("unknown option");
     }
     return out;
