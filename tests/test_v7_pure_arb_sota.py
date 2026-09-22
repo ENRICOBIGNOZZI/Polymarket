@@ -27,6 +27,18 @@ def write(path:Path,value:dict)->None:
     path.write_text(json.dumps(value)+"\n",encoding="utf-8")
 
 
+def test_bounded_jsonl_tail_never_scans_full_history():
+    with tempfile.TemporaryDirectory() as d:
+        path=Path(d)/"evidence.jsonl"
+        path.write_text("".join(json.dumps({"i":i})+"\n" for i in range(100)),encoding="utf-8")
+        rows=econ.tail_jsonl(path,max_rows=5,max_bytes=1_000_000)
+        assert [row["i"] for row in rows]==[95,96,97,98,99]
+        tiny=econ.tail_jsonl(path,max_rows=100,max_bytes=64)
+        assert tiny
+        assert tiny[-1]["i"]==99
+        assert len(tiny)<100
+
+
 def test_fee_precision_matches_venue_contract():
     # Below 1e-5 USDC the venue charges zero.
     assert econ.rounded_fee_usdc(0.001,0.5,0.02,1.0)==0.0
