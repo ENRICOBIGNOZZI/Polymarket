@@ -609,6 +609,15 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_capital_allocator.py \
   --model-sha "$SHA" --interval-seconds 5 \
   >> "$PURE_ARB_DIR/capital_allocator.log" 2>&1 &
 v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_maker_policy.py \
+  --maker-status "$PURE_ARB_DIR/two_sided_complete_set_status.json" \
+  --capital-status "$PURE_ARB_DIR/capital_allocator_status.json" \
+  --venue-mode "$PURE_ARB_DIR/venue_mode_status.json" \
+  --output "$PURE_ARB_DIR/maker_policy_status.json" \
+  --model-sha "$SHA" --interval-ms 1000 \
+  >> "$PURE_ARB_DIR/maker_policy.log" 2>&1 &
+v7_register_optional_child "$!"
 read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS MAKER_ROTATION_MIN_FILL MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
@@ -702,7 +711,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 19
+v7_assert_registered_child_count 20
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
