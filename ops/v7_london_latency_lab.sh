@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Exact-SHA trigger: latency program final validation.
 set -euo pipefail
 
 APP_DIR="${POLYMARKET_APP_DIR:-$HOME/polymarket}"
