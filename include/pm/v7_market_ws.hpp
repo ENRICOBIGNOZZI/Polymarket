@@ -91,6 +91,7 @@ public:
     void invalidate_all_lineage() noexcept;
 
     [[nodiscard]] BookHotSnapshot snapshot(std::uint64_t instrument_handle) const noexcept;
+    [[nodiscard]] BookDeepSnapshot deep_snapshot(std::uint64_t instrument_handle) const noexcept;
     [[nodiscard]] std::size_t instrument_count() const noexcept;
 
 private:
