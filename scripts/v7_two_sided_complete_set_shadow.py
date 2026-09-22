@@ -195,24 +195,31 @@ class Shadow:
         if abs(yes_ts - no_ts) > self.args.maximum_leg_skew_ms:
             self.funnel["leg_skew"] += 1
             return None
+        # CLOB V2 makers are fee-free. Market fee parameters are useful only
+        # for ancillary rebate attribution; they are never subtracted from the
+        # complete-set maker entry edge.
         params = fee_params(market)
+        rate = exponent = None
+        taker_fee_equivalent = 0.0
+        rebate_reference = 0.0
         if params is None:
-            self.funnel["fee_unverified"] += 1
-            return None
-        rate, exponent = params
-        fees = fee_per_share(yes_bid, rate, exponent) + fee_per_share(no_bid, rate, exponent)
-        if not math.isfinite(fees):
-            self.funnel["fee_invalid"] += 1
-            return None
+            self.funnel["rebate_fee_schedule_unverified"] += 1
+        else:
+            rate, exponent = params
+            taker_fee_equivalent = (
+                fee_per_share(yes_bid, rate, exponent)
+                + fee_per_share(no_bid, rate, exponent)
+            )
+            if not math.isfinite(taker_fee_equivalent):
+                taker_fee_equivalent = 0.0
+                self.funnel["rebate_fee_schedule_invalid"] += 1
+            rebate_reference = self.args.crypto_maker_rebate_fraction * taker_fee_equivalent
+
         raw_edge = 1.0 - yes_bid - no_bid
         if raw_edge <= 1e-12:
             self.funnel["raw_edge_nonpositive"] += 1
             return None
-        after_fee = raw_edge - fees
-        if after_fee <= 1e-12:
-            self.funnel["fee_killed"] += 1
-            return None
-        edge = after_fee - self.args.reserve_per_share
+        edge = raw_edge - self.args.reserve_per_share
         if edge <= self.args.minimum_locked_edge_per_share:
             self.funnel["reserve_killed"] += 1
             return None
@@ -248,7 +255,11 @@ class Shadow:
             "yes_fill_ms": None,
             "no_fill_ms": None,
             "raw_edge_per_share": raw_edge,
-            "fees_per_share": fees,
+            "maker_fee_per_share": 0.0,
+            "fees_per_share": 0.0,
+            "taker_fee_equivalent_per_share": taker_fee_equivalent,
+            "maker_rebate_reference_per_share": rebate_reference,
+            "rebate_reference_used_in_entry_gate": False,
             "reserve_per_share": self.args.reserve_per_share,
             "locked_edge_per_share": edge,
             "fee_rate": rate,
@@ -345,6 +356,7 @@ class Shadow:
                 state = "NO_FILL"
         matched = min(c["yes_filled"], c["no_filled"])
         locked = matched * c["locked_edge_per_share"]
+        rebate_reference = matched * c.get("maker_rebate_reference_per_share", 0.0)
         legging = None
         total = None
         if yes_liq is not None and no_liq is not None:
@@ -379,7 +391,11 @@ class Shadow:
             "state": state,
             "paired_full": state == "BOTH_FULL",
             "raw_edge_per_share": c["raw_edge_per_share"],
-            "fees_per_share": c["fees_per_share"],
+            "maker_fee_per_share": 0.0,
+            "fees_per_share": 0.0,
+            "taker_fee_equivalent_per_share": c.get("taker_fee_equivalent_per_share", 0.0),
+            "maker_rebate_reference_pnl": rebate_reference,
+            "rebate_reference_used_in_entry_gate": False,
             "reserve_per_share": c["reserve_per_share"],
             "locked_edge_per_share": c["locked_edge_per_share"],
             "matched_shares": matched,
@@ -389,6 +405,8 @@ class Shadow:
             "legging_pnl": legging,
             "legging_loss": max(0.0, -legging) if legging is not None else None,
             "total_shadow_pnl": total,
+            "total_shadow_pnl_with_reference_rebate":
+                (total + rebate_reference) if total is not None else None,
             "queue_ahead_multiplier": self.args.queue_ahead_multiplier,
             "joint_probability_semantics": "DIRECT_EMPIRICAL_CYCLE_STATES_NOT_PRODUCT_OF_MARGINALS",
         }
@@ -556,6 +574,7 @@ def main() -> int:
     ap.add_argument("--ttl-arms-ms", default="250,500,1000")
     ap.add_argument("--quote-refresh-ms", type=int, default=25)
     ap.add_argument("--interval-ms", type=int, default=5)
+    ap.add_argument("--crypto-maker-rebate-fraction", type=float, default=0.20)
     ap.add_argument("--maturity-min-cycles", type=int, default=300)
     ap.add_argument("--maturity-min-cycles-per-ttl", type=int, default=75)
     ap.add_argument("--maturity-min-cycles-per-context", type=int, default=20)
@@ -574,6 +593,8 @@ def main() -> int:
         raise SystemExit("invalid economics")
     if not (1 <= args.quote_refresh_ms <= 1000 and 1 <= args.interval_ms <= 1000):
         raise SystemExit("invalid timing")
+    if not (0.0 <= args.crypto_maker_rebate_fraction <= 1.0):
+        raise SystemExit("invalid maker rebate reference fraction")
     if not (args.maturity_min_cycles > 0
             and args.maturity_min_cycles_per_ttl > 0
             and args.maturity_min_cycles_per_context > 0
