@@ -66,6 +66,8 @@ sudo -u "$SERVICE_USER" git -C "$APP_DIR" checkout --detach "$EXPECTED_SHA"
 # Stage the exact release without starting any runtime.
 sudo -u "$SERVICE_USER" env POLYMARKET_EXPECTED_SHA="$EXPECTED_SHA" POLYMARKET_SERVICE_USER="$SERVICE_USER" \
   POLYMARKET_APP_DIR="$APP_DIR" POLYMARKET_RUNTIME_ROOT="$RUNTIME_ROOT" \
+  POLYMARKET_REUSE_EXACT_SHA_CI="${POLYMARKET_REUSE_EXACT_SHA_CI:-0}" \
+  PM_V7_CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}" \
   bash "$APP_DIR/ops/v7_london_stage_release.sh"
 sudo -u "$SERVICE_USER" ln -sfn "by-sha/$EXPECTED_SHA" "$RUNTIME_CURRENT"
 [[ "$(cat "$RUNTIME_CURRENT/deploy/london/runtime_sha")" == "$EXPECTED_SHA" ]]
