@@ -111,6 +111,72 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
     return out;
 }
 
+NativePaperPairResult NativePaperExecutionAdapter::submit_pair(
+    const NativeOrderCommand& yes_command,
+    const BookHotSnapshot& yes_book,
+    const NativeOrderCommand& no_command,
+    const BookHotSnapshot& no_book,
+    std::int64_t now_monotonic_ns) noexcept {
+    NativePaperPairResult out{};
+    const bool structural =
+        now_monotonic_ns > 0
+        && yes_command.client_order_id != 0
+        && no_command.client_order_id != 0
+        && yes_command.client_order_id != no_command.client_order_id
+        && yes_command.market_handle != 0
+        && yes_command.market_handle == no_command.market_handle
+        && yes_command.instrument_handle != 0
+        && no_command.instrument_handle != 0
+        && yes_command.instrument_handle != no_command.instrument_handle
+        && yes_command.quantity_microunits > 0
+        && yes_command.quantity_microunits == no_command.quantity_microunits
+        && yes_command.side == no_command.side
+        && yes_command.time_in_force == AdapterTimeInForce::Fok
+        && no_command.time_in_force == AdapterTimeInForce::Fok
+        && endpoint_.matches_pending_command(yes_command)
+        && endpoint_.matches_pending_command(no_command);
+    if (!structural) {
+        out.invalid = 1;
+        return out;
+    }
+
+    const bool yes_ready = fok_fully_executable(yes_command, yes_book);
+    const bool no_ready = fok_fully_executable(no_command, no_book);
+    if (!yes_ready || !no_ready) {
+        out.yes.client_order_id = yes_command.client_order_id;
+        out.no.client_order_id = no_command.client_order_id;
+        const bool y_rejected = endpoint_.observe_unsent(
+            yes_command, now_monotonic_ns);
+        const bool n_rejected = endpoint_.observe_unsent(
+            no_command, now_monotonic_ns);
+        out.yes.reason = yes_ready
+            ? NativePaperReason::Accepted : NativePaperReason::InsufficientDepth;
+        out.no.reason = no_ready
+            ? NativePaperReason::Accepted : NativePaperReason::InsufficientDepth;
+        out.yes.final_state = y_rejected ? OrderState::Rejected : OrderState::Unknown;
+        out.no.final_state = n_rejected ? OrderState::Rejected : OrderState::Unknown;
+        out.invalid = (!y_rejected || !n_rejected) ? 1 : 0;
+        return out;
+    }
+
+    out.yes = match_now(yes_command, yes_book, now_monotonic_ns);
+    out.no = match_now(no_command, no_book, now_monotonic_ns + 1);
+    const bool y_full = out.yes.accepted != 0
+        && out.yes.filled_microunits == yes_command.quantity_microunits
+        && out.yes.final_state == OrderState::Filled;
+    const bool n_full = out.no.accepted != 0
+        && out.no.filled_microunits == no_command.quantity_microunits
+        && out.no.final_state == OrderState::Filled;
+    out.paired_fill = y_full && n_full ? 1 : 0;
+    out.one_leg_fill = (y_full != n_full) ? 1 : 0;
+    out.accepted = out.paired_fill;
+    out.invalid = out.one_leg_fill
+        || out.yes.reason == NativePaperReason::LifecycleFailure
+        || out.no.reason == NativePaperReason::LifecycleFailure
+        ? 1 : 0;
+    return out;
+}
+
 void NativePaperExecutionAdapter::invalidate_arrivals() noexcept {
     for (auto& pending : pending_) if (pending.command.client_order_id) pending.invalidated = 1;
 }
@@ -140,6 +206,30 @@ NativePaperExecutionAdapter::ConsumedTop* NativePaperExecutionAdapter::available
     if (!empty) return nullptr;
     *empty = {command.instrument_handle, command.side, price, visible, visible};
     return empty;
+}
+
+bool NativePaperExecutionAdapter::fok_fully_executable(
+    const NativeOrderCommand& command,
+    const BookHotSnapshot& book) const noexcept {
+    if (command.time_in_force != AdapterTimeInForce::Fok
+        || command.quantity_microunits <= 0
+        || command.price_tick <= 0 || command.tick_size_e4 <= 0
+        || book.valid == 0 || book.lineage_continuous == 0
+        || book.tick_size_e4 != command.tick_size_e4) {
+        return false;
+    }
+    const auto limit_e4 =
+        command.price_tick * static_cast<std::int64_t>(command.tick_size_e4);
+    if (limit_e4 <= 0 || limit_e4 >= 10'000) return false;
+    const bool buy = command.side == Side::Buy;
+    if (!buy && command.side != Side::Sell) return false;
+    const auto executable_e4 = buy ? book.best_ask_e4 : book.best_bid_e4;
+    const auto executable_qty = std::max<std::int64_t>(
+        0, buy ? book.best_ask_microunits : book.best_bid_microunits);
+    const bool marketable = executable_e4 > 0
+        && (buy ? executable_e4 <= limit_e4 : executable_e4 >= limit_e4);
+    return marketable && executable_qty >= command.quantity_microunits
+        && executable_e4 % command.tick_size_e4 == 0;
 }
 
 NativePaperArrivalBatch NativePaperExecutionAdapter::advance_arrivals(
@@ -217,7 +307,8 @@ NativePaperSubmitResult NativePaperExecutionAdapter::match_now(
         return out;
     }
     if (command.time_in_force != AdapterTimeInForce::Gtc
-        && command.time_in_force != AdapterTimeInForce::Fak) {
+        && command.time_in_force != AdapterTimeInForce::Fak
+        && command.time_in_force != AdapterTimeInForce::Fok) {
         if (!endpoint_.observe_unsent(command, now_monotonic_ns)) {
             out.reason = NativePaperReason::LifecycleFailure;
             return out;
@@ -226,6 +317,28 @@ NativePaperSubmitResult NativePaperExecutionAdapter::match_now(
         out.final_state = OrderState::Rejected;
         return out;
     }
+    if (command.time_in_force == AdapterTimeInForce::Fok
+        && !fok_fully_executable(command, book)) {
+        if (!endpoint_.observe_unsent(command, now_monotonic_ns)) {
+            out.reason = NativePaperReason::LifecycleFailure;
+            return out;
+        }
+        const auto limit_e4 =
+            command.price_tick * static_cast<std::int64_t>(command.tick_size_e4);
+        const bool buy = command.side == Side::Buy;
+        const auto executable_e4 = buy ? book.best_ask_e4 : book.best_bid_e4;
+        const auto executable_qty = std::max<std::int64_t>(
+            0, buy ? book.best_ask_microunits : book.best_bid_microunits);
+        out.reason = executable_e4 <= 0
+            || !(buy ? executable_e4 <= limit_e4 : executable_e4 >= limit_e4)
+            ? NativePaperReason::NotMarketable
+            : executable_qty < command.quantity_microunits
+                ? NativePaperReason::InsufficientDepth
+                : NativePaperReason::InvalidCommand;
+        out.final_state = OrderState::Rejected;
+        return out;
+    }
+
     if (!live_locally(command, now_monotonic_ns)) {
         out.reason = NativePaperReason::LifecycleFailure;
         return out;
@@ -290,7 +403,9 @@ NativePaperSubmitResult NativePaperExecutionAdapter::match_now(
         return out;
     }
 
-    const auto fill_qty = std::min(command.quantity_microunits, executable_qty);
+    const auto fill_qty = command.time_in_force == AdapterTimeInForce::Fok
+        ? command.quantity_microunits
+        : std::min(command.quantity_microunits, executable_qty);
     if (executable_e4 % command.tick_size_e4 != 0) {
         out.reason = NativePaperReason::LifecycleFailure;
         return out;
@@ -328,7 +443,8 @@ NativePaperSubmitResult NativePaperExecutionAdapter::match_now(
     out.fill.causal_arrival_modelled = taker_delay_ns_ > 0;
     out.accepted = 1;
 
-    if (fill_qty < command.quantity_microunits) {
+    if (command.time_in_force != AdapterTimeInForce::Fok
+        && fill_qty < command.quantity_microunits) {
         OmsEvent expire{};
         expire.type = OmsEventType::Expire;
         expire.timestamp_ns = now_monotonic_ns + 3;
