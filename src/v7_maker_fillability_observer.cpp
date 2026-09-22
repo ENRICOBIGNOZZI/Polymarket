@@ -1670,6 +1670,11 @@ public:
             {"cycles_total", pure_arb_total_cycles_},
             {"paper_locked_pnl_pre_gas_total", pure_arb_total_pnl_},
             {"conservative_locked_pnl_after_reserve_total", pure_arb_conservative_total_pnl_},
+            {"sizing_depth_authority", "LOCAL_DEEP_BOOK_POSITIVE_MARGINAL_EDGE"},
+            {"deep_candidates_total", pure_arb_deep_candidates_},
+            {"deep_evaluations_total", pure_arb_deep_evaluations_},
+            {"deep_queue_drops_total", pure_arb_deep_queue_drops_},
+            {"deep_snapshot_rejections_total", pure_arb_deep_snapshot_rejections_},
             {"reserve_per_share", pure_arb_reserve_per_share_},
             {"maximum_leg_skew_ms", pure_arb_max_leg_skew_ms_},
             {"maximum_receive_to_decision_ns", pure_arb_receive_to_decision_limit_ns_},
@@ -1774,6 +1779,10 @@ public:
             evaluate_pure_arb(row);
             write_book(row);
             wrote = true;
+        }
+        PureArbDeepEvidence deep{};
+        while (pure_arb_deep_queue_->try_pop(deep)) {
+            evaluate_pure_arb_deep(deep);
         }
         const auto now_wall_ms = wall_ms();
         if (wrote && !state_only_ && now_wall_ms - last_evidence_flush_ms_ >= 25) {
