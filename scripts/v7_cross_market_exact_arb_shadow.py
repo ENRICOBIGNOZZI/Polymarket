@@ -21,6 +21,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from v7_clob_public_batch import bbo as parse_bbo, fetch_books
+
 STATUS_SCHEMA = "polymarket_v7_cross_market_exact_arb_status_v1"
 
 
@@ -274,7 +276,17 @@ def scan(args: argparse.Namespace) -> dict[str,Any]:
         open_markets.append(enriched)
 
     duplicate_groups=[rows for rows in groups.values() if len(rows)>1]
-    opportunities=[]; pairs_checked=0; books={}
+    all_tokens=[]
+    for market in open_markets:
+        mapping=market.get("_tokens") or {}
+        all_tokens.extend(str(mapping.get(side) or "") for side in ("YES","NO"))
+    raw_books=fetch_books(
+        args.clob_url,all_tokens,args.timeout_seconds,chunk_size=50,
+        user_agent="polymarket-v7-cross-market-shadow")
+    # Populate every requested token, including misses, so the hot scan never
+    # falls back to N serial GET /book calls.
+    books={token:parse_bbo(raw_books.get(token)) for token in dict.fromkeys(all_tokens) if token}
+    opportunities=[]; pairs_checked=0
     for rows in duplicate_groups:
         rows=sorted(rows,key=lambda x:str(x.get("market_id") or ""))
         for i in range(len(rows)):
