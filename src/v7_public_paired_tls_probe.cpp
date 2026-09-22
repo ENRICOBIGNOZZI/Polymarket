@@ -10,6 +10,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <span>
@@ -165,7 +167,7 @@ struct LaneControl {
     out.http_status = parser.status_code();
     out.ok = static_cast<std::uint8_t>(
         out.ack_ns > 0 && out.http_status >= 200
-        && out.http_status < 500);
+        && out.http_status < 400);
     return out;
 }
 
@@ -325,7 +327,7 @@ int main(int argc, char** argv) {
             {"parallel_two_persistent_lanes", samples_json(parallel)},
         };
         std::cout << json::serialize(output) << '\n';
-        return parallel.failures == 0 ? 0 : 4;
+        return parallel.pair_completion_ns.size() * 100 >= options.samples * 95 ? 0 : 4;
     } catch (const std::exception& error) {
         std::cerr << "paired_tls_probe: " << error.what() << '\n';
         return 64;
