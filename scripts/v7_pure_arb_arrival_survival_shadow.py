@@ -39,6 +39,25 @@ def load(path: Path) -> dict[str, Any]:
     return value if isinstance(value,dict) else {}
 
 
+def market_terms(root: Path | None, market_id: str) -> dict[str, Any]:
+    if root is None or not market_id:
+        return {}
+    value=load(root/(market_id+".json"))
+    if (
+        value.get("schema")!="polymarket_v7_market_execution_terms_v1"
+        or value.get("market_id")!=market_id
+        or value.get("state")!="VERIFIED_SNAPSHOT"
+        or value.get("paper_only") is not True
+    ):
+        return {}
+    try:
+        delay_ns=int(value.get("mandatory_taker_delay_ns"))
+    except (TypeError,ValueError):
+        return {}
+    if delay_ns<0 or delay_ns>5_000_000_000:
+        return {}
+    return {**value,"mandatory_taker_delay_ns":delay_ns}
+
 def fee_per_share(price: float, rate: float, exponent: float) -> float:
     if not (math.isfinite(price) and 0<price<1 and math.isfinite(rate)
             and 0<=rate<=1 and math.isfinite(exponent) and exponent>=0):
