@@ -24,7 +24,7 @@ int main() {
             stamp.wall_ms = 1'700'000'000'000 + offset;
             stamp.monotonic_ns = 1'000'000'000 + offset * 1'000'000;
             observer.on_frame(payload, stamp);
-            observer.drain();
+            observer.drain(true);
         };
         send(snapshot(1'700'000'000'000), 0);
         send(snapshot(1'700'000'001'100), 1100);
@@ -44,9 +44,6 @@ int main() {
             return value.is_uint64() ? value.as_uint64()
                                      : static_cast<std::uint64_t>(value.as_int64());
         };
-        if (!row.at("features_valid").as_bool()) {
-            std::cerr << "causal_observer_failure_row=" << json::serialize(row) << '\n';
-        }
         assert(row.at("features_valid").as_bool());
         const auto& print = row.at("public_trade").as_object();
         assert(print.at("aggressor_side").as_string() == "SELL");
