@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_rich_history_main_request_v1",
   "version": 1,
-  "request_id": "rich-history-crypto-information-20260922",
+  "request_id": "rich-history-purged-crypto-information-20260922",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "de38680075deecfe2c1c16124df784ce736d129b",
+  "expected_research_sha": "0ceb004f575e038b34b04b682a341f5173a7018d",
   "minimum_wall_ns": 1789921800000000000,
   "maximum_history_hours": 168,
   "research_branch": "rich-history-alpha-20260922",
