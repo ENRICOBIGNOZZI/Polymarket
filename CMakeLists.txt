@@ -393,6 +393,13 @@ if(BUILD_TESTING)
   add_test(NAME pm_v7_pure_arb_multi_engine_tests
     COMMAND pm_v7_pure_arb_multi_engine_tests)
 
+  add_executable(pm_v7_pure_arb_detector_parity_tests
+    tests/test_v7_pure_arb_detector_parity.cpp)
+  target_link_libraries(pm_v7_pure_arb_detector_parity_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_pure_arb_detector_parity_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_pure_arb_detector_parity_tests
+    COMMAND pm_v7_pure_arb_detector_parity_tests)
+
   add_test(NAME pm_v7_native_clob_full_prewire_bench_smoke
     COMMAND polymarket_v7_native_clob_full_prewire_bench 64)
 
