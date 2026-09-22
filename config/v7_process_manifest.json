@@ -334,6 +334,7 @@
         "--maker-share-cap-microunits",
         "1000000",
         "--asynchronous-settlement",
+        "--observation-only",
         "--capture-native-decisions",
         "--capture-execution-windows",
         "--execution-window-ns",
