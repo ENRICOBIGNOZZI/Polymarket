@@ -232,6 +232,14 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     std::span<RoutedOmsEvent> routed_scratch) noexcept {
     NativeClobSubmitResult out;
     out.client_order_id = command.client_order_id;
+    out.latency.frame_receive_monotonic_ns =
+        command.frame_receive_monotonic_ns;
+    out.latency.decode_complete_monotonic_ns =
+        command.decode_complete_monotonic_ns;
+    out.latency.arb_decision_monotonic_ns =
+        command.decision_monotonic_ns;
+    out.latency.risk_admitted_monotonic_ns =
+        command.risk_admitted_monotonic_ns;
     out.latency.submit_start_monotonic_ns = now_ns();
     // No bytes may leave the lane for a mutated/unreserved command. Preserve
     // the real admitted order for reconciliation instead of rejecting a copy.
@@ -351,6 +359,8 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                NativeClobSubmitReason::TransportFailure, 0, out.latency);
     }
     out.wire_monotonic_ns = write.completed_monotonic_ns;
+    out.latency.wire_complete_monotonic_ns =
+        write.completed_monotonic_ns;
     OmsEvent wire_event{};
     wire_event.type = OmsEventType::WireSend;
     wire_event.timestamp_ns = write.completed_monotonic_ns;
@@ -402,6 +412,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     out.rate_limit_warning =
         static_cast<std::uint8_t>(impl_->response_parser.rate_limit_warning());
     out.response_complete_monotonic_ns = response_complete_ns;
+    out.latency.http_ack_monotonic_ns = response_complete_ns;
     impl_->rate_limiter.observe(
         clob::RateLane::Order, out.rate_limit_remaining, out.rate_limit_tier,
         out.rate_limit_reset_unix_seconds, out.rate_limit_warning != 0,
@@ -466,6 +477,8 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                write.completed_monotonic_ns, out.latency);
     }
     out.final_state = final_record->state;
+    out.latency.user_ws_match_monotonic_ns =
+        final_record->user_ws_match_ns;
     out.identity_bound = account_bridge.lookup_exchange(command.client_order_id).found;
     if (final_record->state == OrderState::Rejected) {
         out.reason = NativeClobSubmitReason::AckFailure;
