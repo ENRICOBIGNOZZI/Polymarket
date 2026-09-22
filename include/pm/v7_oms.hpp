@@ -25,6 +25,15 @@ enum class OrderState : std::uint8_t {
     PendingDelay = 15,
 };
 
+enum class OmsEventSource : std::uint8_t {
+    Unknown = 0,
+    Local = 1,
+    HttpAck = 2,
+    UserWs = 3,
+    Paper = 4,
+    Reconciliation = 5,
+};
+
 enum class OmsEventType : std::uint8_t {
     QueueSend = 1,
     WireSend = 2,
@@ -49,6 +58,7 @@ struct OmsEvent {
     std::uint64_t event_id = 0;
     std::uint64_t source_version = 0;
     OmsEventType type = OmsEventType::QueueSend;
+    OmsEventSource source = OmsEventSource::Unknown;
     std::int64_t timestamp_ns = 0;
     std::int64_t exchange_order_handle = 0;
     std::int64_t fill_delta_microunits = 0;
@@ -76,11 +86,15 @@ struct OmsOrderRecord {
     std::int64_t filled_microunits = 0;
     std::int64_t remaining_microunits = 0;
     std::int64_t causal_trigger_receive_monotonic_ns = 0;
+    std::int64_t decode_complete_monotonic_ns = 0;
     std::int64_t signal_ready_monotonic_ns = 0;
     std::int64_t decision_monotonic_ns = 0;
+    std::int64_t risk_admitted_ns = 0;
     std::int64_t submission_ns = 0;
     std::int64_t wire_ns = 0;
     std::int64_t ack_ns = 0;
+    std::int64_t http_ack_ns = 0;
+    std::int64_t user_ws_match_ns = 0;
     std::int64_t live_ns = 0;
     std::int64_t delay_start_ns = 0;
     std::int64_t delay_release_ns = 0;
@@ -112,16 +126,30 @@ enum OmsLatencyLeg : std::uint32_t {
     QueueToDelay = 1U << 8,
     DelayDuration = 1U << 9,
     DelayToWire = 1U << 10,
+    TriggerToDecode = 1U << 11,
+    DecodeToDecision = 1U << 12,
+    DecisionToRisk = 1U << 13,
+    RiskToWire = 1U << 14,
+    WireToHttpAck = 1U << 15,
+    HttpAckToUserWsMatch = 1U << 16,
+    TriggerToUserWsMatch = 1U << 17,
 };
 
 struct OmsLatencySnapshot {
     std::uint32_t valid_mask = 0;
+    std::int64_t trigger_to_decode_ns = 0;
+    std::int64_t decode_to_decision_ns = 0;
     std::int64_t trigger_to_signal_ns = 0;
     std::int64_t signal_to_decision_ns = 0;
     std::int64_t trigger_to_decision_ns = 0;
+    std::int64_t decision_to_risk_ns = 0;
     std::int64_t decision_to_queue_ns = 0;
+    std::int64_t risk_to_wire_ns = 0;
     std::int64_t queue_to_wire_ns = 0;
     std::int64_t wire_to_ack_ns = 0;
+    std::int64_t wire_to_http_ack_ns = 0;
+    std::int64_t http_ack_to_user_ws_match_ns = 0;
+    std::int64_t trigger_to_user_ws_match_ns = 0;
     std::int64_t queue_to_delay_ns = 0;
     std::int64_t delay_duration_ns = 0;
     std::int64_t delay_to_wire_ns = 0;
