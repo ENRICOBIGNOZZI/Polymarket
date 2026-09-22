@@ -17,6 +17,7 @@ import v7_fee_reward_registry as registry
 import v7_pure_arb_capital_allocator as allocator
 import v7_pure_arb_economics as econ
 import v7_pure_arb_exchange_execution_shadow as execution
+import v7_pure_arb_venue_mode as venue
 
 SHA="b"*40
 
@@ -255,6 +256,22 @@ def test_causal_observer_persists_l10_ladders_and_runtime_wires_all_modes():
     assert '--taker-tier-snapshot "$RUN_ROOT/control/verified_taker_tier.json"' in runtime
     assert '--account-source "$RUN_ROOT/control/account_execution_mode.json"' in runtime
     assert "--paper-account-counterfactual OPEN" in runtime
+
+
+def test_closed_only_observed_mode_stays_separate_from_paper_open_counterfactual():
+    now=1_000
+    out=venue.build(
+        {"mode":"NORMAL","timestamp_ms":now},
+        model_sha=SHA,now_ms=now,maximum_age_ms=5_000,
+        account_source={"mode":"CLOSED_ONLY","timestamp_ms":now},
+        paper_counterfactual_mode="NORMAL",
+        paper_account_counterfactual="OPEN",
+    )
+    assert out["observed_account_mode"]=="CLOSED_ONLY"
+    assert out["observed_policy"]["new_taker"] is False
+    assert out["simulation_account_mode"]=="OPEN"
+    assert out["simulation_policy"]["new_taker"] is True
+    assert out["paper_account_counterfactual"] is True
 
 
 def test_native_lane_classifies_restricted_http_responses_without_blind_retry():
