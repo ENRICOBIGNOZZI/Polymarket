@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 30,
-  "expected_launcher_child_count": 29,
+  "expected_process_count": 31,
+  "expected_launcher_child_count": 30,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -537,6 +537,28 @@
       "authority_overrides": {}
     },
     {
+      "id": "combo_rfq_gateway_readonly",
+      "executable": "scripts/v7_combo_rfq_gateway_readonly.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [],
+      "outputs": [
+        "research/repricing_book/combo_rfq_tape.jsonl",
+        "research/repricing_book/combo_rfq_gateway_status.json",
+        "research/repricing_book/combo_rfq_gateway.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/combo_rfq_gateway.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
       "id": "combo_rfq_shadow",
       "executable": "scripts/v7_combo_rfq_shadow.py",
       "arguments": [
@@ -546,14 +568,16 @@
       "profile": "observer",
       "inputs": [
         "process:combo_market_source",
-        "research/repricing_book/combo_rfq_tape.jsonl"
+        "research/repricing_book/combo_rfq_tape.jsonl",
+        "process:combo_rfq_gateway_readonly"
       ],
       "outputs": [
         "research/repricing_book/combo_rfq_shadow_status.json",
         "research/repricing_book/combo_rfq_shadow.log"
       ],
       "dependencies": [
-        "combo_market_source"
+        "combo_market_source",
+        "combo_rfq_gateway_readonly"
       ],
       "exact_sha_required": true,
       "config_identity_required": true,
