@@ -82,6 +82,15 @@ struct NativePaperTradeResult {
     std::uint8_t invalid = 0;
 };
 
+struct NativePaperPairResult {
+    NativePaperSubmitResult yes{};
+    NativePaperSubmitResult no{};
+    std::uint8_t paired_fill = 0;
+    std::uint8_t one_leg_fill = 0;
+    std::uint8_t accepted = 0;
+    std::uint8_t invalid = 0;
+};
+
 struct NativePaperArrivalRecord {
     NativeOrderCommand command{};
     NativePaperSubmitResult result{};
@@ -111,6 +120,15 @@ public:
     [[nodiscard]] NativePaperSubmitResult submit(
         const NativeOrderCommand& command,
         const BookHotSnapshot& book,
+        std::int64_t now_monotonic_ns) noexcept;
+
+    // Complete-set PAPER FOK semantics: both legs fully execute at their
+    // respective arrival tops or neither receives a fill.
+    [[nodiscard]] NativePaperPairResult submit_pair_fok(
+        const NativeOrderCommand& yes_command,
+        const BookHotSnapshot& yes_book,
+        const NativeOrderCommand& no_command,
+        const BookHotSnapshot& no_book,
         std::int64_t now_monotonic_ns) noexcept;
 
     [[nodiscard]] bool request_cancel(
