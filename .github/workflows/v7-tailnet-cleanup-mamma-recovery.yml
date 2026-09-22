@@ -41,10 +41,13 @@ jobs:
           v=json.load(open(sys.argv[1],encoding='utf-8'))
           assert v['schema']=='polymarket_v7_tailnet_login_handoff_v1'
           assert v['purpose']=='TAILNET_CI_QUOTA_RECOVERY'
-          assert v['allowed_prefixes']==[
+          allowed=v['allowed_prefixes']
+          safe={
               'gh-deploy-','gh-health-','gh-freeze-','gh-inventory-',
               'gh-mamma-recover-','github-runnervm'
-          ]
+          }
+          assert isinstance(allowed,list) and allowed
+          assert all(x in safe for x in allowed)
           assert 1 <= int(v['maximum_deletions']) <= 24
           assert isinstance(v['email'],str) and '@' in v['email']
           assert isinstance(v['password'],str) and v['password']
