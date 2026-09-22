@@ -499,7 +499,7 @@ def main():
         "skipped_nonstale_or_protected":skipped_live,
     },sort_keys=True))
     if not removed:
-        raise SystemExit("no_stale_ci_nodes_removed")
+        print("tailnet_cleanup_no_stale_targets=1",flush=True)
     return 0
 
 if __name__=="__main__":
