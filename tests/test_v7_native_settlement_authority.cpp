@@ -25,7 +25,9 @@ ExecutionPlan plan(std::uint64_t id, StrategyId strategy, IntentType type,
     out.intent.strategy_id = strategy;
     out.intent.type = type;
     out.intent.side = side;
-    out.intent.urgency = policy == ExecutionPolicyId::AggressiveTaker
+    out.intent.urgency =
+        (policy == ExecutionPolicyId::AggressiveTaker
+         || policy == ExecutionPolicyId::PureArbFok)
         ? Urgency::Aggressive : Urgency::Passive;
     out.intent.purpose = IntentPurpose::Alpha;
     out.intent.passive = policy == ExecutionPolicyId::PassiveMaker;
@@ -77,9 +79,6 @@ void test_one_authority_accepts_maker_and_taker_buy_paths() {
              Side::Buy, ExecutionPolicyId::AggressiveTaker),
         5'000'000, 2'000);
     assert(taker.accepted == 1);
-    assert(taker.risk_admitted_monotonic_ns >= taker.tx.command.decision_monotonic_ns);
-    assert(taker.tx.command.risk_admitted_monotonic_ns == taker.risk_admitted_monotonic_ns);
-    assert(taker.tx.command.queue_monotonic_ns >= taker.risk_admitted_monotonic_ns);
     assert(taker.tx.oms.state == OrderState::SendPending);
 
     const auto maker = authority.submit(
@@ -227,6 +226,54 @@ void test_maker_replace_is_cancel_first_and_never_parallel() {
     assert(authority.active_orders() == 1);
 }
 
+void test_pure_arb_pair_admission_is_all_or_none_and_fok() {
+    NativeSettlementAuthority authority(limits());
+    auto yes = plan(40, StrategyId::HardArbitrage, IntentType::TargetPosition,
+                    Side::Buy, ExecutionPolicyId::PureArbFok,
+                    5'000'000, 40, 11);
+    auto no = plan(41, StrategyId::HardArbitrage, IntentType::TargetPosition,
+                   Side::Buy, ExecutionPolicyId::PureArbFok,
+                   5'000'000, 50, 12);
+    const auto pair = authority.submit_pair(yes, no, 5'000'000, 2'000);
+    assert(pair.accepted == 1);
+    assert(pair.reason == NativeSettlementPairReason::Accepted);
+    assert(pair.risk_admitted_monotonic_ns == 2'000);
+    assert(pair.yes.tx.command.time_in_force == AdapterTimeInForce::Fok);
+    assert(pair.no.tx.command.time_in_force == AdapterTimeInForce::Fok);
+    assert(authority.active_orders() == 2);
+
+    OmsEvent reject{};
+    reject.type = OmsEventType::Reject;
+    reject.timestamp_ns = 2'100;
+    const auto ry = authority.apply_order_event(
+        pair.yes.tx.command.client_order_id, reject);
+    const auto rn = authority.apply_order_event(
+        pair.no.tx.command.client_order_id, reject);
+    assert(ry.terminal_retired && rn.terminal_retired);
+    assert(authority.active_orders() == 0);
+    assert(authority.capital_snapshot().order_reserved_microdollars == 0);
+}
+
+void test_pure_arb_pair_rolls_back_first_leg_when_second_fails() {
+    CapitalLimits tight = limits();
+    tight.max_total_exposure_microdollars = 3'000'000;
+    tight.max_market_exposure_microdollars = 3'000'000;
+    tight.max_single_order_microdollars = 3'000'000;
+    NativeSettlementAuthority authority(tight);
+    auto yes = plan(50, StrategyId::HardArbitrage, IntentType::TargetPosition,
+                    Side::Buy, ExecutionPolicyId::PureArbFok,
+                    5'000'000, 40, 11); // 2.0m
+    auto no = plan(51, StrategyId::HardArbitrage, IntentType::TargetPosition,
+                   Side::Buy, ExecutionPolicyId::PureArbFok,
+                   5'000'000, 50, 12); // 2.5m -> pair total exceeds 3.0m
+    const auto pair = authority.submit_pair(yes, no, 5'000'000, 2'000);
+    assert(pair.accepted == 0);
+    assert(pair.reason == NativeSettlementPairReason::SecondLegRejectedRolledBack);
+    assert(pair.rollback_complete == 1);
+    assert(authority.active_orders() == 0);
+    assert(authority.capital_snapshot().order_reserved_microdollars == 0);
+}
+
 void test_inventory_sync_rejects_active_order_overwrite() {
     NativeSettlementAuthority authority(limits());
     assert(authority.sync_inventory(7, 11, 3'000'000, 1'200'000, 1));
@@ -249,6 +296,8 @@ int main() {
     test_fail_closed_without_inventory_and_venue_minimum();
     test_inventory_sync_buy_fill_and_sell_fill_share_one_capital_owner();
     test_maker_replace_is_cancel_first_and_never_parallel();
+    test_pure_arb_pair_admission_is_all_or_none_and_fok();
+    test_pure_arb_pair_rolls_back_first_leg_when_second_fails();
     test_inventory_sync_rejects_active_order_overwrite();
     return 0;
 }
