@@ -458,7 +458,7 @@ BOOK_CONTEXTS = {f"{asset}:{horizon}" for asset in BOOK_ASSETS for horizon in BO
 
 
 def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
-    """Build the exact 30-context zero-authority PM book subscription."""
+    """Build the 30 active contexts plus bounded next-market preload for M5/M15."""
     if (
         snapshot.get("schema") != SNAPSHOT_SCHEMA
         or snapshot.get("paper_only") is not True
@@ -477,7 +477,8 @@ def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | Non
     if now_s <= 0:
         return None, "TIMESTAMP_INVALID"
 
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    active: dict[str, list[dict[str, Any]]] = {}
+    future: dict[str, list[dict[str, Any]]] = {}
     for row in snapshot.get("markets") or []:
         if not isinstance(row, dict) or row.get("research_only") is True:
             continue
@@ -492,24 +493,25 @@ def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | Non
         close = int(row.get("close_timestamp_unix") or 0)
         if close <= 0:
             close = start + int(row.get("horizon_seconds") or 0)
-        if start <= 0 or close <= start or not (start <= now_s < close):
+        if start <= 0 or close <= start:
             continue
-        grouped.setdefault(context, []).append(row)
+        if start <= now_s < close:
+            active.setdefault(context, []).append(row)
+        elif horizon in {"M5", "M15"} and start > now_s:
+            future.setdefault(context, []).append(row)
 
-    if set(grouped) != BOOK_CONTEXTS:
-        missing = sorted(BOOK_CONTEXTS - set(grouped))
+    if set(active) != BOOK_CONTEXTS:
+        missing = sorted(BOOK_CONTEXTS - set(active))
         return None, "MISSING_CONTEXTS:" + ",".join(missing)
-    ambiguous = sorted(context for context, rows in grouped.items() if len(rows) != 1)
+    ambiguous = sorted(context for context, rows in active.items() if len(rows) != 1)
     if ambiguous:
         return None, "AMBIGUOUS_CONTEXTS:" + ",".join(ambiguous)
 
-    markets: list[dict[str, Any]] = []
-    for context in sorted(BOOK_CONTEXTS):
-        row = grouped[context][0]
+    def render_market(row: dict[str, Any], role: str) -> dict[str, Any] | None:
         tokens = [str(x) for x in row.get("clob_token_ids") or []]
         outcomes = [str(x).strip().upper() for x in row.get("outcomes") or []]
         if len(tokens) != 2 or not all(tokens) or tokens[0] == tokens[1]:
-            return None, f"{context}:TOKEN_MAPPING_INVALID"
+            return None
         yes_index, no_index = 0, 1
         for index, outcome in enumerate(outcomes[:2]):
             if outcome in {"YES", "UP"}:
@@ -525,24 +527,58 @@ def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | Non
         event_ids = [str(x) for x in row.get("event_ids") or [] if str(x)]
         market_id = str(row.get("market_id") or "")
         if not market_id:
-            return None, f"{context}:MARKET_ID_INVALID"
-        markets.append({
+            return None
+        return {
             "asset": str(row.get("asset") or ""),
             "horizon": str(row.get("horizon") or ""),
+            "role": role,
             "market_id": market_id,
             "event_id": event_ids[0] if event_ids else "",
             "yes_token": tokens[yes_index],
             "no_token": tokens[no_index],
             "start_timestamp_ms": start_s * 1000,
             "end_timestamp_ms": close_s * 1000,
+            "normalized_rules_hash": str(row.get("normalized_rules_hash") or ""),
+            "rule_snapshot_sha256": str(row.get("rule_snapshot_sha256") or ""),
             "fee_schedule": row.get("fee_schedule") if isinstance(row.get("fee_schedule"), dict) else {},
             "fees_enabled": row.get("fees_enabled") is True,
             "fees_enabled_explicit": row.get("fees_enabled_explicit") is True,
-        })
+        }
+
+    markets: list[dict[str, Any]] = []
+    active_count = 0
+    preload_count = 0
+    for context in sorted(BOOK_CONTEXTS):
+        current = render_market(active[context][0], "CURRENT")
+        if current is None:
+            return None, f"{context}:TOKEN_MAPPING_INVALID"
+        markets.append(current)
+        active_count += 1
+
+        horizon = current["horizon"]
+        candidates = future.get(context) or []
+        if horizon in {"M5", "M15"} and candidates:
+            candidates = sorted(
+                candidates,
+                key=lambda row: (
+                    int(row.get("window_start_unix") or 0),
+                    int(row.get("close_timestamp_unix") or 0),
+                    str(row.get("market_id") or ""),
+                ),
+            )
+            earliest_start = int(candidates[0].get("window_start_unix") or 0)
+            same_start = [row for row in candidates
+                          if int(row.get("window_start_unix") or 0) == earliest_start]
+            if len(same_start) == 1:
+                nxt = render_market(same_start[0], "NEXT")
+                if nxt is not None:
+                    markets.append(nxt)
+                    preload_count += 1
+
     identity = json.dumps(markets, sort_keys=True, separators=(",", ":"))
     return {
         "schema": BOOK_SELECTION_SCHEMA,
-        "version": 1,
+        "version": 2,
         "model_sha": model_sha,
         "paper_only": True,
         "authenticated_execution": False,
@@ -551,14 +587,18 @@ def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | Non
         "execution_authority": False,
         "automatic_promotion": False,
         "selection_only": True,
-        "active_only": True,
+        "active_only": False,
+        "preload_policy": "CURRENT_PLUS_NEXT_M5_M15",
         "generated_at_ms": int(snapshot["timestamp_ms"]),
         "generation_sha256": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+        "active_market_count": active_count,
+        "preloaded_market_count": preload_count,
+        "active_token_count": 2 * active_count,
+        "preloaded_token_count": 2 * preload_count,
         "market_count": len(markets),
         "token_count": 2 * len(markets),
         "markets": markets,
     }, ""
-
 
 def status_from_snapshot(snapshot: dict[str, Any], *, state: str = "OPERATIONAL", blocker: str = "") -> dict[str, Any]:
     return {
@@ -607,8 +647,11 @@ def persist(output_dir: Path, snapshot: dict[str, Any], previous: dict[str, Any]
         if not selection_unchanged:
             _atomic_json(selection_path, selection)
         selection_state = "READY"
-        selection_contexts = int(selection["market_count"])
-        selection_tokens = int(selection["token_count"])
+        selection_contexts = int(selection.get("active_market_count") or selection["market_count"])
+        selection_tokens = int(selection.get("active_token_count") or selection["token_count"])
+        selection_subscribed_markets = int(selection["market_count"])
+        selection_subscribed_tokens = int(selection["token_count"])
+        selection_preloaded_markets = int(selection.get("preloaded_market_count") or 0)
     else:
         prior_safe = (
             prior_selection.get("schema") == BOOK_SELECTION_SCHEMA
@@ -618,14 +661,20 @@ def persist(output_dir: Path, snapshot: dict[str, Any], previous: dict[str, Any]
             and prior_selection.get("selection_only") is True
         )
         selection_state = "STALE_PRESERVED" if prior_safe else "NOT_READY"
-        selection_contexts = int(prior_selection.get("market_count") or 0) if prior_safe else 0
-        selection_tokens = int(prior_selection.get("token_count") or 0) if prior_safe else 0
+        selection_contexts = int(prior_selection.get("active_market_count") or prior_selection.get("market_count") or 0) if prior_safe else 0
+        selection_tokens = int(prior_selection.get("active_token_count") or prior_selection.get("token_count") or 0) if prior_safe else 0
+        selection_subscribed_markets = int(prior_selection.get("market_count") or 0) if prior_safe else 0
+        selection_subscribed_tokens = int(prior_selection.get("token_count") or 0) if prior_safe else 0
+        selection_preloaded_markets = int(prior_selection.get("preloaded_market_count") or 0) if prior_safe else 0
 
     status = status_from_snapshot(snapshot)
     status.update({
         "book_selection_state": selection_state,
         "book_selection_contexts": selection_contexts,
         "book_selection_tokens": selection_tokens,
+        "book_selection_subscribed_markets": selection_subscribed_markets,
+        "book_selection_subscribed_tokens": selection_subscribed_tokens,
+        "book_selection_preloaded_markets": selection_preloaded_markets,
         "book_selection_blocker": selection_blocker,
     })
     _atomic_json(output_dir / "status.json", status)
