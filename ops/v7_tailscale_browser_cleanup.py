@@ -136,17 +136,26 @@ def login(page,email,password):
         if email_box is None:
             raise RuntimeError("google_email_field_missing")
         email_box.fill(email)
+        if not email_box.input_value():
+            raise RuntimeError("google_email_fill_failed")
+        print("tailnet_cleanup_google_email_filled=true", flush=True)
         nxt=first_visible(page.locator("#identifierNext")) or first_visible(page.get_by_role("button",name=re.compile(r"Next",re.I)))
         if nxt is None:
             raise RuntimeError("google_email_next_missing")
         nxt.click()
         page.wait_for_timeout(1500)
+        if "/signin/identifier" in page.url:
+            email_box.press("Enter")
+            page.wait_for_timeout(1800)
+        print("tailnet_cleanup_post_email_url="+page.url.split("?")[0][:180], flush=True)
+
         password_box=page.locator('input[name="Passwd"]')
         try:
             password_box.wait_for(state="visible",timeout=20000)
         except Exception:
             body=page.locator("body").inner_text(timeout=5000)
-            if any(marker.lower() in body.lower() for marker in INTERACTIVE_MARKERS):
+            lower=body.lower()
+            if any(marker.lower() in lower for marker in INTERACTIVE_MARKERS):
                 if not wait_for_human_2sv(page):
                     raise RuntimeError("interactive_auth_timeout")
                 if "accounts.google.com" not in page.url:
@@ -154,6 +163,25 @@ def login(page,email,password):
                 else:
                     password_box=page.locator('input[name="Passwd"]')
                     password_box.wait_for(state="visible",timeout=5000)
+            elif "accounts.google.com" not in page.url:
+                generic_password=first_visible(page.locator('input[type="password"]'))
+                if generic_password is None:
+                    raise RuntimeError("sso_password_field_missing")
+                generic_password.fill(password)
+                submit=first_visible(page.get_by_role("button",name=re.compile(r"Sign in|Log in|Next|Continue",re.I)))
+                if submit is None:
+                    submit=first_visible(page.locator('button[type="submit"], input[type="submit"]'))
+                if submit is None:
+                    raise RuntimeError("sso_submit_missing")
+                submit.click()
+                password_box=None
+                page.wait_for_timeout(1500)
+            elif "/signin/identifier" in page.url:
+                if "couldn’t find your google account" in lower or "couldn't find your google account" in lower:
+                    raise RuntimeError("google_account_not_found")
+                if "enter a valid email" in lower:
+                    raise RuntimeError("google_identifier_invalid")
+                raise RuntimeError("google_identifier_did_not_advance")
             else:
                 raise RuntimeError("google_password_field_missing")
         if password_box is not None:
