@@ -99,7 +99,7 @@ class MakerCohortSupervisorTests(unittest.TestCase):
         self.assertNotIn("v7_maker_cohort_supervisor.py", loop)
         self.assertNotIn("--maker-runtime", loop)
         self.assertNotIn("maker_observer_cohort", rows)
-        self.assertEqual(rows["pm_book_observer"]["runtime_class"], "COLLECTOR")
+        self.assertEqual(rows["pm_book_observer"]["runtime_class"], "LATENCY_OBSERVER")
         self.assertEqual(rows["crypto_settlement_engine"]["runtime_class"], "HOT_PATH")
         self.assertIn("SHADOW_OBSERVERS_ONLY", supervisor)
         self.assertIn("atomic_json(self.selection, latest)", supervisor)
