@@ -297,7 +297,10 @@ int main(int argc, char** argv) {
             || !exact_sha(options.model_sha) || options.run_id.empty()
             || options.server_id.empty() || options.market_id.empty()
             || options.event_id.empty() || options.fee_source.empty()
-            || options.close_wall_ns <= wall_now_ns()) {
+            || options.market_start_wall_ns <= 0
+            || options.market_start_wall_ns >= options.close_wall_ns
+            || options.close_wall_ns <= wall_now_ns()
+            || (options.pure_arb_native_shadow && options.latency_trace_bin.empty())) {
             throw std::invalid_argument("live PAPER runtime identity required");
         }
 
@@ -488,6 +491,14 @@ int main(int argc, char** argv) {
             maker_model.execution_cells.end(), [](const auto& cell) { return cell.valid != 0; });
         auto evidence_owner = std::make_unique<NativeRuntimeEvidenceWriter>(evidence_config);
         auto& evidence_writer = *evidence_owner;
+        std::unique_ptr<NativeLatencyTraceWriter> latency_trace_writer;
+        if (!options.latency_trace_bin.empty()) {
+            latency_trace_writer =
+                std::make_unique<NativeLatencyTraceWriter>(options.latency_trace_bin);
+            if (!latency_trace_writer->valid()) {
+                throw std::runtime_error("native latency trace writer unavailable");
+            }
+        }
         maker::MakerLaneContext maker_context;
         maker_context.risk.max_quote_shares = options.maker_share_cap_microunits / 1'000'000.0;
         maker_context.risk.max_abs_residual_shares = options.maker_share_cap_microunits / 1'000'000.0;
