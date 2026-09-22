@@ -181,9 +181,7 @@ def explicit_relation_opportunities(
         qmax=args.maximum_shares
         leg_rows=[]
         for market,token,coefficient,(rate,exponent) in resolved:
-            if token not in books:
-                books[token]=fetch_book(args.clob_url,token,args.timeout_seconds)
-            book=books[token]
+            book=books.get(token)
             if book is None:
                 valid=False; break
             fee=fee_per_share(book["ask"],rate,exponent)
@@ -218,32 +216,6 @@ def explicit_relation_opportunities(
                 "legs":leg_rows,
             })
     return opportunities,checked,invalid
-
-
-def fetch_book(base: str, token: str, timeout: float) -> dict[str,float] | None:
-    url=base.rstrip("/")+"/book?"+urllib.parse.urlencode({"token_id":token})
-    req=urllib.request.Request(url,headers={"User-Agent":"polymarket-v7-cross-market-shadow"})
-    try:
-        with urllib.request.urlopen(req,timeout=timeout) as resp:
-            value=json.load(resp)
-    except (OSError,TimeoutError,json.JSONDecodeError):
-        return None
-    if not isinstance(value,dict): return None
-    bids=value.get("bids") if isinstance(value.get("bids"),list) else []
-    asks=value.get("asks") if isinstance(value.get("asks"),list) else []
-    def levels(rows):
-        out=[]
-        for x in rows:
-            if not isinstance(x,dict): continue
-            try:p=float(x["price"]);q=float(x["size"])
-            except (KeyError,TypeError,ValueError): continue
-            if math.isfinite(p) and math.isfinite(q) and 0<p<1 and q>0: out.append((p,q))
-        return out
-    bb=levels(bids); aa=levels(asks)
-    if not bb or not aa: return None
-    bid=max(bb,key=lambda x:x[0]); ask=min(aa,key=lambda x:x[0])
-    if not bid[0] < ask[0]: return None
-    return {"bid":bid[0],"bid_q":bid[1],"ask":ask[0],"ask_q":ask[1]}
 
 
 def scan(args: argparse.Namespace) -> dict[str,Any]:
@@ -295,9 +267,7 @@ def scan(args: argparse.Namespace) -> dict[str,Any]:
                 needed=[a["_tokens"]["YES"],a["_tokens"]["NO"],b["_tokens"]["YES"],b["_tokens"]["NO"]]
                 ok=True
                 for token in needed:
-                    if token not in books:
-                        books[token]=fetch_book(args.clob_url,token,args.timeout_seconds)
-                    if books[token] is None: ok=False
+                    if books.get(token) is None: ok=False
                 if not ok: continue
                 combos=[
                     ("YES_A_PLUS_NO_B",a["_tokens"]["YES"],b["_tokens"]["NO"],a,b),
