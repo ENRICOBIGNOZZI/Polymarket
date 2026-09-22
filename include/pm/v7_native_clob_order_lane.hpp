@@ -3,6 +3,7 @@
 #include "pm/v7_native_order_tx.hpp"
 #include "pm/v7_clob_rate_limit.hpp"
 #include "pm/v7_user_oms_bridge.hpp"
+#include "pm/v7_native_latency_tape.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -86,7 +87,8 @@ struct NativeClobSubmitResult {
 class NativeClobOrderLane final {
 public:
     NativeClobOrderLane(const NativeClobLaneConfig& config,
-                        std::span<const std::uint8_t, 32> private_key) noexcept;
+                        std::span<const std::uint8_t, 32> private_key,
+                        NativeLatencyTape* latency_tape = nullptr) noexcept;
     ~NativeClobOrderLane();
     NativeClobOrderLane(const NativeClobOrderLane&) = delete;
     NativeClobOrderLane& operator=(const NativeClobOrderLane&) = delete;
