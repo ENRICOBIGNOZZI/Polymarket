@@ -26,11 +26,11 @@ int main() {
 
     auto yes = make_book();
     auto no = make_book();
-    yes.best_bid_e4 = 6000;
+    yes.best_bid_e4 = 3900;
     yes.best_ask_e4 = 4000;
     yes.best_bid_microunits = 5'000'000;
     yes.best_ask_microunits = 5'000'000;
-    no.best_bid_e4 = 4500;
+    no.best_bid_e4 = 4900;
     no.best_ask_e4 = 5000;
     no.best_bid_microunits = 5'000'000;
     no.best_ask_microunits = 5'000'000;
@@ -43,21 +43,13 @@ int main() {
     no.ask_levels[1] = {5100, 2'000'000};
     no.ask_level_count = 2;
 
-    // Positive SELL complete-set edge.
-    yes.bid_levels[0] = {6000, 3'000'000};
-    yes.bid_levels[1] = {5900, 3'000'000};
-    yes.bid_level_count = 2;
-    no.bid_levels[0] = {4500, 4'000'000};
-    no.bid_levels[1] = {4400, 2'000'000};
-    no.bid_level_count = 2;
-
     const Terms zero_fee{0.0, 1.0, 0.001};
     const auto l1 = evaluate_l1(yes, no, zero_fee);
     assert(l1.valid == 1);
     assert(close(l1.buy_raw_edge_per_share, 0.10));
-    assert(close(l1.sell_raw_edge_per_share, 0.05));
+    assert(close(l1.sell_raw_edge_per_share, -0.12));
     assert(close(l1.buy_edge_per_share, 0.10));
-    assert(close(l1.sell_edge_per_share, 0.05));
+    assert(close(l1.sell_edge_per_share, -0.12));
     assert(close(l1.buy_executable_shares, 5.0));
     assert(close(l1.sell_executable_shares, 5.0));
 
@@ -76,7 +68,29 @@ int main() {
     assert(close(capped.gross_locked_pnl, 0.29));
     assert(close(capped.conservative_locked_pnl, 0.287));
 
-    const auto sell = sweep(yes, no, zero_fee, false);
+    // SELL needs a different, non-crossed book. A single valid book cannot
+    // simultaneously have the large BUY and SELL complete-set edges above.
+    auto sell_yes = make_book();
+    auto sell_no = make_book();
+    sell_yes.best_bid_e4 = 6000;
+    sell_yes.best_ask_e4 = 6100;
+    sell_yes.best_bid_microunits = 6'000'000;
+    sell_yes.best_ask_microunits = 5'000'000;
+    sell_no.best_bid_e4 = 4500;
+    sell_no.best_ask_e4 = 4600;
+    sell_no.best_bid_microunits = 6'000'000;
+    sell_no.best_ask_microunits = 5'000'000;
+    sell_yes.bid_levels[0] = {6000, 3'000'000};
+    sell_yes.bid_levels[1] = {5900, 3'000'000};
+    sell_yes.bid_level_count = 2;
+    sell_no.bid_levels[0] = {4500, 4'000'000};
+    sell_no.bid_levels[1] = {4400, 2'000'000};
+    sell_no.bid_level_count = 2;
+    const auto sell_l1 = evaluate_l1(sell_yes, sell_no, zero_fee);
+    assert(sell_l1.valid == 1);
+    assert(close(sell_l1.sell_raw_edge_per_share, 0.05));
+    assert(close(sell_l1.sell_edge_per_share, 0.05));
+    const auto sell = sweep(sell_yes, sell_no, zero_fee, false);
     assert(sell.shares_microunits == 6'000'000);
     assert(close(sell.gross_locked_pnl, 0.25));
     assert(close(sell.conservative_locked_pnl, 0.244));
