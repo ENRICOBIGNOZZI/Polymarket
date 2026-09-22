@@ -264,7 +264,8 @@ NativeSettlementAuthorityResult NativeSettlementAuthority::submit(
     out.risk_admitted_monotonic_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-    out.tx = order_tx_.prepare_submit(plan, now_monotonic_ns);
+    out.tx = order_tx_.prepare_submit(
+        plan, out.risk_admitted_monotonic_ns);
     if (out.tx.accepted != 0) {
         out.tx.command.risk_admitted_monotonic_ns =
             out.risk_admitted_monotonic_ns;
