@@ -82,10 +82,14 @@ def wait_for_human_2sv(page, timeout_s: int=420) -> bool:
     return False
 
 def login(page,email,password):
+    print("tailnet_cleanup_stage=LOGIN_GOTO", flush=True)
     page.goto("https://login.tailscale.com/admin/machines",wait_until="domcontentloaded",timeout=60000)
+    print("tailnet_cleanup_url="+page.url.split("?")[0][:180], flush=True)
     google=first_visible(page.get_by_text(re.compile(r"Sign in with Google",re.I)))
+    print("tailnet_cleanup_google_button="+str(google is not None).lower(), flush=True)
     if google is not None:
         google.click()
+        print("tailnet_cleanup_stage=GOOGLE_CLICKED", flush=True)
     else:
         email_box=first_visible(page.locator('input[type="email"]'))
         if email_box is not None:
@@ -96,6 +100,7 @@ def login(page,email,password):
             sign.click()
 
     page.wait_for_timeout(1200)
+    print("tailnet_cleanup_post_click_url="+page.url.split("?")[0][:180], flush=True)
     if "accounts.google.com" in page.url:
         email_box=first_visible(page.locator('input[name="identifier"], input[type="email"]'))
         if email_box is not None:
@@ -227,16 +232,23 @@ def main():
     if not 1<=maximum<=120:
         p.error("maximum_deletions")
 
+    print("tailnet_cleanup_stage=ARGS_OK", flush=True)
     protected=protected_run_ids(a.repository,a.github_token)
+    print("tailnet_cleanup_stage=PROTECTED_RUNS count="+str(len(protected)), flush=True)
     from playwright.sync_api import sync_playwright
     removed=[]
     skipped_live=[]
     with sync_playwright() as pw:
+        print("tailnet_cleanup_stage=PLAYWRIGHT_READY", flush=True)
         browser=pw.chromium.connect_over_cdp(a.cdp_url)
+        print("tailnet_cleanup_stage=CDP_CONNECTED", flush=True)
         context=browser.contexts[0] if browser.contexts else browser.new_context()
         page=context.pages[0] if context.pages else context.new_page()
+        print("tailnet_cleanup_stage=LOGIN_BEGIN", flush=True)
         login(page,value["email"],value["password"])
+        print("tailnet_cleanup_stage=LOGIN_OK", flush=True)
         names=candidate_names(page)
+        print("tailnet_cleanup_stage=CANDIDATES count="+str(len(names)), flush=True)
         for name in names:
             run_match=RUN_NAMES.fullmatch(name)
             if run_match and int(run_match.group(1)) in protected:
@@ -263,4 +275,8 @@ def main():
     return 0
 
 if __name__=="__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print("tailnet_cleanup_error="+type(exc).__name__+":"+str(exc)[:240], flush=True)
+        raise
