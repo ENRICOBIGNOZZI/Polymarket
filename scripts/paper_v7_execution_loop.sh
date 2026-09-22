@@ -321,6 +321,7 @@ v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" --pure-arb-paper \
   --pure-arb-reserve-per-share 0.0005 --pure-arb-max-leg-skew-ms 100 \
   --pure-arb-max-receive-to-decision-ms 50 \
+  --pure-arb-prefunded-complete-set-shares 1000 \
   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 # Zero-authority PM book evidence is diagnostically important but reconstructible.
 # It must not stop the native execution owner if it rolls or exits during market refresh.
@@ -525,6 +526,21 @@ v7_exec_class COLLECTOR python3 scripts/v7_cross_market_exact_arb_shadow.py \
   --timeout-seconds 2 --interval-seconds 1 \
   >> "$PURE_ARB_DIR/cross_market_exact_arb.log" 2>&1 &
 v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_arrival_survival_shadow.py \
+  --candidates "$PURE_ARB_DIR/pure_arb_trades.jsonl" \
+  --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/pure_arb_arrival_survival_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/pure_arb_arrival_survival_status.json" \
+  --delay-arms-ms 1,2,5,10,25,50 \
+  --reserve-per-share 0.0005 \
+  --reserve-arms 0,0.0001,0.00025,0.0005,0.001,0.0025,0.005 \
+  --minimum-fill-shares 1 --maximum-leg-skew-ms 100 \
+  --maximum-book-age-ms 100 --interval-ms 5 \
+  >> "$PURE_ARB_DIR/pure_arb_arrival_survival.log" 2>&1 &
+v7_register_optional_child "$!"
 read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS MAKER_ROTATION_MIN_FILL MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
@@ -618,7 +634,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 13
+v7_assert_registered_child_count 14
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
