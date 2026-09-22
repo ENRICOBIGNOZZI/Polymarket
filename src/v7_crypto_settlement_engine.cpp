@@ -920,7 +920,7 @@ int main(int argc, char** argv) {
 
                     // Zero-authority complete-set arbitrage shadow.  It runs on
                     // the canonical in-process PM books and never constructs an
-                    // ExecutionPlan or calls the settlement authority.
+                    // executable candidate or calls the settlement authority.
                     if (event.instrument_handle == kYes) yes_book = event.book;
                     else if (event.instrument_handle == kNo) no_book = event.book;
                     if (options.pure_arb_native_shadow) {
