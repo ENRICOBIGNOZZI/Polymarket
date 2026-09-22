@@ -254,6 +254,18 @@ class Shadow:
             "no_filled": 0.0,
             "yes_fill_ms": None,
             "no_fill_ms": None,
+            "queue_arms": {
+                f"{arm:.3f}": {
+                    "multiplier": arm,
+                    "yes_queue": arm * yes_q,
+                    "no_queue": arm * no_q,
+                    "yes_filled": 0.0,
+                    "no_filled": 0.0,
+                    "yes_fill_ms": None,
+                    "no_fill_ms": None,
+                }
+                for arm in self.args.queue_ahead_arms
+            },
             "raw_edge_per_share": raw_edge,
             "maker_fee_per_share": 0.0,
             "fees_per_share": 0.0,
@@ -284,7 +296,11 @@ class Shadow:
                 if candidate is not None:
                     self.active[mid] = candidate
                 continue
-            if current["yes_filled"] > 0 or current["no_filled"] > 0:
+            if any(
+                float(arm.get("yes_filled") or 0.0) > 0.0
+                or float(arm.get("no_filled") or 0.0) > 0.0
+                for arm in (current.get("queue_arms") or {}).values()
+            ):
                 continue
             if candidate is None:
                 self.cancels["EDGE_GONE"] += 1
@@ -318,19 +334,27 @@ class Shadow:
         quote = c[f"{side}_price"]
         if price > quote + 1e-12:
             return
-        remaining = max(0.0, c["target_shares"] - c[f"{side}_filled"])
-        if remaining <= 0:
-            return
-        queue_key = f"{side}_queue"
-        queue = max(0.0, c[queue_key])
-        consumed = min(queue, size)
-        c[queue_key] = queue - consumed
-        residual = max(0.0, size - consumed)
-        fill = min(remaining, residual)
-        if fill > 0:
-            c[f"{side}_filled"] += fill
-            if c[f"{side}_fill_ms"] is None:
-                c[f"{side}_fill_ms"] = wall
+
+        for arm in (c.get("queue_arms") or {}).values():
+            remaining = max(0.0, c["target_shares"] - float(arm.get(f"{side}_filled") or 0.0))
+            if remaining <= 0:
+                continue
+            queue_key = f"{side}_queue"
+            queue = max(0.0, float(arm.get(queue_key) or 0.0))
+            consumed = min(queue, size)
+            arm[queue_key] = queue - consumed
+            residual = max(0.0, size - consumed)
+            fill = min(remaining, residual)
+            if fill > 0:
+                arm[f"{side}_filled"] = float(arm.get(f"{side}_filled") or 0.0) + fill
+                if arm.get(f"{side}_fill_ms") is None:
+                    arm[f"{side}_fill_ms"] = wall
+
+        primary = (c.get("queue_arms") or {}).get(f"{self.args.queue_ahead_multiplier:.3f}")
+        if isinstance(primary, dict):
+            for name in ("yes_queue","no_queue","yes_filled","no_filled","yes_fill_ms","no_fill_ms"):
+                c[name] = primary.get(name)
+
 
     def finalize(self, mid: str, reason: str = "TTL") -> None:
         c = self.active.pop(mid, None)
@@ -357,6 +381,40 @@ class Shadow:
         matched = min(c["yes_filled"], c["no_filled"])
         locked = matched * c["locked_edge_per_share"]
         rebate_reference = matched * c.get("maker_rebate_reference_per_share", 0.0)
+
+        queue_scenarios = []
+        for arm in sorted((c.get("queue_arms") or {}).values(), key=lambda x: float(x.get("multiplier") or 0.0)):
+            yf = float(arm.get("yes_filled") or 0.0)
+            nf = float(arm.get("no_filled") or 0.0)
+            target = float(c["target_shares"])
+            if yf >= target - 1e-9 and nf >= target - 1e-9:
+                arm_state = "BOTH_FULL"
+            elif yf > 0 and nf > 0:
+                arm_state = "BOTH_PARTIAL"
+            elif yf > 0:
+                arm_state = "YES_ONLY"
+            elif nf > 0:
+                arm_state = "NO_ONLY"
+            else:
+                arm_state = "NO_FILL"
+            arm_matched = min(yf, nf)
+            arm_locked = arm_matched * c["locked_edge_per_share"]
+            arm_legging = None
+            arm_total = None
+            if yes_liq is not None and no_liq is not None:
+                arm_legging = ((yf - arm_matched) * (yes_liq - c["yes_price"])
+                               + (nf - arm_matched) * (no_liq - c["no_price"]))
+                arm_total = arm_locked + arm_legging
+            queue_scenarios.append({
+                "multiplier": float(arm.get("multiplier") or 0.0),
+                "state": arm_state,
+                "yes_filled_shares": yf,
+                "no_filled_shares": nf,
+                "matched_shares": arm_matched,
+                "locked_complete_set_pnl": arm_locked,
+                "legging_pnl": arm_legging,
+                "total_shadow_pnl": arm_total,
+            })
         legging = None
         total = None
         if yes_liq is not None and no_liq is not None:
@@ -408,6 +466,7 @@ class Shadow:
             "total_shadow_pnl_with_reference_rebate":
                 (total + rebate_reference) if total is not None else None,
             "queue_ahead_multiplier": self.args.queue_ahead_multiplier,
+            "queue_scenarios": queue_scenarios,
             "joint_probability_semantics": "DIRECT_EMPIRICAL_CYCLE_STATES_NOT_PRODUCT_OF_MARGINALS",
         }
         with self.args.output.open("a", encoding="utf-8") as handle:
@@ -480,6 +539,26 @@ class Shadow:
                 "sum_total_shadow_pnl": sum(values) if values else 0.0,
             }
 
+        by_queue_arm: dict[str, dict[str, Any]] = {}
+        scenario_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in usable:
+            for scenario in row.get("queue_scenarios") or []:
+                if isinstance(scenario, dict):
+                    scenario_groups[f'{float(scenario.get("multiplier") or 0.0):.3f}'].append(scenario)
+        for arm, rows in sorted(scenario_groups.items()):
+            counts = Counter(str(x.get("state")) for x in rows)
+            paired = counts.get("BOTH_FULL", 0)
+            values = [float(x["total_shadow_pnl"]) for x in rows
+                      if x.get("total_shadow_pnl") is not None]
+            by_queue_arm[arm] = {
+                "cycles": len(rows),
+                "paired_full": paired,
+                "paired_fill_probability_direct": paired / len(rows) if rows else None,
+                "paired_fill_probability_lower_90": wilson_lower(paired, len(rows)),
+                "one_leg": counts.get("YES_ONLY", 0) + counts.get("NO_ONLY", 0),
+                "mean_total_shadow_pnl": sum(values) / len(values) if values else None,
+            }
+
         paired_total = states.get("BOTH_FULL", 0)
         paired_lower = wilson_lower(paired_total, n)
         research_mature = (
@@ -518,6 +597,7 @@ class Shadow:
             "cancels": dict(self.cancels),
             "by_context": by_context,
             "by_ttl": by_ttl,
+            "by_queue_arm": by_queue_arm,
             "uses_product_of_marginals": False,
             "joint_probability_semantics": "DIRECT_EMPIRICAL_CYCLE_STATES_NOT_PRODUCT_OF_MARGINALS",
             "confidence_semantics": "WILSON_ONE_SIDED_90_LOWER_ON_DIRECT_PAIRED_FULL",
@@ -568,6 +648,7 @@ def main() -> int:
     ap.add_argument("--maximum-quote-shares", type=float, default=5.0)
     ap.add_argument("--depth-fraction", type=float, default=0.25)
     ap.add_argument("--queue-ahead-multiplier", type=float, default=1.25)
+    ap.add_argument("--queue-ahead-arms", default="1.0,1.25,1.5,2.0")
     ap.add_argument("--reserve-per-share", type=float, default=0.0005)
     ap.add_argument("--minimum-locked-edge-per-share", type=float, default=0.0005)
     ap.add_argument("--maximum-leg-skew-ms", type=int, default=100)
@@ -581,11 +662,16 @@ def main() -> int:
     ap.add_argument("--maturity-min-contexts", type=int, default=2)
     args = ap.parse_args()
     args.ttl_arms_ms = sorted({int(x) for x in args.ttl_arms_ms.split(",") if int(x) > 0})
+    args.queue_ahead_arms = sorted({float(x) for x in args.queue_ahead_arms.split(",") if float(x) >= 0})
+    if args.queue_ahead_multiplier not in args.queue_ahead_arms:
+        args.queue_ahead_arms.append(args.queue_ahead_multiplier)
+        args.queue_ahead_arms.sort()
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         raise SystemExit("invalid model sha")
     if not args.ttl_arms_ms or not (0 < args.minimum_quote_shares <= args.maximum_quote_shares):
         raise SystemExit("invalid size")
-    if not (0 < args.depth_fraction <= 1 and args.queue_ahead_multiplier >= 0):
+    if not (0 < args.depth_fraction <= 1 and args.queue_ahead_multiplier >= 0
+            and args.queue_ahead_arms and all(0 <= x <= 10 for x in args.queue_ahead_arms)):
         raise SystemExit("invalid fill model")
     if not (0 <= args.reserve_per_share < 1
             and 0 <= args.minimum_locked_edge_per_share < 1
