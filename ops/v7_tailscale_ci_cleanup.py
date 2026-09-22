@@ -272,7 +272,9 @@ def main() -> int:
         p.error("credential_payload_fields")
     if value["schema"] != "polymarket_v7_tailnet_login_handoff_v1" or value["purpose"] != "TAILNET_CI_QUOTA_RECOVERY":
         p.error("credential_payload_schema")
-    if tuple(value["allowed_prefixes"]) != PREFIXES:
+    allowed_prefixes=tuple(str(x) for x in value["allowed_prefixes"])
+    safe_prefixes=set(PREFIXES)
+    if not allowed_prefixes or any(x not in safe_prefixes for x in allowed_prefixes):
         p.error("prefix_contract")
     maximum = int(value["maximum_deletions"])
     if not 1 <= maximum <= 24:
@@ -305,6 +307,8 @@ def main() -> int:
         login(page, value["email"], value["password"])
         candidates = candidate_names(page)
         for name in candidates:
+            if not any(name.startswith(prefix) for prefix in allowed_prefixes):
+                continue
             match = NAME_RE.fullmatch(name)
             legacy = bool(LEGACY_RUNNER_RE.fullmatch(name))
             if not match and not legacy:
@@ -335,7 +339,7 @@ def main() -> int:
         "protected_count":sum(1 for n in candidates if NAME_RE.fullmatch(n) and int(NAME_RE.fullmatch(n).group(2)) in protected),
         "removed_count":len(removed),
         "removed_names":removed,
-        "allowed_prefixes":list(PREFIXES),
+        "allowed_prefixes":list(allowed_prefixes),
     }, sort_keys=True))
     return 0
 
