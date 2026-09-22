@@ -96,6 +96,7 @@ def exchange_owner(tmp:Path,points):
         reserve_per_share=.0005,unwind_delay_ms=2,
     )
     owner.book=FakeBook(points)
+    owner.semantics=json.loads((ROOT/"config/v7_exchange_semantics.json").read_text())
     return owner,row
 
 
@@ -156,6 +157,25 @@ def test_current_v2_semantics_reject_legacy_share_fee_mode():
     assert value["fee_semantics"]["settlement_asset"]=="USDC_VALUE"
     assert value["fee_semantics"]["legacy_buy_fee_in_shares_is_not_production_v2"] is True
     assert value["fee_semantics"]["maker_fee_rate"]==0.0
+
+
+def test_buy_fee_collection_models_are_both_explicit_and_distinct():
+    rate=0.07
+    exp=1.0
+    usdc=execution.buy_pair_edge_per_net_share(0.50,0.50,rate,exp,"USDC_VALUE")
+    shares=execution.buy_pair_edge_per_net_share(0.50,0.50,rate,exp,"SHARES_ON_BUY")
+    assert math.isfinite(usdc) and math.isfinite(shares)
+    assert shares < usdc
+    assert execution.gross_buy_quantity_for_net(
+        10,0.50,rate,exp,"USDC_VALUE")==10
+    gross=execution.gross_buy_quantity_for_net(
+        10,0.50,rate,exp,"SHARES_ON_BUY")
+    assert gross>10
+    value=json.loads((ROOT/"config/v7_exchange_semantics.json").read_text())
+    assert execution.validate_semantics(value)
+    assert set(value["fee_semantics"]["supported_buy_collection_modes"])=={
+        "USDC_VALUE","SHARES_ON_BUY"}
+    assert value["safety"]["unverified_buy_collection_mode_policy"]=="NON_EXECUTABLE_TAKER"
 
 
 def test_maker_entry_edge_is_fee_free_and_rebate_is_ancillary():
