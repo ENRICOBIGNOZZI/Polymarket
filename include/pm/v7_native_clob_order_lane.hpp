@@ -44,6 +44,24 @@ struct NativeClobLaneConfig {
     int timeout_ms = 2'000;
 };
 
+struct NativeClobLatencyTrace {
+    std::int64_t submit_start_monotonic_ns = 0;
+    std::int64_t rate_limit_complete_monotonic_ns = 0;
+    std::int64_t sign_start_monotonic_ns = 0;
+    std::int64_t sign_complete_monotonic_ns = 0;
+    std::int64_t frame_complete_monotonic_ns = 0;
+    std::int64_t wire_start_monotonic_ns = 0;
+
+    [[nodiscard]] std::int64_t prewire_ns() const noexcept {
+        return frame_complete_monotonic_ns >= submit_start_monotonic_ns
+            ? frame_complete_monotonic_ns - submit_start_monotonic_ns : 0;
+    }
+    [[nodiscard]] std::int64_t signing_ns() const noexcept {
+        return sign_complete_monotonic_ns >= sign_start_monotonic_ns
+            ? sign_complete_monotonic_ns - sign_start_monotonic_ns : 0;
+    }
+};
+
 struct NativeClobSubmitResult {
     NativeClobSubmitReason reason = NativeClobSubmitReason::InvalidConfiguration;
     OrderState final_state = OrderState::Unknown;
@@ -58,6 +76,7 @@ struct NativeClobSubmitResult {
     std::int64_t response_complete_monotonic_ns = 0;
     std::uint8_t accepted = 0;
     std::uint8_t identity_bound = 0;
+    NativeClobLatencyTrace latency{};
 };
 
 // Single-owner native Exchange V2 order lane. Construction/connect are cold path.
