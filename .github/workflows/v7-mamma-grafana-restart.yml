@@ -25,7 +25,7 @@ jobs:
           python3 - deploy/v7-mamma-grafana-restart-request.json <<'PY'
           import json,sys
           v=json.load(open(sys.argv[1]))
-          assert v=={"schema":"polymarket_v7_mamma_grafana_restart_v1","monitoring_only":True}
+          assert v=={"schema":"polymarket_v7_mamma_grafana_restart_v7","monitoring_only":True}
           PY
       - name: Select Tailscale credential
         id: ts
