@@ -20,7 +20,19 @@ import urllib.request
 from typing import Any
 
 try:
+    try:
     from v7_pure_arb_economics import taker_tier
+except ModuleNotFoundError:
+    # Some regression tests import this file directly through importlib without
+    # adding scripts/ to sys.path. Load the exact sibling module, not a copy.
+    import importlib.util
+    _econ_path = Path(__file__).with_name("v7_pure_arb_economics.py")
+    _econ_spec = importlib.util.spec_from_file_location("v7_pure_arb_economics", _econ_path)
+    if _econ_spec is None or _econ_spec.loader is None:
+        raise
+    _econ = importlib.util.module_from_spec(_econ_spec)
+    _econ_spec.loader.exec_module(_econ)
+    taker_tier = _econ.taker_tier
 except ModuleNotFoundError:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent))
