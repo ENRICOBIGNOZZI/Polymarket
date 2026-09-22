@@ -1,0 +1,5 @@
+{
+  "schema": "polymarket_v7_ts_quota_recovery_request_v1",
+  "scope": "CI_ZOMBIES_ONLY",
+  "request_nonce": "tailscale-quota-recovery-20260922-v1"
+}
