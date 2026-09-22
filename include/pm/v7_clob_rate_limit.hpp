@@ -1,102 +1,156 @@
 #pragma once
+
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <string_view>
 
 namespace pm::v7::clob {
-struct RateWindowConfig {
-    std::uint32_t capacity = 0;
-    std::int64_t window_ns = 0;
-};
-struct LaneRateConfig {
-    RateWindowConfig burst{};
-    RateWindowConfig sustained{};
-};
+
 enum class RateLane : std::uint8_t { Order = 0, Cancel = 1 };
-
-class FixedTokenBucket final {
-public:
-    FixedTokenBucket() noexcept = default;
-    explicit FixedTokenBucket(RateWindowConfig config) noexcept { reset(config, 0); }
-    void reset(RateWindowConfig config, std::int64_t now_ns) noexcept {
-        config_ = config;
-        tokens_q32_ = static_cast<std::uint64_t>(config.capacity) << 32U;
-        last_ns_ = now_ns;
-    }
-    [[nodiscard]] bool try_acquire(std::int64_t now_ns, std::uint32_t units = 1) noexcept {
-        if (!valid() || units == 0 || units > config_.capacity || now_ns < last_ns_) return false;
-        refill(now_ns);
-        const std::uint64_t cost = static_cast<std::uint64_t>(units) << 32U;
-        if (tokens_q32_ < cost) return false;
-        tokens_q32_ -= cost;
-        return true;
-    }
-    [[nodiscard]] bool valid() const noexcept {
-        return config_.capacity > 0 && config_.window_ns > 0;
-    }
-private:
-    void refill(std::int64_t now_ns) noexcept {
-        if (now_ns <= last_ns_) return;
-        const auto elapsed = static_cast<std::uint64_t>(now_ns - last_ns_);
-        const auto cap_q32 = static_cast<std::uint64_t>(config_.capacity) << 32U;
-#if defined(__SIZEOF_INT128__)
-        const unsigned __int128 gained = static_cast<unsigned __int128>(elapsed)
-            * static_cast<unsigned __int128>(cap_q32)
-            / static_cast<unsigned __int128>(config_.window_ns);
-        tokens_q32_ = static_cast<std::uint64_t>(std::min<unsigned __int128>(
-            static_cast<unsigned __int128>(cap_q32),
-            static_cast<unsigned __int128>(tokens_q32_) + gained));
-#else
-        const long double gained = static_cast<long double>(elapsed)
-            * static_cast<long double>(cap_q32) / static_cast<long double>(config_.window_ns);
-        tokens_q32_ = std::min(cap_q32, tokens_q32_ + static_cast<std::uint64_t>(gained));
-#endif
-        last_ns_ = now_ns;
-    }
-    RateWindowConfig config_{};
-    std::uint64_t tokens_q32_ = 0;
-    std::int64_t last_ns_ = 0;
+enum class RateTier : std::uint8_t {
+    Unknown = 0, Standard = 1, Copper = 2, Bronze = 3, Silver = 4,
+    Gold = 5, Platinum = 6, Diamond = 7, Elite = 8,
 };
 
-class LaneLimiter final {
-public:
-    LaneLimiter() noexcept = default;
-    explicit LaneLimiter(LaneRateConfig config) noexcept
-        : burst_(config.burst), sustained_(config.sustained) {}
-    void reset(LaneRateConfig config, std::int64_t now_ns) noexcept {
-        burst_.reset(config.burst, now_ns);
-        sustained_.reset(config.sustained, now_ns);
-    }
-    [[nodiscard]] bool try_acquire(std::int64_t now_ns, std::uint32_t units = 1) noexcept {
-        auto burst = burst_;
-        auto sustained = sustained_;
-        if (!burst.try_acquire(now_ns, units) || !sustained.try_acquire(now_ns, units)) return false;
-        burst_ = burst;
-        sustained_ = sustained;
-        return true;
-    }
-private:
-    FixedTokenBucket burst_{};
-    FixedTokenBucket sustained_{};
+struct TierLimits {
+    double order_rate_per_second = 40.0;
+    double order_burst = 60.0;
+    double cancel_rate_per_second = 80.0;
+    double cancel_burst = 120.0;
+    bool negative_cancel_balance = true;
 };
 
-// Orders and cancels never consume the same bucket. Exhausting order capacity
-// therefore cannot delay a risk-reducing cancellation locally.
+[[nodiscard]] constexpr TierLimits tier_limits(RateTier tier) noexcept {
+    switch (tier) {
+        case RateTier::Copper: return {60,90,120,180,true};
+        case RateTier::Bronze: return {80,120,160,240,true};
+        case RateTier::Silver: return {200,300,400,600,true};
+        case RateTier::Gold: return {400,600,800,1200,true};
+        case RateTier::Platinum: return {450,675,900,1350,false};
+        case RateTier::Diamond: return {525,787,1050,1575,false};
+        case RateTier::Elite: return {600,900,1200,1800,false};
+        case RateTier::Standard:
+        case RateTier::Unknown:
+        default: return {};
+    }
+}
+
+[[nodiscard]] inline RateTier parse_rate_tier(std::string_view value) noexcept {
+    auto eq=[](std::string_view a,std::string_view b) noexcept {
+        if(a.size()!=b.size()) return false;
+        for(std::size_t i=0;i<a.size();++i){
+            char x=a[i],y=b[i];
+            if(x>='a'&&x<='z') x=static_cast<char>(x-'a'+'A');
+            if(y>='a'&&y<='z') y=static_cast<char>(y-'a'+'A');
+            if(x!=y) return false;
+        }
+        return true;
+    };
+    if(eq(value,"STANDARD")) return RateTier::Standard;
+    if(eq(value,"COPPER")) return RateTier::Copper;
+    if(eq(value,"BRONZE")) return RateTier::Bronze;
+    if(eq(value,"SILVER")) return RateTier::Silver;
+    if(eq(value,"GOLD")) return RateTier::Gold;
+    if(eq(value,"PLATINUM")) return RateTier::Platinum;
+    if(eq(value,"DIAMOND")) return RateTier::Diamond;
+    if(eq(value,"ELITE")) return RateTier::Elite;
+    return RateTier::Unknown;
+}
+
+struct RateLimiterSnapshot {
+    RateTier tier = RateTier::Standard;
+    double order_tokens = 60.0;
+    double cancel_tokens = 120.0;
+    std::int64_t blocked_until_monotonic_ns = 0;
+    std::int64_t venue_reset_unix_seconds = 0;
+    std::uint64_t order_tokens_consumed = 0;
+    std::uint64_t cancel_tokens_consumed = 0;
+    std::uint64_t local_rejections = 0;
+    std::uint64_t venue_429s = 0;
+    std::uint64_t warning_headers = 0;
+};
+
 class ClobRateLimiter final {
 public:
-    ClobRateLimiter(LaneRateConfig order, LaneRateConfig cancel) noexcept
-        : order_(order), cancel_(cancel) {}
-    void reset(LaneRateConfig order, LaneRateConfig cancel, std::int64_t now_ns) noexcept {
-        order_.reset(order, now_ns);
-        cancel_.reset(cancel, now_ns);
+    ClobRateLimiter() noexcept = default;
+
+    [[nodiscard]] bool try_acquire(
+        RateLane lane, std::int64_t now_ns, std::uint32_t units = 1) noexcept {
+        if (units == 0 || now_ns <= 0) return false;
+        refill(now_ns);
+        if (now_ns < state_.blocked_until_monotonic_ns) {
+            ++state_.local_rejections;
+            return false;
+        }
+        const auto cfg=tier_limits(state_.tier);
+        double& tokens=lane==RateLane::Cancel?state_.cancel_tokens:state_.order_tokens;
+        const double burst=lane==RateLane::Cancel?cfg.cancel_burst:cfg.order_burst;
+        if (static_cast<double>(units)>burst+1e-12
+            || static_cast<double>(units)>tokens+1e-12) {
+            ++state_.local_rejections;
+            return false;
+        }
+        tokens-=static_cast<double>(units);
+        if(lane==RateLane::Cancel) state_.cancel_tokens_consumed+=units;
+        else state_.order_tokens_consumed+=units;
+        return true;
     }
-    [[nodiscard]] bool try_acquire(RateLane lane, std::int64_t now_ns,
-                                   std::uint32_t units = 1) noexcept {
-        return lane == RateLane::Cancel
-            ? cancel_.try_acquire(now_ns, units)
-            : order_.try_acquire(now_ns, units);
+
+    void observe(
+        RateLane lane, double remaining, RateTier tier,
+        std::int64_t reset_unix_seconds, bool warning,
+        int retry_after_seconds, int http_status,
+        std::int64_t now_ns) noexcept {
+        refill(now_ns);
+        if(tier!=RateTier::Unknown && tier!=state_.tier){
+            state_.tier=tier;
+            const auto cfg=tier_limits(tier);
+            state_.order_tokens=std::min(state_.order_tokens,cfg.order_burst);
+            state_.cancel_tokens=std::min(state_.cancel_tokens,cfg.cancel_burst);
+        }
+        if(std::isfinite(remaining)){
+            const auto cfg=tier_limits(state_.tier);
+            const double cap=lane==RateLane::Cancel?cfg.cancel_burst:cfg.order_burst;
+            double& tokens=lane==RateLane::Cancel?state_.cancel_tokens:state_.order_tokens;
+            // Order balances are non-negative. Cancel balances may be negative
+            // at the venue, but a local negative balance simply means no cancel
+            // token is presently available.
+            tokens=std::clamp(remaining,0.0,cap);
+        }
+        if(reset_unix_seconds>0) state_.venue_reset_unix_seconds=reset_unix_seconds;
+        if(warning) ++state_.warning_headers;
+        if(http_status==429){
+            ++state_.venue_429s;
+            if(retry_after_seconds>0 && now_ns>0){
+                state_.blocked_until_monotonic_ns=std::max(
+                    state_.blocked_until_monotonic_ns,
+                    now_ns+static_cast<std::int64_t>(retry_after_seconds)*1'000'000'000LL);
+            }
+        }
     }
+
+    [[nodiscard]] RateLimiterSnapshot snapshot(std::int64_t now_ns) noexcept {
+        refill(now_ns);
+        return state_;
+    }
+
 private:
-    LaneLimiter order_{};
-    LaneLimiter cancel_{};
+    void refill(std::int64_t now_ns) noexcept {
+        if(now_ns<=0) return;
+        if(last_refill_ns_<=0){last_refill_ns_=now_ns;return;}
+        if(now_ns<=last_refill_ns_) return;
+        const double dt=static_cast<double>(now_ns-last_refill_ns_)/1e9;
+        const auto cfg=tier_limits(state_.tier);
+        state_.order_tokens=std::min(
+            cfg.order_burst,state_.order_tokens+dt*cfg.order_rate_per_second);
+        state_.cancel_tokens=std::min(
+            cfg.cancel_burst,state_.cancel_tokens+dt*cfg.cancel_rate_per_second);
+        last_refill_ns_=now_ns;
+    }
+
+    RateLimiterSnapshot state_{};
+    std::int64_t last_refill_ns_=0;
 };
+
 } // namespace pm::v7::clob
