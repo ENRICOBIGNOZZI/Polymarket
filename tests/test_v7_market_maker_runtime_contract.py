@@ -67,7 +67,7 @@ class ProfessionalMakerRuntimeContractTests(unittest.TestCase):
         self.assertIn("v7_runtime_artifacts.py", source)
         self.assertNotIn('--output-model "$MAKER_RESEARCH_MODEL"', source)
         self.assertEqual(rows["crypto_settlement_engine"]["runtime_class"], "HOT_PATH")
-        self.assertEqual(rows["pm_book_observer"]["runtime_class"], "COLLECTOR")
+        self.assertEqual(rows["pm_book_observer"]["runtime_class"], "LATENCY_OBSERVER")
         self.assertEqual(rows["native_engine_manager"]["runtime_class"], "CONTROL")
         self.assertEqual(rows["ledger_router"]["runtime_class"], "CONTROL")
 
