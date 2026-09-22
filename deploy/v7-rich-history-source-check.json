@@ -1,0 +1,7 @@
+{
+  "schema": "polymarket_v7_rich_history_source_check_v1",
+  "version": 1,
+  "branch": "rich-history-alpha-20260922",
+  "sha": "0ceb004f575e038b34b04b682a341f5173a7018d",
+  "research_only": true
+}
