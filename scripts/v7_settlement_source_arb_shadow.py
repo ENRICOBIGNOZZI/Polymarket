@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import json
+import hashlib
 import math
 import time
 from pathlib import Path
@@ -24,6 +25,20 @@ from v7_causal_book import BookTimeline
 
 SCHEMA = "polymarket_v7_settlement_source_arb_cycle_v2"
 STATUS_SCHEMA = "polymarket_v7_settlement_source_arb_status_v2"
+
+
+def semantic_fingerprint(row: dict[str, Any]) -> str:
+    payload={
+        "market_id":str(row.get("market_id") or ""),
+        "event_id":str(row.get("event_id") or ""),
+        "yes_token":str(row.get("yes_token") or ""),
+        "no_token":str(row.get("no_token") or ""),
+        "start_timestamp_ms":int(row.get("start_timestamp_ms") or 0),
+        "end_timestamp_ms":int(row.get("end_timestamp_ms") or 0),
+        "normalized_rules_hash":str(row.get("normalized_rules_hash") or ""),
+        "rule_snapshot_sha256":str(row.get("rule_snapshot_sha256") or ""),
+    }
+    return hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).hexdigest()
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -140,6 +155,7 @@ class Shadow:
                 "cycle_key": cycle_key,
                 "market_id": market_id,
                 "market": market,
+                "semantic_fingerprint": semantic_fingerprint(market),
                 "outcome": outcome,
                 "winner": winner,
                 "winner_token": winner_token,
@@ -164,6 +180,8 @@ class Shadow:
             "asset": str(market.get("asset") or ""),
             "horizon": str(market.get("horizon") or ""),
             "market_id": item["market_id"],
+            "market_end_ms": int(market.get("end_timestamp_ms") or 0),
+            "semantic_fingerprint": item.get("semantic_fingerprint"),
             "winning_outcome": item["winner"],
             "outcome_determined_wall_ms": item["determined_ms"],
             "paper_arrival_wall_ms": item["arrival_ms"],
@@ -186,6 +204,20 @@ class Shadow:
             if self.book.watermark_ms < arrival_ms:
                 continue
             market = item["market"]
+            current = self.market_cache.get(item["market_id"])
+            if current is None or semantic_fingerprint(current) != item.get("semantic_fingerprint"):
+                rows=[]
+                for kind in ("BUY_WINNER","SELL_LOSER"):
+                    row=self._base_row(item,kind)
+                    row["state"]="SEMANTIC_RESET"
+                    rows.append(row)
+                with self.args.output.open("a",encoding="utf-8") as handle:
+                    for row in rows:
+                        handle.write(json.dumps(row,sort_keys=True)+"\n")
+                        self.rows.append(row)
+                self.seen.add(cycle_key)
+                self.pending.pop(cycle_key,None)
+                continue
             params = fee_params(market)
             rows: list[dict[str, Any]] = []
             winner_cut = self.book.asof(item["market_id"], item["winner_token"], arrival_ms)
