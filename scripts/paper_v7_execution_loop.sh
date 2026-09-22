@@ -581,10 +581,12 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_exchange_execution_shadow.py
   --market-terms-root "$RUN_ROOT/control/market_execution_terms" \
   --venue-mode "$PURE_ARB_DIR/venue_mode_status.json" \
   --exchange-semantics "$ROOT/config/v7_exchange_semantics.json" \
+  --fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json" \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/exchange_execution_cycles.jsonl" \
   --status "$PURE_ARB_DIR/exchange_execution_status.json" \
   --transport-delay-ms 1,2,5,10 --inter-leg-skew-ms 0,1,2,5,10 \
+  --transport-modes SEQUENTIAL,PARALLEL,BATCH \
   --unwind-delay-ms 2 --maximum-book-age-ms 100 --maximum-leg-skew-ms 100 \
   --reserve-per-share 0.0005 --minimum-shares 1 --maximum-shares 1000 --interval-ms 5 \
   >> "$PURE_ARB_DIR/exchange_execution.log" 2>&1 &
@@ -594,6 +596,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_fee_reward_registry.py \
   --universe "$RUN_ROOT/universe/current.json" \
   --rewards "$RUN_ROOT/control/verified_maker_rewards.json" \
   --exchange-semantics "$ROOT/config/v7_exchange_semantics.json" \
+  --taker-tier-snapshot "$RUN_ROOT/control/verified_taker_tier.json" \
   --output "$PURE_ARB_DIR/fee_reward_registry.json" \
   --model-sha "$SHA" --interval 5 \
   >> "$PURE_ARB_DIR/fee_reward_registry.log" 2>&1 &
