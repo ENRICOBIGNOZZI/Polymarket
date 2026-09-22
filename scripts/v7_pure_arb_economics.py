@@ -12,7 +12,9 @@ Taker rebates are ancillary only. They never rescue a negative entry edge.
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
+import json
 import math
+from pathlib import Path
 import random
 import statistics
 from typing import Any, Iterable
@@ -38,6 +40,39 @@ def finite(value: Any, default: float = math.nan) -> float:
     except (TypeError, ValueError, OverflowError):
         return default
     return result if math.isfinite(result) else default
+
+
+def tail_jsonl(
+    path: Path | None, *, max_rows: int = 50_000,
+    max_bytes: int = 64 * 1024 * 1024,
+) -> list[dict[str, Any]]:
+    """Read only the bounded tail of an append-only JSONL evidence file."""
+    if path is None or max_rows <= 0 or max_bytes <= 0:
+        return []
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            end = handle.tell()
+            if end <= 0:
+                return []
+            start = max(0, end - int(max_bytes))
+            handle.seek(start)
+            raw = handle.read(end - start)
+    except OSError:
+        return []
+    lines = raw.splitlines()
+    # If the byte cap starts inside a record, discard that partial record.
+    if start > 0 and lines:
+        lines = lines[1:]
+    out: list[dict[str, Any]] = []
+    for raw_line in lines[-int(max_rows):]:
+        try:
+            value = json.loads(raw_line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if isinstance(value, dict):
+            out.append(value)
+    return out
 
 
 def raw_fee_per_share(price: float, rate: float, exponent: float = 1.0) -> float:
