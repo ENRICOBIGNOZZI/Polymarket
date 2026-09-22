@@ -41,6 +41,7 @@ constexpr std::size_t kWsOutputCapacity = 512;
 constexpr std::size_t kEvidenceCapacity = 16384;
 constexpr double kPriceScaleE4 = 10'000.0;
 constexpr double kMicrounitsPerShare = 1'000'000.0;
+// Bounded rolling window: diagnostics only; never grows the hot-path heap.
 constexpr std::size_t kPureArbLatencySamples = 4096;
 
 std::atomic<bool> g_stop{false};
