@@ -223,6 +223,7 @@ struct PairInput {
     std::int64_t market_end_wall_ms = 0;
     std::int64_t now_wall_ms = 0;
     std::int64_t trigger_receive_monotonic_ns = 0;
+    std::int64_t decode_complete_monotonic_ns = 0;
     std::int64_t decision_monotonic_ns = 0;
     std::int64_t maximum_leg_skew_ns = 100'000'000LL;
     std::int64_t minimum_order_microunits = 0;
@@ -265,6 +266,7 @@ struct PureArbExecutionPlan {
     std::uint64_t market_handle = 0;
     std::uint64_t event_handle = 0;
     std::int64_t trigger_receive_monotonic_ns = 0;
+    std::int64_t decode_complete_monotonic_ns = 0;
     std::int64_t decision_monotonic_ns = 0;
     std::uint8_t accepted = 0;
 };
@@ -284,6 +286,7 @@ struct PureArbExecutionPlan {
     out.market_handle = input.market_handle;
     out.event_handle = input.event_handle;
     out.trigger_receive_monotonic_ns = input.trigger_receive_monotonic_ns;
+    out.decode_complete_monotonic_ns = input.decode_complete_monotonic_ns;
     out.decision_monotonic_ns = input.decision_monotonic_ns;
 
     if (input.market_handle == 0 || input.yes_instrument_handle == 0
@@ -291,6 +294,8 @@ struct PureArbExecutionPlan {
         || input.minimum_order_microunits <= 0
         || input.maximum_leg_skew_ns <= 0
         || input.trigger_receive_monotonic_ns <= 0
+        || (input.decode_complete_monotonic_ns != 0
+            && input.decode_complete_monotonic_ns < input.trigger_receive_monotonic_ns)
         || (input.decision_monotonic_ns != 0
             && input.decision_monotonic_ns < input.trigger_receive_monotonic_ns)
         || !std::isfinite(input.reserve_per_share)
@@ -447,6 +452,7 @@ struct PureArbExecutionPlan {
     intent.state_version = leg.market_state_version;
     intent.causal_trigger_receive_monotonic_ns =
         pair.trigger_receive_monotonic_ns;
+    intent.decode_complete_monotonic_ns = pair.decode_complete_monotonic_ns;
     intent.signal_ready_monotonic_ns = pair.decision_monotonic_ns;
     intent.decision_monotonic_ns = pair.decision_monotonic_ns;
     intent.exchange_event_ns = leg.exchange_event_ns;
