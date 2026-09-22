@@ -175,6 +175,7 @@ def test_exchange_semantics_contains_batch_merge_rebate_heartbeat_and_restrictio
     assert value["matching_engine_restrictions"]["restricted_http_status"]==503
     assert value["order_heartbeat"]["send_interval_seconds"]==5
     assert value["order_heartbeat"]["maker_promotion_requires_native_heartbeat"] is True
+    assert "CLOSED_ONLY" in value["account_execution_modes"]
 
 
 def test_causal_observer_persists_l10_ladders_and_runtime_wires_all_modes():
@@ -185,6 +186,8 @@ def test_causal_observer_persists_l10_ladders_and_runtime_wires_all_modes():
     assert "--transport-modes SEQUENTIAL,PARALLEL,BATCH" in runtime
     assert '--merge-evidence "$RUN_ROOT/control/verified_complete_set_merge_evidence.json"' in runtime
     assert '--taker-tier-snapshot "$RUN_ROOT/control/verified_taker_tier.json"' in runtime
+    assert '--account-source "$RUN_ROOT/control/account_execution_mode.json"' in runtime
+    assert "--paper-account-counterfactual OPEN" in runtime
 
 
 def test_native_lane_classifies_restricted_http_responses_without_blind_retry():
