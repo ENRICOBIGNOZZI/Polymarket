@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_exchange_semantics_v1",
-  "version": 2,
+  "version": 3,
   "as_of": "2026-09-22",
   "production_clob_version": "V2",
   "production_clob_url": "https://clob.polymarket.com",
@@ -151,5 +151,21 @@
     "OPEN",
     "CLOSED_ONLY",
     "UNKNOWN"
-  ]
+  ],
+  "order_constraints": {
+    "minimum_order_size_source": "CLOB_BOOK_min_order_size",
+    "minimum_order_size_policy": "MAX_ACROSS_COMPLETE_SET_LEGS_FAIL_CLOSED",
+    "share_precision_decimals": 2,
+    "share_rounding": "FLOOR",
+    "amount_precision_by_tick": {
+      "0.1": 3,
+      "0.01": 4,
+      "0.005": 5,
+      "0.0025": 6,
+      "0.001": 5,
+      "0.0001": 6
+    },
+    "tick_size_source": "CLOB_BOOK_PLUS_tick_size_change_WS",
+    "unknown_minimum_order_size_policy": "NON_EXECUTABLE"
+  }
 }
