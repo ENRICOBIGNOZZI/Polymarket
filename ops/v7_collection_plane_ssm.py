@@ -267,7 +267,7 @@ print('V7_COLLECTION_READY='+json.dumps({{
  'collector_sha':sys.argv[1],
  'collection_root':sys.argv[2],
  'growth_bytes_10s':int(sys.argv[3]),
- 'paper_service_pid_unchanged':True,
+ "paper_service_pid_unchanged":True,
  'paper_service_pid':int(sys.argv[4] or 0),
  'model_independent':True,
  'paper_only':True,
