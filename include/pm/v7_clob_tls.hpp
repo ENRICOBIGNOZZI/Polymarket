@@ -43,6 +43,8 @@ struct TlsWriteResult {
 struct TlsReadResult {
     std::size_t bytes = 0;
     std::int64_t completed_monotonic_ns = 0;
+    int incoming_cpu = -1;
+    int incoming_napi_id = -1;
     TlsTransportError error = TlsTransportError::None;
     std::uint8_t ok = 0;
     std::uint8_t peer_closed = 0;
@@ -52,7 +54,8 @@ class PersistentTlsSession final {
 public:
     explicit PersistentTlsSession(std::string_view host,
                                   std::uint16_t port = 443,
-                                  int timeout_ms = 2'000) noexcept;
+                                  int timeout_ms = 2'000,
+                                  int socket_busy_poll_us = 0) noexcept;
     ~PersistentTlsSession();
 
     PersistentTlsSession(const PersistentTlsSession&) = delete;
@@ -74,6 +77,7 @@ private:
     std::size_t host_size_ = 0;
     std::uint16_t port_ = 443;
     int timeout_ms_ = 2'000;
+    int socket_busy_poll_us_ = 0;
     int fd_ = -1;
     ssl_ctx_st* ctx_ = nullptr;
     ssl_st* ssl_ = nullptr;
