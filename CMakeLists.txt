@@ -348,6 +348,11 @@ if(BUILD_TESTING)
   target_compile_options(pm_v7_clob_rate_limit_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_clob_rate_limit_tests COMMAND pm_v7_clob_rate_limit_tests)
 
+  add_executable(pm_v7_pure_arb_lane_tests tests/test_v7_pure_arb_lane.cpp)
+  target_link_libraries(pm_v7_pure_arb_lane_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_pure_arb_lane_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_pure_arb_lane_tests COMMAND pm_v7_pure_arb_lane_tests)
+
   add_test(NAME pm_v7_native_clob_full_prewire_bench_smoke
     COMMAND polymarket_v7_native_clob_full_prewire_bench 64)
 
