@@ -7,11 +7,16 @@ research attribution.  Unknown/truncated/unconfirmed plans remain fail-closed.
 """
 from __future__ import annotations
 import argparse,json,time
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 SCHEMA="polymarket_v7_combo_collateral_return_shadow_v1"
-ALLOWED={"split","merge","redeem","split_on_condition","merge_on_condition"}
+ALLOWED={
+    "split","merge","redeem","split_on_condition","merge_on_condition",
+    "split_on_event","merge_on_event","convert_on_event","extract","inject",
+    "convert_to_yes_basket","merge_from_yes_basket","compress",
+}
 
 def load(path:Path)->dict[str,Any]:
     try:v=json.loads(path.read_text(encoding="utf-8"))
@@ -36,16 +41,38 @@ def summarize(plan:dict[str,Any],sha:str)->dict[str,Any]:
         if not isinstance(op,dict):base["state"]="INVALID_PLAN";return base
         kind=str(op.get("kind") or op.get("type") or "").lower()
         if kind not in ALLOWED:base["state"]="UNKNOWN_OPERATION";return base
-        normalized.append({"kind":kind,"condition_id":str(op.get("condition_id") or ""),
-                           "amount":str(op.get("amount") or "")})
+        normalized.append({
+            "kind":kind,
+            "condition_id":str(op.get("conditionId") or op.get("condition_id") or ""),
+            "event_id":str(op.get("eventId") or op.get("event_id") or ""),
+            "position_id":str(op.get("positionId") or op.get("position_id") or ""),
+            "condition_index":op.get("conditionIndex",op.get("condition_index")),
+            "amount":str(op.get("amount") or ""),
+        })
     if plan.get("truncated") is True:
         base.update(state="TRUNCATED_REPLAN_REQUIRED",operations=normalized);return base
-    try:released=float(plan.get("released_pusd") or plan.get("collateral_returned") or 0.0)
-    except (TypeError,ValueError):released=0.0
+    raw_release=(
+        plan.get("netPusdOut") if plan.get("netPusdOut") is not None
+        else plan.get("released_pusd") if plan.get("released_pusd") is not None
+        else plan.get("collateral_returned") if plan.get("collateral_returned") is not None
+        else "0")
+    try:released=Decimal(str(raw_release))
+    except (InvalidOperation,ValueError):released=Decimal("-1")
     if released<0:base["state"]="INVALID_PLAN";return base
-    base.update(state="VERIFIED_PLAN_ONLY",released_pusd=released,operations=normalized,
-                operation_count=len(normalized),
-                execution_policy="NEVER_EXECUTE_FROM_SHADOW")
+    try:declared_count=int(plan.get("operationCount",len(normalized)))
+    except (TypeError,ValueError):declared_count=-1
+    if declared_count!=len(normalized):
+        base["state"]="OPERATION_COUNT_MISMATCH";return base
+    base.update(
+        state="VERIFIED_PLAN_ONLY",
+        plan_hash=str(plan.get("planHash") or plan.get("plan_hash") or ""),
+        chain_id=plan.get("chainId",plan.get("chain_id")),
+        released_pusd_decimal=format(released,"f"),
+        released_pusd=float(released),
+        operations=normalized,operation_count=len(normalized),
+        estimated_cost=plan.get("estimatedCost",plan.get("estimated_cost")),
+        required_pusd_input=str(plan.get("requiredPusdInput") or plan.get("required_pusd_input") or ""),
+        execution_policy="NEVER_EXECUTE_FROM_SHADOW")
     return base
 
 def main()->int:
