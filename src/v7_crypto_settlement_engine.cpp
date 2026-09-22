@@ -700,6 +700,13 @@ int main(int argc, char** argv) {
                 if (window.emitted_mask == ((1U << kRepricingHorizonsMs.size()) - 1U)) window.active = 0;
             }
         };
+        const auto strategy_for_policy = [](ExecutionPolicyId policy) noexcept {
+            if (policy == ExecutionPolicyId::PassiveMaker)
+                return StrategyId::ProfessionalMaker;
+            if (policy == ExecutionPolicyId::PureArbFok)
+                return StrategyId::HardArbitrage;
+            return StrategyId::CryptoInformedTaker;
+        };
         const auto publish_order = [&](const NativeOrderCommand& command,
                                        ExecutionPolicyId policy,
                                        std::int64_t exchange_event_ns,
@@ -714,8 +721,7 @@ int main(int argc, char** argv) {
                 evidence.probability_input_instrument = probability_input_instrument;
             }
             evidence.command = command;
-            evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
-                ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
+            evidence.strategy_id = strategy_for_policy(policy);
             evidence.policy = policy;
             evidence.causal_exchange_event_ns = exchange_event_ns;
             evidence.causal_receive_monotonic_ns = receive_monotonic_ns;
@@ -732,8 +738,7 @@ int main(int argc, char** argv) {
             evidence.paper_reason = reason;
             evidence.paper_censored = censored;
             evidence.command = command;
-            evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
-                ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
+            evidence.strategy_id = strategy_for_policy(policy);
             evidence.policy = policy;
             evidence.order_state = state;
             evidence.recorded_monotonic_ns = monotonic_now_ns();
@@ -745,12 +750,87 @@ int main(int argc, char** argv) {
             evidence.kind = NativeEvidenceKind::Fill;
             evidence.command = fill.command;
             evidence.fill = fill;
-            evidence.strategy_id = policy == ExecutionPolicyId::AggressiveTaker
-                ? StrategyId::CryptoInformedTaker : StrategyId::ProfessionalMaker;
+            evidence.strategy_id = strategy_for_policy(policy);
             evidence.policy = policy;
             evidence.order_state = fill.order_state;
             evidence.recorded_monotonic_ns = monotonic_now_ns();
             return evidence_writer.publish(evidence);
+        };
+
+        const auto native_pair_reason = [](NativePaperPairReason reason) noexcept {
+            switch (reason) {
+                case NativePaperPairReason::Accepted:
+                    return NativePaperReason::Accepted;
+                case NativePaperPairReason::PendingArrival:
+                    return NativePaperReason::PendingArrival;
+                case NativePaperPairReason::VenueTermsUnknown:
+                    return NativePaperReason::VenueTermsUnknown;
+                case NativePaperPairReason::ArrivalCensored:
+                    return NativePaperReason::ArrivalCensored;
+                case NativePaperPairReason::BookUnavailable:
+                    return NativePaperReason::BookUnavailable;
+                case NativePaperPairReason::NotMarketable:
+                    return NativePaperReason::NotMarketable;
+                case NativePaperPairReason::InsufficientDepth:
+                    return NativePaperReason::InsufficientDepth;
+                case NativePaperPairReason::CapacityFull:
+                    return NativePaperReason::CapacityFull;
+                case NativePaperPairReason::InvalidPair:
+                    return NativePaperReason::InvalidCommand;
+                case NativePaperPairReason::LifecycleFailure:
+                default:
+                    return NativePaperReason::LifecycleFailure;
+            }
+        };
+        const auto pair_fill_record = [](
+            const NativePaperPairLegFill& leg,
+            std::int64_t receive_ns) noexcept {
+            NativePaperFillRecord fill{};
+            fill.command = leg.command;
+            fill.strategy_id = StrategyId::HardArbitrage;
+            fill.client_order_id = leg.command.client_order_id;
+            fill.command_id = leg.command.command_id;
+            fill.instrument_handle = leg.command.instrument_handle;
+            fill.side = leg.command.side;
+            fill.tick_size_e4 = leg.command.tick_size_e4;
+            fill.price_tick =
+                leg.command.tick_size_e4 > 0
+                    ? leg.conservative_fill_price_e4
+                        / leg.command.tick_size_e4
+                    : 0;
+            fill.fill_microunits = leg.fill_microunits;
+            fill.receive_monotonic_ns = receive_ns;
+            fill.order_state = leg.final_state;
+            fill.taker = 1;
+            fill.arrival_book_receive_ns = receive_ns;
+            fill.causal_arrival_modelled = 1;
+            return fill;
+        };
+        const auto publish_pair_result = [&](const NativePaperPairResult& result) noexcept {
+            const auto reason = native_pair_reason(result.reason);
+            const bool censored = result.censored != 0;
+            bool ok = true;
+            if (result.yes.final_state == OrderState::Filled) {
+                const auto fill = pair_fill_record(
+                    result.yes, result.evaluated_arrival_ns);
+                ok = publish_fill(fill, ExecutionPolicyId::PureArbFok) && ok;
+            }
+            if (result.no.final_state == OrderState::Filled) {
+                const auto fill = pair_fill_record(
+                    result.no, result.evaluated_arrival_ns);
+                ok = publish_fill(fill, ExecutionPolicyId::PureArbFok) && ok;
+            }
+            if (result.yes.final_state != OrderState::Unknown) {
+                ok = publish_state(
+                    result.yes.command, ExecutionPolicyId::PureArbFok,
+                    result.yes.final_state, reason, censored) && ok;
+            }
+            if (result.no.final_state != OrderState::Unknown) {
+                ok = publish_state(
+                    result.no.command, ExecutionPolicyId::PureArbFok,
+                    result.no.final_state, reason, censored) && ok;
+            }
+            return ok;
         };
 
         // Risk-off has no dependency on slow context, fair inference or a new PM tick.
