@@ -470,7 +470,7 @@ int main(int argc, char** argv) {
         evidence_config.signal_policy_sha256 = options.signal_policy_sha256;
         evidence_config.observation_capture_mode = options.capture_native_observations
             ? "FULL" : options.capture_execution_windows ? "DECISION_WINDOWS"
-            : options.capture_native_decisions ? "DECISIONS" : "NONE";
+            : (options.capture_native_decisions || options.pure_arb_shadow) ? "DECISIONS" : "NONE";
         evidence_config.minimum_order_microunits = options.min_order_microunits;
         evidence_config.risk_policy_sha256 = options.risk_policy_sha256;
         evidence_config.asset = options.asset;
@@ -530,10 +530,14 @@ int main(int argc, char** argv) {
         std::vector<std::int64_t> accepted_signal_to_adapter;
         std::vector<std::int64_t> first_signal_to_decision;
         std::vector<std::int64_t> decision_compute;
+        std::vector<std::int64_t> pure_arb_shadow_compute;
+        std::vector<std::int64_t> pure_arb_shadow_receive_to_decision;
         accepted_signal_to_admission.reserve(4096);
         accepted_signal_to_adapter.reserve(4096);
         first_signal_to_decision.reserve(4096);
         decision_compute.reserve(4096);
+        pure_arb_shadow_compute.reserve(4096);
+        pure_arb_shadow_receive_to_decision.reserve(4096);
         std::array<std::uint64_t, 32> reasons{};
         std::uint64_t evaluations = 0, accepted = 0, latency_overflow = 0;
         std::uint64_t taker_accepted = 0, maker_accepted = 0;
@@ -548,6 +552,15 @@ int main(int argc, char** argv) {
         std::uint64_t paper_arrival_censored = 0, paper_arrival_observed_nonfills = 0;
         std::uint64_t arbitration_conflicts = 0, authority_rejections = 0;
         std::uint64_t inventory_rejections = 0, minimum_size_rejections = 0;
+        std::uint64_t pure_arb_shadow_evaluations = 0;
+        std::uint64_t pure_arb_shadow_buy_cycles = 0, pure_arb_shadow_sell_cycles = 0;
+        std::uint64_t pure_arb_shadow_invalid_pair = 0, pure_arb_shadow_stale = 0;
+        std::uint64_t pure_arb_shadow_below_minimum = 0, pure_arb_shadow_evidence_drops = 0;
+        std::uint64_t pure_arb_yes_epoch = 0, pure_arb_no_epoch = 0;
+        bool pure_arb_buy_active = false, pure_arb_sell_active = false;
+        std::int64_t pure_arb_prefunded_remaining_microunits =
+            static_cast<std::int64_t>(std::llround(
+                options.pure_arb_prefunded_complete_set_shares * 1'000'000.0));
         std::uint64_t last_measured_signal_version = 0, last_observed_signal_version = 0;
         std::uint64_t last_execution_window_signal_version = 0;
         std::uint64_t last_execution_window_instrument = 0;
