@@ -1,0 +1,177 @@
+name: V7 final tailnet and mamma recovery
+
+on:
+  push:
+    branches: [ops/v7-tailnet-final-recovery-20260922]
+    paths:
+      - deploy/v7-tailnet-login.envelope.json
+      - .github/workflows/v7-tailnet-final-recovery.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 50
+
+      - name: Decrypt one-shot Tailscale login
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          umask 077
+          key="$RUNNER_TEMP/deploy-key"
+          cred="$RUNNER_TEMP/tailnet-login.json"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          chmod 600 "$key"
+          python3 scripts/v7_ssh_envelope.py \
+            --private-key "$key" \
+            --input deploy/v7-tailnet-login.envelope.json \
+            --output "$cred"
+          rm -f "$key"
+          expected="$(python3 - "$cred" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          prefixes=[
+            'gh-deploy-','gh-health-','gh-freeze-','gh-inventory-',
+            'github-runnervm','github-actions'
+          ]
+          assert set(v)=={
+            'schema','purpose','expected_main_sha','email','password',
+            'allowed_prefixes','maximum_deletions'
+          }
+          assert v['schema']=='polymarket_v7_tailnet_login_handoff_v1'
+          assert v['purpose']=='TAILNET_CI_QUOTA_RECOVERY'
+          assert v['allowed_prefixes']==prefixes
+          assert 1 <= int(v['maximum_deletions']) <= 100
+          assert isinstance(v['email'],str) and '@' in v['email']
+          assert isinstance(v['password'],str) and v['password']
+          print(v['expected_main_sha'])
+          PY
+          )"
+          git merge-base --is-ancestor "$expected" HEAD
+
+      - name: Install browser automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check playwright
+          command -v google-chrome >/dev/null
+          command -v Xvfb >/dev/null
+
+      - name: Remove only stale offline CI nodes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1440x1000x24 >"$RUNNER_TEMP/xvfb.log" 2>&1 &
+          xvfb_pid=$!
+          profile="$RUNNER_TEMP/v7-tailnet-chrome"
+          mkdir -p "$profile"
+          google-chrome \
+            --remote-debugging-port=9222 \
+            --remote-debugging-address=127.0.0.1 \
+            --user-data-dir="$profile" \
+            --no-first-run \
+            --no-default-browser-check \
+            --disable-dev-shm-usage \
+            --no-sandbox \
+            about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
+          chrome_pid=$!
+          cleanup_browser(){ kill "$chrome_pid" "$xvfb_pid" >/dev/null 2>&1 || true; }
+          trap cleanup_browser EXIT
+          ready=0
+          for _ in $(seq 1 200); do
+            if curl -fsS http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          test "$ready" = 1
+          python3 -m py_compile ops/v7_tailscale_ci_cleanup_browser.py
+          python3 -u ops/v7_tailscale_ci_cleanup_browser.py \
+            --credentials "$RUNNER_TEMP/tailnet-login.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --github-token "$GH_TOKEN" \
+            --chrome "$(command -v google-chrome)" \
+            --cdp-url http://127.0.0.1:9222
+
+      - name: Join tailnet after cleanup
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-mamma-recover-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+
+      - name: Recover mamma Grafana and verify pure arb
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -P "$SERVER_PORT" \
+            ops/v7_mamma_grafana_recover.sh \
+            "$SERVER_USER@$SERVER_HOST:/tmp/v7_mamma_grafana_recover.sh"
+          ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          chmod 700 /tmp/v7_mamma_grafana_recover.sh
+          /tmp/v7_mamma_grafana_recover.sh
+          rm -f /tmp/v7_mamma_grafana_recover.sh
+
+          result="$(curl -fsS --get --data-urlencode 'query=polymarket_pure_arb_up' \
+            http://100.102.9.16:19091/api/v1/query)"
+          python3 - "$result" <<'PY'
+          import json,sys
+          v=json.loads(sys.argv[1])
+          rows=v.get('data',{}).get('result',[])
+          assert rows and any(float(row['value'][1])==1.0 for row in rows), v
+          print('PURE_ARB_UP_OK=1')
+          PY
+
+          search="$(curl -fsS 'http://127.0.0.1:3000/api/search?folderUIDs=afyms0c1xjabkf')"
+          python3 - "$search" <<'PY'
+          import json,sys
+          rows=json.loads(sys.argv[1])
+          assert any(x.get('uid')=='polymarket-v7-pure-arb' for x in rows), rows
+          print('MAMMA_FOLDER_PURE_ARB_OK=1')
+          PY
+          echo FINAL_MAMMA_GRAFANA_OK=1
+          REMOTE
+
+          curl -k -fsSI --max-time 8 \
+            https://mamma-portfolio.tail1bae85.ts.net/d/polymarket-v7-pure-arb/polymarket-v7-crypto-pure-arbitrage-paper \
+            | head -12
+
+      - name: Destroy plaintext login
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          shred -u "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key" 2>/dev/null || \
+            rm -f "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key"
