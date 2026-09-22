@@ -149,13 +149,22 @@ def main()->int:
     ap.add_argument("--universe",type=Path,required=True)
     ap.add_argument("--model-sha",required=True)
     ap.add_argument("--output",type=Path,required=True)
+    ap.add_argument("--interval-seconds",type=float,default=5.0)
     args=ap.parse_args()
-    if len(args.model_sha)!=40:raise SystemExit("invalid sha")
-    value=build(load(args.universe),args.model_sha)
+    if len(args.model_sha)!=40 or not (0.1<=args.interval_seconds<=60):
+        raise SystemExit("invalid arguments")
     args.output.parent.mkdir(parents=True,exist_ok=True)
-    tmp=args.output.with_suffix(args.output.suffix+".tmp")
-    tmp.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    tmp.replace(args.output)
-    return 0
+    while True:
+        try:value=build(load(args.universe),args.model_sha)
+        except Exception as exc:
+            value={"schema":SCHEMA,"version":1,"paper_only":True,
+                   "authenticated_execution":False,"real_order_submission":False,
+                   "automatic_promotion":False,"model_sha":args.model_sha,
+                   "generated_at_ms":time.time_ns()//1_000_000,
+                   "state":"UNIVERSE_OR_PROOF_ERROR","error":type(exc).__name__,"relations":[]}
+        tmp=args.output.with_suffix(args.output.suffix+".tmp")
+        tmp.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8")
+        tmp.replace(args.output)
+        time.sleep(args.interval_seconds)
 
 if __name__=="__main__":raise SystemExit(main())
