@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_pure_arb_capital_policy_v1",
-  "version": 2,
+  "version": 3,
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
@@ -40,5 +40,7 @@
     "EXPECTED_SHORTFALL_5PCT",
     "WORST",
     "MOVING_BLOCK_BOOTSTRAP_LOWER_95"
-  ]
+  ],
+  "maximum_observations_per_source": 50000,
+  "maximum_jsonl_scan_bytes": 67108864
 }
