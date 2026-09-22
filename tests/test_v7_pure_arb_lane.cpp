@@ -106,6 +106,17 @@ int main() {
         assert(plan.yes.market_state_version == 21);
         assert(plan.no.market_state_version == 22);
         assert(plan.yes.side == Side::Buy && plan.no.side == Side::Buy);
+        ExecutionPlan yes_execution{}, no_execution{};
+        assert(make_execution_plan(plan, true, 101, yes_execution));
+        assert(make_execution_plan(plan, false, 102, no_execution));
+        assert(yes_execution.policy == ExecutionPolicyId::PureArbFok);
+        assert(no_execution.policy == ExecutionPolicyId::PureArbFok);
+        assert(yes_execution.intent.strategy_id == StrategyId::HardArbitrage);
+        assert(no_execution.intent.strategy_id == StrategyId::HardArbitrage);
+        assert(yes_execution.intent.price_tick == 41);
+        assert(no_execution.intent.price_tick == 50);
+        assert(yes_execution.intent.quantity_microunits
+               == no_execution.intent.quantity_microunits);
 
         auto stale = input;
         stale.no.receive_monotonic_ns =
