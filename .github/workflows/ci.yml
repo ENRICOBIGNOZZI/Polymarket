@@ -194,7 +194,8 @@ jobs:
           else
             cmake --build build-ASan-UBSan --parallel "$(nproc)" --target \
               polymarket_v7_crypto_settlement_engine \
-              pm_v7_native_runtime_evidence_tests pm_v7_execution_mode_tests \
+              pm_v7_native_runtime_evidence_tests pm_v7_native_latency_tape_tests \
+              pm_v7_user_oms_bridge_latency_tests pm_v7_execution_mode_tests \
               pm_v7_native_paper_execution_tests pm_v7_execution_admission_tests \
               pm_v7_native_settlement_authority_tests pm_v7_paper_queue_tests pm_v7_oms_tests
             ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
@@ -285,7 +286,8 @@ jobs:
           else
             cmake --build build-${{ matrix.build_type }} --parallel "$(nproc)" --target \
               polymarket_v7_crypto_settlement_engine \
-              pm_v7_native_runtime_evidence_tests pm_v7_execution_mode_tests \
+              pm_v7_native_runtime_evidence_tests pm_v7_native_latency_tape_tests \
+              pm_v7_user_oms_bridge_latency_tests pm_v7_execution_mode_tests \
               pm_v7_native_paper_execution_tests pm_v7_execution_admission_tests \
               pm_v7_native_settlement_authority_tests pm_v7_paper_queue_tests pm_v7_oms_tests \
               pm_v7_crypto_decision_lane_tests pm_v7_maker_paper_tests pm_v7_external_execution_tests
