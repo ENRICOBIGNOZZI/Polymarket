@@ -210,6 +210,15 @@ target_link_libraries(polymarket_v7_crypto_settlement_engine PRIVATE
 target_compile_options(polymarket_v7_crypto_settlement_engine PRIVATE
   -Wall -Wextra -Wpedantic)
 
+# Dedicated complete-set arbitrage candidate: one process, one PM feed worker,
+# fixed multi-market state, one settlement authority. PAPER only.
+add_executable(polymarket_v7_pure_arb_multi_runtime
+  src/v7_pure_arb_multi_runtime.cpp)
+target_link_libraries(polymarket_v7_pure_arb_multi_runtime PRIVATE
+  pm_v7_common pm_fast_arb pm_core Threads::Threads)
+target_compile_options(polymarket_v7_pure_arb_multi_runtime PRIVATE
+  -Wall -Wextra -Wpedantic)
+
 if(NOT PM_LONDON_RUNTIME_ONLY)
 add_executable(polymarket_v7_external_tape_replay src/v7_external_tape_replay.cpp)
 target_link_libraries(polymarket_v7_external_tape_replay PRIVATE pm_v7_external)
