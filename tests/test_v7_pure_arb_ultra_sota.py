@@ -263,6 +263,30 @@ def test_pure_arb_math_is_reusable_native_lane():
     assert "pm_v7_pure_arb_lane_tests" in cmake
 
 
+def test_native_pure_arb_shadow_is_same_process_and_zero_authority():
+    native=(ROOT/"src/v7_crypto_settlement_engine.cpp").read_text()
+    manager=(ROOT/"scripts/v7_native_crypto_engine_manager.py").read_text()
+    loop=(ROOT/"scripts/paper_v7_execution_loop.sh").read_text()
+    evidence=(ROOT/"src/v7_native_runtime_evidence.cpp").read_text()
+    assert '#include "pm/v7_pure_arb_lane.hpp"' in native
+    assert '--pure-arb-shadow' in manager and '--pure-arb-shadow' in loop
+    start=native.index("const auto evaluate_pure_arb_shadow")
+    end=native.index("const auto start_repricing_window",start)
+    block=native[start:end]
+    assert "pm::v7::pure_arb::sweep" in block
+    assert "publish_pure_arb_shadow_cycle" in block
+    for forbidden in ("authority.submit(", "append_candidate(", "paper_execution.submit(",
+                      "NativeClobOrderLane", "write(", "ofstream", "json::serialize"):
+        assert forbidden not in block
+    publish_start=native.index("const auto publish_pure_arb_shadow_cycle")
+    publish_end=native.index("const auto evaluate_pure_arb_shadow",publish_start)
+    publish_block=native[publish_start:publish_end]
+    assert "publish_optional_observation" in publish_block
+    assert "publish_observation(" not in publish_block
+    assert "pure_arb_shadow" in evidence
+    assert '"execution_authority", false' in evidence
+
+
 def test_native_latency_trace_is_stage_complete_without_hot_path_io():
     header=(ROOT/"include/pm/v7_native_clob_order_lane.hpp").read_text()
     source=(ROOT/"src/v7_native_clob_order_lane.cpp").read_text()
