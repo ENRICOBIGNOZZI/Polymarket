@@ -118,21 +118,23 @@ def main()->int:
     ap.add_argument("--clob-url",default="https://clob.polymarket.com")
     ap.add_argument("--timeout-seconds",type=float,default=1.0);ap.add_argument("--reference-shares",type=float,default=5.0)
     ap.add_argument("--reserve-per-share",type=float,default=0.001);ap.add_argument("--maximum-rows",type=int,default=10000)
+    ap.add_argument("--interval-seconds",type=float,default=1.0)
     args=ap.parse_args()
-    catalog=load(args.catalog)
-    safe=(catalog.get("schema")=="polymarket_v7_combo_market_source_v1"
-          and catalog.get("paper_only") is True and catalog.get("authenticated_execution") is False
-          and catalog.get("real_order_submission") is False and catalog.get("model_sha")==args.model_sha)
-    rows=[evaluate(r,catalog,args) for r in iter_tail(args.rfq_tape,args.maximum_rows)] if safe else []
-    value={"schema":SCHEMA,"paper_only":True,"authenticated_execution":False,
-           "real_order_submission":False,"execution_authority":"ZERO_AUTHORITY_RFF_SHADOW",
-           "model_sha":args.model_sha,"timestamp_ms":time.time_ns()//1_000_000,
-           "catalog_safe":safe,"requests":len(rows),
-           "priced":sum(r.get("state")=="PRICED_EXACT_BOUND" for r in rows),
-           "rows":rows[-1000:]}
     args.output.parent.mkdir(parents=True,exist_ok=True)
-    tmp=args.output.with_suffix(args.output.suffix+".tmp")
-    tmp.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8");tmp.replace(args.output)
-    return 0
+    while True:
+        catalog=load(args.catalog)
+        safe=(catalog.get("schema")=="polymarket_v7_combo_market_source_v1"
+              and catalog.get("paper_only") is True and catalog.get("authenticated_execution") is False
+              and catalog.get("real_order_submission") is False and catalog.get("model_sha")==args.model_sha)
+        rows=[evaluate(r,catalog,args) for r in iter_tail(args.rfq_tape,args.maximum_rows)] if safe else []
+        value={"schema":SCHEMA,"paper_only":True,"authenticated_execution":False,
+               "real_order_submission":False,"execution_authority":"ZERO_AUTHORITY_RFQ_SHADOW",
+               "model_sha":args.model_sha,"timestamp_ms":time.time_ns()//1_000_000,
+               "catalog_safe":safe,"requests":len(rows),
+               "priced":sum(r.get("state")=="PRICED_EXACT_BOUND" for r in rows),
+               "rows":rows[-1000:]}
+        tmp=args.output.with_suffix(args.output.suffix+".tmp")
+        tmp.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8");tmp.replace(args.output)
+        time.sleep(args.interval_seconds)
 
 if __name__=="__main__":raise SystemExit(main())
