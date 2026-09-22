@@ -50,7 +50,9 @@
     "unknown_fee_policy": "NON_EXECUTABLE",
     "unknown_delay_policy": "NON_EXECUTABLE_TAKER",
     "unknown_venue_mode_policy": "NO_NEW_RISK",
-    "unverified_buy_collection_mode_policy": "NON_EXECUTABLE_TAKER"
+    "unverified_buy_collection_mode_policy": "NON_EXECUTABLE_TAKER",
+    "unknown_account_mode_policy": "NO_NEW_RISK",
+    "closed_only_account_policy": "NO_NEW_PURE_ARB_EXPOSURE"
   },
   "order_submission": {
     "single_endpoint": "POST /order",
@@ -144,5 +146,10 @@
     "current_native_taker_lane_requires_heartbeat": false,
     "maker_promotion_requires_native_heartbeat": true,
     "failure_policy": "NO_NEW_MAKER_RISK_AND_CANCEL_RESTING_IF_HEARTBEAT_UNHEALTHY"
-  }
+  },
+  "account_execution_modes": [
+    "OPEN",
+    "CLOSED_ONLY",
+    "UNKNOWN"
+  ]
 }
