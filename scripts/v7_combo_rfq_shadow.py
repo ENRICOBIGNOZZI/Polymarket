@@ -11,7 +11,8 @@ legs:
 Unknown fees/books fail closed.
 """
 from __future__ import annotations
-import argparse,json,math,time,urllib.parse,urllib.request
+import argparse,json,math,os,time,urllib.parse,urllib.request
+from collections import deque
 from pathlib import Path
 from typing import Any
 from v7_pure_arb_economics import raw_fee_per_share
@@ -114,21 +115,42 @@ def evaluate(req:dict[str,Any],catalog:dict[str,Any],args:argparse.Namespace)->d
     else:
         hedges=[taker_cost(x["book"]["ask"],q,x["fee_rate"]) for x in resolved]
         bound=1.0-min(hedges)/q;relation="LONG_COMBO_NO_PLUS_ONE_LEG_YES_GUARANTEES_ONE"
-    base.update(state="PRICED_EXACT_BOUND",reference_quote_bound=bound,
-                exact_relation=relation,reserve_per_share=args.reserve_per_share,
-                actionable_bound=(bound+args.reserve_per_share if direction=="BUY" else bound-args.reserve_per_share),
-                legs=resolved)
+    actionable=(bound+args.reserve_per_share if direction=="BUY" else bound-args.reserve_per_share)
+    feasible=(0.0<=actionable<=1.0)
+    base.update(
+        state="PRICED_EXACT_BOUND" if feasible else "NO_FEASIBLE_QUOTE_DOMAIN",
+        reference_quote_bound=bound,exact_relation=relation,
+        reserve_per_share=args.reserve_per_share,actionable_bound=actionable,
+        quote_domain_feasible=feasible,legs=resolved)
     return base
 
-def iter_tail(path:Path,max_rows:int):
-    try:lines=path.read_text(encoding="utf-8").splitlines()[-max_rows:]
-    except OSError:return []
-    out=[]
-    for raw in lines:
-        try:v=json.loads(raw)
-        except json.JSONDecodeError:continue
-        if isinstance(v,dict) and v.get("type")=="RFQ_REQUEST":out.append(v)
-    return out
+class RfqTail:
+    def __init__(self,path:Path,*,start_at_end:bool=False):
+        self.path=path;self.handle=None;self.start_at_end_pending=bool(start_at_end)
+    def poll(self)->list[dict[str,Any]]:
+        out=[]
+        for _ in range(2):
+            if self.handle is None:
+                try:self.handle=self.path.open("rb")
+                except OSError:return out
+                if self.start_at_end_pending:
+                    self.handle.seek(0,os.SEEK_END);self.start_at_end_pending=False
+            while True:
+                pos=self.handle.tell();raw=self.handle.readline()
+                if not raw or not raw.endswith(b"\n"):
+                    self.handle.seek(pos);break
+                try:v=json.loads(raw)
+                except (json.JSONDecodeError,UnicodeDecodeError):continue
+                if isinstance(v,dict) and v.get("type")=="RFQ_REQUEST":out.append(v)
+            try:
+                old,cur=os.fstat(self.handle.fileno()),self.path.stat()
+                if (old.st_dev,old.st_ino)==(cur.st_dev,cur.st_ino):
+                    if cur.st_size<self.handle.tell():self.handle.seek(0)
+                    return out
+            except OSError:return out
+            self.handle.close();self.handle=None
+        return out
+
 
 def main()->int:
     ap=argparse.ArgumentParser(description=__doc__)
@@ -136,22 +158,43 @@ def main()->int:
     ap.add_argument("--rfq-tape",type=Path,required=True);ap.add_argument("--output",type=Path,required=True)
     ap.add_argument("--clob-url",default="https://clob.polymarket.com")
     ap.add_argument("--timeout-seconds",type=float,default=1.0);ap.add_argument("--reference-shares",type=float,default=5.0)
-    ap.add_argument("--reserve-per-share",type=float,default=0.001);ap.add_argument("--maximum-rows",type=int,default=10000)
-    ap.add_argument("--interval-seconds",type=float,default=1.0)
+    ap.add_argument("--reserve-per-share",type=float,default=0.001);ap.add_argument("--maximum-rows",type=int,default=1000)
+    ap.add_argument("--seen-rfq-limit",type=int,default=100000)
+    ap.add_argument("--interval-seconds",type=float,default=0.05)
     args=ap.parse_args()
+    if not (100<=args.maximum_rows<=100000 and 1000<=args.seen_rfq_limit<=1000000
+            and .01<=args.interval_seconds<=60):
+        raise SystemExit("invalid bounds")
     args.output.parent.mkdir(parents=True,exist_ok=True)
+    try:resumed=args.output.exists() and args.output.stat().st_size>0
+    except OSError:resumed=False
+    tail=RfqTail(args.rfq_tape,start_at_end=resumed)
+    rows=deque(maxlen=args.maximum_rows);seen=set();seen_order=deque()
+    total_requests=0;total_priced=0;total_infeasible=0
     while True:
         catalog=load(args.catalog)
         safe=(catalog.get("schema")=="polymarket_v7_combo_market_source_v1"
               and catalog.get("paper_only") is True and catalog.get("authenticated_execution") is False
               and catalog.get("real_order_submission") is False and catalog.get("model_sha")==args.model_sha)
-        rows=[evaluate(r,catalog,args) for r in iter_tail(args.rfq_tape,args.maximum_rows)] if safe else []
+        new=tail.poll()
+        if safe:
+            for req in new:
+                rid=str(req.get("rfq_id") or "")
+                if not rid or rid in seen:continue
+                while len(seen_order)>=args.seen_rfq_limit:
+                    old=seen_order.popleft();seen.discard(old)
+                seen.add(rid);seen_order.append(rid)
+                row=evaluate(req,catalog,args);rows.append(row);total_requests+=1
+                total_priced+=row.get("state")=="PRICED_EXACT_BOUND"
+                total_infeasible+=row.get("state")=="NO_FEASIBLE_QUOTE_DOMAIN"
         value={"schema":SCHEMA,"paper_only":True,"authenticated_execution":False,
                "real_order_submission":False,"execution_authority":"ZERO_AUTHORITY_RFQ_SHADOW",
                "model_sha":args.model_sha,"timestamp_ms":time.time_ns()//1_000_000,
-               "catalog_safe":safe,"requests":len(rows),
-               "priced":sum(r.get("state")=="PRICED_EXACT_BOUND" for r in rows),
-               "rows":rows[-1000:]}
+               "catalog_safe":safe,"requests_since_start":total_requests,
+               "priced_since_start":total_priced,"infeasible_since_start":total_infeasible,
+               "status_window_size":len(rows),"seen_rfq_count":len(seen),
+               "restart_policy":"FOLLOW_NEW_RFQS_ONLY" if resumed else "INITIAL_TAPE_DRAIN",
+               "rows":list(rows)}
         tmp=args.output.with_suffix(args.output.suffix+".tmp")
         tmp.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8");tmp.replace(args.output)
         time.sleep(args.interval_seconds)
