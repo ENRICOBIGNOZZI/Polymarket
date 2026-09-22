@@ -460,8 +460,6 @@ class Shadow:
         c = self.active.get(mid)
         if c is None:
             return
-        except (TypeError, ValueError, OverflowError):
-            return
         if not c["origin_ms"] <= wall <= c["expires_ms"] or row.get("aggressor_side") != "SELL":
             return
         side = "yes" if token == c["yes_token"] else "no" if token == c["no_token"] else ""
