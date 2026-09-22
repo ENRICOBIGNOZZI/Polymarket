@@ -123,7 +123,7 @@ def test_native_clob_exact_body_and_l2_hmac() -> None:
     assert len(lines) == 3
     body, signature, long_signature = lines
     expected_body = (
-        '{"deferExec":false,"order":{'
+        '{"deferExec":false,"postOnly":false,"order":{'
         '"builder":"0x0000000000000000000000000000000000000000000000000000000000000000",'
         '"expiration":"0",'
         '"maker":"0x1111111111111111111111111111111111111111",'
