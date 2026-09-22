@@ -523,6 +523,8 @@ int main(int argc, char** argv) {
         std::uint64_t maker_blocked_by_fast_shock = 0;
         std::uint64_t last_protective_signal = 0;
         BookHotSnapshot yes_book{}, no_book{};
+        std::uint64_t yes_book_epoch = 0, no_book_epoch = 0;
+        std::uint64_t pure_arb_trace_sequence = 0;
         ExternalCancelSignalSnapshot current_signal{};
         SettlementProbabilityForecast decision_probability{};
         ProbabilityEvDecision decision_economics{};
