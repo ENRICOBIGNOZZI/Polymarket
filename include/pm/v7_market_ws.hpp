@@ -39,6 +39,8 @@ struct MarketWsEvent {
     std::int64_t quantity_microunits = 0;
     std::int64_t exchange_event_ns = 0;
     std::int64_t receive_monotonic_ns = 0;
+    std::int64_t frame_receive_monotonic_ns = 0;
+    std::int64_t decode_complete_monotonic_ns = 0;
     std::int64_t frame_parse_ns = 0;
     std::int64_t book_apply_ns = 0;
     std::int64_t receive_to_book_ns = 0;
@@ -57,6 +59,8 @@ struct MarketWsFrameResult {
     std::size_t trade_invalid_price = 0;
     std::size_t trade_invalid_timestamp = 0;
     std::size_t ignored_unknown_assets = 0;
+    std::int64_t frame_receive_monotonic_ns = 0;
+    std::int64_t decode_complete_monotonic_ns = 0;
     std::int64_t parse_ns = 0;
     std::int64_t book_apply_ns = 0;
     std::int64_t receive_to_book_ns = 0;
