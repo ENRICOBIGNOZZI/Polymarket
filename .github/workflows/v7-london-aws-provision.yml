@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths:
       - CMakeLists.txt
+      - include/pm/socket_tuning.hpp
+      - include/pm/v7_clob_tls.hpp
+      - include/pm/v7_clob_pair_transport.hpp
+      - src/v7_clob_tls.cpp
+      - src/v7_clob_pair_transport.cpp
+      - ops/v7_host_latency_ab.py
       - ops/v7_london_latency_lab.sh
       - ops/v7_london_ssm_benchmark.py
       - ops/v7_london_ssm_bootstrap.py
