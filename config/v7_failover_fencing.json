@@ -1,0 +1,29 @@
+{
+  "schema": "polymarket_v7_failover_fencing_v1",
+  "version": 1,
+  "paper_only": true,
+  "enabled": false,
+  "activation": "DEPLOYMENT_STAGE_ONLY_AFTER_DYNAMODB_TABLE_PROVISIONED",
+  "region": "eu-west-2",
+  "backend": "DYNAMODB_CONDITIONAL_LEASE",
+  "lease_id": "polymarket-v7-paper-single-writer",
+  "lease_duration_ms": 15000,
+  "renew_interval_ms": 5000,
+  "required_receipt_state": "LEASE_HELD",
+  "fencing_token_required": true,
+  "fail_closed_on_lease_loss": true,
+  "table_name_environment": "PM_V7_FENCING_TABLE",
+  "az_policy": {
+    "mode": "ACTIVE_PASSIVE",
+    "warm_standby_azs": [
+      "eu-west-2a",
+      "eu-west-2b",
+      "eu-west-2c"
+    ],
+    "exactly_one_active_writer": true
+  },
+  "authority": {
+    "can_start_execution": false,
+    "can_submit_orders": false
+  }
+}
