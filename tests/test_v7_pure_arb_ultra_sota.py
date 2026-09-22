@@ -250,6 +250,27 @@ def test_native_prewire_benchmark_matches_production_prepared_path():
     assert "sign_poly1271_hex(hasher" not in source
 
 
+def test_native_latency_trace_is_stage_complete_without_hot_path_io():
+    header=(ROOT/"include/pm/v7_native_clob_order_lane.hpp").read_text()
+    source=(ROOT/"src/v7_native_clob_order_lane.cpp").read_text()
+    observer=(ROOT/"src/v7_maker_fillability_observer.cpp").read_text()
+    for token in (
+        "submit_start_monotonic_ns","rate_limit_complete_monotonic_ns",
+        "sign_start_monotonic_ns","sign_complete_monotonic_ns",
+        "frame_complete_monotonic_ns","wire_start_monotonic_ns",
+    ):
+        assert token in header and token in source
+    assert "decode_complete_monotonic_ns" in observer
+    assert '"receive_to_decode_ns"' in observer
+    assert '"decode_to_enqueue_ns"' in observer
+    # Instrumentation is timestamp-only in the execution lane: no filesystem,
+    # JSON serialization or synchronous telemetry is introduced there.
+    lane_body=source.split("NativeClobSubmitResult NativeClobOrderLane::submit",1)[1]
+    assert "json::" not in lane_body
+    assert "ofstream" not in lane_body
+    assert "filesystem" not in lane_body
+
+
 if __name__=="__main__":
     tests=[value for name,value in sorted(globals().items())
            if name.startswith("test_") and callable(value)]
