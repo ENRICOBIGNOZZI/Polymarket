@@ -223,6 +223,33 @@ def test_merge_shadow_prepares_exact_atomic_operation_without_authority():
         assert out["real_order_submission"] is False
 
 
+def test_taker_allocator_rejects_censored_required_mode():
+    policy=json.loads((ROOT/"config/v7_pure_arb_capital_policy.json").read_text())
+    with tempfile.TemporaryDirectory() as d:
+        path=Path(d)/"taker.jsonl"
+        rows=[]
+        common={
+            "schema":"polymarket_v7_pure_arb_exchange_execution_cycle_v1",
+            "market_id":"m","kind":"BUY_COMPLETE_SET",
+            "transport_delay_ms":5,"inter_leg_skew_ms":5,
+            "revalidation_wall_ms":1_000,"target_shares":10,
+            "revalidation_yes_price":0.4,"revalidation_no_price":0.5,
+            "market_end_ms":10_000,
+        }
+        for mode in ("SEQUENTIAL","PARALLEL"):
+            for order in ("YES_FIRST","NO_FIRST"):
+                rows.append({**common,"execution_mode":mode,"leg_order":order,
+                             "execution_pnl_after_reserve":0.1})
+        # Batch exists but is censored: presence alone must not satisfy the gate.
+        rows.append({**common,"execution_mode":"BATCH","leg_order":"BATCH",
+                     "state":"CENSORED_DEEP_REPLAY_UNAVAILABLE"})
+        path.write_text("".join(json.dumps(row)+"\n" for row in rows),encoding="utf-8")
+        assert allocator.taker_observations(path,policy)==[]
+        rows[-1]["execution_pnl_after_reserve"]=0.05
+        path.write_text("".join(json.dumps(row)+"\n" for row in rows),encoding="utf-8")
+        assert len(allocator.taker_observations(path,policy))==1
+
+
 def test_sell_pair_is_not_mergeable_and_maker_gets_no_early_merge_credit():
     with tempfile.TemporaryDirectory() as d:
         root=Path(d)
