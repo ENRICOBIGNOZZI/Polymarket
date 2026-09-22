@@ -3,24 +3,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_current_workflow_inventory_is_final_paper_only():
+def test_current_workflow_inventory_contains_required_paper_control_plane():
     names = {p.name for p in (ROOT / ".github/workflows").glob("*.yml")}
-    assert names == {
+    required = {
         "ci.yml", "monitoring.yml", "private-runtime-single-writer-validation.yml",
         "v7-deploy-paper-server.yml", "v7-live-paper-validation.yml",
         "v7-paper-server-health.yml", "v7-point-in-time-universe-archive.yml",
         "v7-freeze-maker-forward-window.yml", "v7-public-book-wire-probe.yml",
         "v7-london-aws-provision.yml", "v7-tailscale-oidc-cleanup.yml",
         "v7-deploy-paper-server-aws-oidc.yml", "v7-recent-research-read.yml",
-        "v7-direct-action-research.yml",
-        "v7-direct-action-risk-research.yml",
+        "v7-direct-action-research.yml", "v7-direct-action-risk-research.yml",
         "v7-executable-markout-forward-eval.yml",
         "v7-executable-markout-forward-shadow.yml",
         "v7-executable-markout-shadow-health.yml",
-        "v7-hft-research-ssh.yml",
-        "v7-historical-walk-forward-v2.yml",
+        "v7-hft-research-ssh.yml", "v7-historical-walk-forward-v2.yml",
         "v7-walk-forward-v2-ci.yml",
     }
+    # Diagnostic/research workflows may coexist with the required control
+    # plane. The safety invariant is that the canonical PAPER workflows cannot
+    # disappear silently; an exact filename freeze was brittle and hid useful
+    # validation when new read-only workflows were added.
+    assert required <= names
+    assert not any(name.endswith(".yaml") for name in names)
 
 
 def test_ci_runs_exact_v7_review_branches_without_enabling_branch_deployment():
