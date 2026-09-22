@@ -35,6 +35,13 @@ LOG="$BENCH/bootstrap.$SHA.$RUN_ID.log"
 mkdir -p "$BENCH"
 [[ -d "$APP/.git" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
+SERVICE_GROUP="$(id -gn {service_user})"
+# This is the disabled benchmark source checkout. Previous root-side bootstrap
+# steps may have left .git objects or tracked files root-owned; restore the
+# checkout to its declared owner before any git mutation.
+chown -R {service_user}:"$SERVICE_GROUP" "$APP"
+[[ "$(stat -c '%U' "$APP")" == "{service_user}" ]]
+[[ "$(stat -c '%U' "$APP/.git")" == "{service_user}" ]]
 dirty_before="$(sudo -u {service_user} git -C "$APP" status --porcelain)"
 if [[ -n "$dirty_before" ]]; then
   echo "benchmark_source_checkout_dirty=1"
