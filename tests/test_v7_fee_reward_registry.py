@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -57,6 +58,42 @@ class FeeRewardRegistryTests(unittest.TestCase):
         self.assertTrue(fee["verified"])
         self.assertEqual(fee["rate"], .07)
         self.assertEqual(fee["exponent"], 2)
+
+
+    def test_wallet_reward_audit_is_verified_but_not_market_allocatable(self) -> None:
+        user = "0x" + "12" * 20
+        payload = {
+            "data": {
+                "proxy_wallet": user,
+                "interval": "1d",
+                "fidelity": "1h",
+                "source_fidelity": "canonical",
+                "points": [
+                    {"timestamp": 100, "maker_rebate": 1.0, "reward_income": 2.0, "sponsored_income": 0.5},
+                    {"timestamp": 3700, "maker_rebate": 1.4, "reward_income": 2.25, "sponsored_income": 0.7},
+                ],
+            }
+        }
+        value = registry.parse_wallet_reward_audit(payload, user, 4_000_000)
+        self.assertTrue(value["verified"])
+        self.assertFalse(value["allocatable_to_market"])
+        self.assertEqual(value["allocation_reason"], "WALLET_LEVEL_NOT_MARKET_ATTRIBUTABLE")
+        self.assertAlmostEqual(value["maker_rebate_delta_pusd"], 0.4)
+        self.assertAlmostEqual(value["reward_income_delta_pusd"], 0.25)
+        self.assertAlmostEqual(value["sponsored_income_delta_pusd"], 0.2)
+        self.assertEqual(value["delta_seconds"], 3600)
+        rendered = json.dumps(value)
+        self.assertNotIn(user.lower(), rendered.lower())
+        self.assertEqual(len(value["wallet_sha256"]), 64)
+
+    def test_wallet_reward_audit_fails_closed_when_unconfigured(self) -> None:
+        value = registry.parse_wallet_reward_audit({}, "", 1_000)
+        self.assertFalse(value["configured"])
+        self.assertFalse(value["verified"])
+        self.assertFalse(value["allocatable_to_market"])
+        self.assertEqual(value["reason"], "WALLET_UNCONFIGURED_OR_INVALID")
+        self.assertIsNone(value["wallet_sha256"])
+
 
 
 if __name__ == "__main__":
