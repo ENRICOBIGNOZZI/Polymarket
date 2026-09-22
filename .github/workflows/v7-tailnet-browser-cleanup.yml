@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 2
+          fetch-depth: 50
 
       - name: Decrypt one-shot Tailscale login
         shell: bash
@@ -34,18 +34,22 @@ jobs:
             --input deploy/v7-tailnet-login.envelope.json \
             --output "$RUNNER_TEMP/tailnet-login.json"
           rm -f "$RUNNER_TEMP/deploy-key"
-          parent_sha="$(git rev-parse HEAD^)"
-          python3 - "$RUNNER_TEMP/tailnet-login.json" "$parent_sha" <<'PY'
+          expected_sha="$(python3 - "$RUNNER_TEMP/tailnet-login.json" <<'PY'
           import json,sys
           v=json.load(open(sys.argv[1],encoding='utf-8'))
           assert set(v)=={'schema','purpose','expected_parent_sha','email','password','maximum_deletions'}
           assert v['schema']=='polymarket_v7_tailnet_login_handoff_v2'
           assert v['purpose']=='TAILNET_CI_QUOTA_RECOVERY'
-          assert v['expected_parent_sha']==sys.argv[2]
+          assert isinstance(v['expected_parent_sha'],str) and len(v['expected_parent_sha'])==40
           assert isinstance(v['email'],str) and '@' in v['email']
           assert isinstance(v['password'],str) and v['password']
           assert 1 <= int(v['maximum_deletions']) <= 120
+          print(v['expected_parent_sha'])
           PY
+          )"
+          git merge-base --is-ancestor "$expected_sha" HEAD
+          distance="$(git rev-list --count "$expected_sha..HEAD")"
+          test "$distance" -le 10
 
       - name: Install browser automation
         shell: bash
