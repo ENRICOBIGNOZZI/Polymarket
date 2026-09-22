@@ -1,7 +1,5 @@
 #pragma once
 
-#include "pm/v7_spsc.hpp"
-
 #include <atomic>
 #include <bit>
 #include <cstdint>
@@ -42,9 +40,9 @@ struct NativeLatencyTapeSnapshot {
     std::uint8_t healthy = 0;
 };
 
-// Single-producer / single-writer binary telemetry plane.
-// publish() performs only a bounded SPSC copy. Filesystem I/O is owned by the
-// background writer thread and never occurs on the canonical execution thread.
+// Multi-producer / single-writer binary telemetry plane. publish() performs
+// only a bounded lock-free copy into preallocated storage. Filesystem I/O is
+// owned by the background writer thread and never occurs on reaction threads.
 class NativeLatencyTape final {
 public:
     explicit NativeLatencyTape(std::string_view path);
