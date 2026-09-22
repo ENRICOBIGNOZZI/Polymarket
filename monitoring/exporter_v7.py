@@ -300,6 +300,12 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
         _metric("polymarket_pure_arb_cycles_total", status.get("cycles_total")),
         _metric("polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total",
                 status.get("paper_locked_pnl_pre_gas_total")),
+        _metric("polymarket_pure_arb_conservative_locked_pnl_after_reserve_usd_total",
+                status.get("conservative_locked_pnl_after_reserve_total")),
+        _metric("polymarket_pure_arb_reserve_per_share", status.get("reserve_per_share")),
+        _metric("polymarket_pure_arb_maximum_leg_skew_ms", status.get("maximum_leg_skew_ms")),
+        _metric("polymarket_pure_arb_maximum_receive_to_decision_ns",
+                status.get("maximum_receive_to_decision_ns")),
         _metric("polymarket_pure_arb_evaluations_total", status.get("evaluations")),
         _metric("polymarket_pure_arb_fee_blocked_evaluations_total",
                 status.get("fee_blocked_evaluations")),
@@ -315,6 +321,20 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
     ]
     if not safe:
         return lines
+    funnel = status.get("funnel") if isinstance(status.get("funnel"), dict) else {}
+    for stage, value in sorted(funnel.items()):
+        lines.append(_metric("polymarket_pure_arb_funnel_total", value, {"stage": stage}))
+    for kind, field in (
+        ("receive_to_decision", "receive_to_decision_ns"),
+        ("decision_compute", "decision_compute_ns"),
+    ):
+        values = status.get(field) if isinstance(status.get(field), dict) else {}
+        for percentile in ("p50", "p90", "p99", "p99_9", "max"):
+            lines.append(_metric(
+                "polymarket_pure_arb_latency_ns", values.get(percentile),
+                {"kind": kind, "percentile": percentile}))
+    lines.append(_metric("polymarket_pure_arb_latency_window_samples",
+                         status.get("latency_window_samples")))
     for row in status.get("contexts") or []:
         if not isinstance(row, dict):
             continue
@@ -335,14 +355,20 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
                         value.get("cycles"), labels),
                 _metric("polymarket_pure_arb_context_paper_locked_pnl_pre_gas_usd_total",
                         value.get("paper_locked_pnl_pre_gas"), labels),
+                _metric("polymarket_pure_arb_context_conservative_locked_pnl_after_reserve_usd_total",
+                        value.get("conservative_locked_pnl_after_reserve"), labels),
                 _metric("polymarket_pure_arb_context_last_edge_per_share",
                         value.get("last_edge_per_share"), labels),
                 _metric("polymarket_pure_arb_context_max_edge_per_share",
                         value.get("max_edge_per_share"), labels),
                 _metric("polymarket_pure_arb_context_last_executable_shares_l1",
                         value.get("last_executable_shares_l1"), labels),
+                _metric("polymarket_pure_arb_context_last_executable_shares_l10",
+                        value.get("last_executable_shares_l10"), labels),
                 _metric("polymarket_pure_arb_context_last_locked_pnl_pre_gas_usd",
                         value.get("last_locked_pnl_pre_gas"), labels),
+                _metric("polymarket_pure_arb_context_last_conservative_locked_pnl_after_reserve_usd",
+                        value.get("last_conservative_locked_pnl_after_reserve"), labels),
             ])
     return lines
 
