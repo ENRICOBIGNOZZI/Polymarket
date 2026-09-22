@@ -113,7 +113,7 @@ for name in (
 with open(root/'34_rich_crypto_grid.csv',newline='') as f:
     rows=list(csv.DictReader(f))
 assert rows
-assets={r['asset'] for r in rows}
+assets={{r['asset'] for r in rows}}
 assert len(assets)>=2
 print('RICH_HISTORY_ARTIFACTS_VALID')
 PY
