@@ -56,6 +56,11 @@ def test_latency_lab_does_not_require_cutover_readiness():
     assert "test -x ops/v7_london_latency_lab.sh" not in latency
 
 
+def test_london_bootstrap_installs_numpy_for_verification_stage():
+    bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
+    assert "python3-numpy" in bootstrap
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
