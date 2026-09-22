@@ -33,9 +33,11 @@ from research.walk_forward_v3 import multi_alpha_2h as base
 
 SCHEMA = "polymarket_v7_rich_history_information_v1"
 LATENCIES = (5, 10, 25, 50, 100, 250, 500, 750, 1000)
-EXIT_GRID_MS = tuple(range(500, 10001, 250)) + (
-    12500, 15000, 20000, 30000, 45000, 60000, 90000,
+EXIT_GRID_MS = (
+    25, 50, 100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000,
+    3000, 4000, 5000, 7500, 10000,
 )
+FUTURE_LONG_EXIT_GRID_MS = (12500, 15000, 20000, 30000, 45000, 60000, 90000)
 L2_GRID = (1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 8.0)
 TRAIN_ACTIONS_PER_ROW = 6
 MIN_EVALUABLE_FILLS = 50
@@ -686,6 +688,7 @@ def main(argv=None):
         "split_rows": {k: len(v) for k, v in splits.items()},
         "latencies_ms": list(LATENCIES),
         "requested_exit_horizons_ms": list(EXIT_GRID_MS),
+        "future_long_exit_horizons_requiring_new_capture_ms": list(FUTURE_LONG_EXIT_GRID_MS),
         "l2_grid": list(L2_GRID),
         "primary_tau": 0.0,
         "minimum_evaluable_fills": MIN_EVALUABLE_FILLS,
@@ -724,6 +727,32 @@ def main(argv=None):
             for split, subset in splits.items()
         },
         "requested_exit_horizons_ms": list(EXIT_GRID_MS),
+        "future_long_exit_horizons_requiring_new_capture_ms": list(FUTURE_LONG_EXIT_GRID_MS),
+        "target_support_by_horizon": {
+            str(h): sum(
+                (r.get("targets") or {}).get(str(h), {}).get("state") == "OBSERVED"
+                for r in rows
+            )
+            for h in EXIT_GRID_MS
+        },
+        "arrival_support_by_latency": {
+            str(l): sum(
+                isinstance((r.get("arrivals") or {}).get(str(l)), dict)
+                for r in rows
+            )
+            for l in LATENCIES
+        },
+        "target_support_by_asset_horizon": {
+            asset: {
+                str(h): sum(
+                    str(r.get("asset") or "UNKNOWN") == asset
+                    and (r.get("targets") or {}).get(str(h), {}).get("state") == "OBSERVED"
+                    for r in rows
+                )
+                for h in EXIT_GRID_MS
+            }
+            for asset in sorted({str(r.get("asset") or "UNKNOWN") for r in rows})
+        },
         "book_evidence": data.get("book_evidence"),
     })
     atomic_json(a.output_dir / "32_rich_information_models.json", {
