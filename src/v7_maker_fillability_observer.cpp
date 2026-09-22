@@ -2082,6 +2082,29 @@ private:
         }
         const auto observer_sequence = ++book_events_observed_;
         append_compact_label(row, observer_sequence, valid);
+        // Persist the causal L10 ladders already present in BookHotSnapshot.
+        // This lets the PAPER execution shadow revalidate a true multi-level
+        // FOK without REST lookups or best-price/L1 approximations.
+        json::array bid_levels_l10;
+        json::array ask_levels_l10;
+        bid_levels_l10.reserve(row.book.bid_level_count);
+        ask_levels_l10.reserve(row.book.ask_level_count);
+        for (std::size_t level = 0; level < row.book.bid_level_count; ++level) {
+            const auto& item = row.book.bid_levels[level];
+            if (item.price_e4 <= 0 || item.quantity_microunits <= 0) continue;
+            bid_levels_l10.emplace_back(json::object{
+                {"price", e4_price(item.price_e4)},
+                {"size", micro_shares(item.quantity_microunits)},
+            });
+        }
+        for (std::size_t level = 0; level < row.book.ask_level_count; ++level) {
+            const auto& item = row.book.ask_levels[level];
+            if (item.price_e4 <= 0 || item.quantity_microunits <= 0) continue;
+            ask_levels_l10.emplace_back(json::object{
+                {"price", e4_price(item.price_e4)},
+                {"size", micro_shares(item.quantity_microunits)},
+            });
+        }
         json::object value{
             {"schema", "polymarket_v7_causal_book_observation_v1"},
             {"model_sha", model_sha_}, {"paper_only", true},
@@ -2100,6 +2123,9 @@ private:
             {"best_bid", e4_price(row.book.best_bid_e4)}, {"best_ask", e4_price(row.book.best_ask_e4)},
             {"bid_depth_l1", micro_shares(row.book.bid_depth.l1_microunits)},
             {"ask_depth_l1", micro_shares(row.book.ask_depth.l1_microunits)},
+            {"bid_levels_l10", std::move(bid_levels_l10)},
+            {"ask_levels_l10", std::move(ask_levels_l10)},
+            {"causal_depth_levels", static_cast<std::uint64_t>(pm::v7::kHotDepthLevels)},
             {"placement_features", std::move(features)},
             {"feature_semantics", "CANONICAL_MAKER_LANE_OBSERVED_FLOW_V1"},
             {"cancel_intensity_semantics", "L5_CONTRACTION_MINUS_OBSERVED_TRADES_NORMALIZED_EW_PROXY"},
