@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <filesystem>
 #include <string_view>
 
 using namespace pm::v7;
@@ -17,7 +18,12 @@ void set_text(user_ws::FixedText<N>& out, std::string_view value) {
 }
 
 int main() {
-    UserOmsBridge bridge;
+    const auto path = std::filesystem::temp_directory_path()
+        / "pm-v7-user-ws-latency-test.bin";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    NativeLatencyTape tape(path.string());
+    UserOmsBridge bridge(&tape);
     std::array<RoutedOmsEvent, 8> routed{};
 
     const auto ack = bridge.on_post_order_ack(
@@ -48,5 +54,8 @@ int main() {
     assert(routed[0].event.timestamp_ns == 150);
     assert(routed[0].event.user_ws_match_monotonic_ns == 150);
     assert(routed[0].event.fill_delta_microunits == 1'250'000);
+    tape.stop();
+    assert(std::filesystem::file_size(path) == sizeof(NativeLatencyEvent));
+    std::filesystem::remove(path, ec);
     return 0;
 }
