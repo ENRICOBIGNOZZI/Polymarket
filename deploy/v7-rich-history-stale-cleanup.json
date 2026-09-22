@@ -4,5 +4,6 @@
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "stale_prefix": "/tmp/polymarket-rich-history-de38680075de",
   "keep_prefix": "/tmp/polymarket-rich-history-0ceb004f575e",
-  "research_only": true
+  "research_only": true,
+  "request_id": "stop-de386-superseded-2"
 }
