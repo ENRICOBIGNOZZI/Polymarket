@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 23,
-  "expected_launcher_child_count": 22,
+  "expected_process_count": 28,
+  "expected_launcher_child_count": 27,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -492,8 +492,99 @@
       "authority_overrides": {}
     },
     {
-      "id": "pure_arb_cross_market",
-      "executable": "scripts/v7_cross_market_exact_arb_shadow.py",
+      "id": "combo_market_source",
+      "executable": "scripts/v7_combo_market_source.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [],
+      "outputs": [
+        "research/repricing_book/combo_market_source.json",
+        "research/repricing_book/combo_market_source.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/combo_market_source.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "combo_rfq_shadow",
+      "executable": "scripts/v7_combo_rfq_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:combo_market_source",
+        "research/repricing_book/combo_rfq_tape.jsonl"
+      ],
+      "outputs": [
+        "research/repricing_book/combo_rfq_shadow_status.json",
+        "research/repricing_book/combo_rfq_shadow.log"
+      ],
+      "dependencies": [
+        "combo_market_source"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/combo_rfq_shadow.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "combo_collateral_return_shadow",
+      "executable": "scripts/v7_combo_collateral_return_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "control/verified_combo_collateral_return_plan.json"
+      ],
+      "outputs": [
+        "research/repricing_book/combo_collateral_return_status.json",
+        "research/repricing_book/combo_collateral_return.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/combo_collateral_return.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "clock_guard",
+      "executable": "scripts/v7_clock_guard.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "core",
+      "inputs": [],
+      "outputs": [
+        "control/clock_guard.json",
+        "clock_guard.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "clock_guard.log",
+      "london_deployed": true,
+      "runtime_class": "CONTROL",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_exact_relation_discovery",
+      "executable": "scripts/v7_exact_relation_discovery.py",
       "arguments": [
         "--model-sha",
         "${SHA}"
@@ -503,11 +594,38 @@
         "process:crypto_universe"
       ],
       "outputs": [
+        "research/repricing_book/exact_arb_relations.generated.json",
+        "research/repricing_book/exact_relation_discovery.log"
+      ],
+      "dependencies": [
+        "crypto_universe"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/exact_relation_discovery.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_cross_market",
+      "executable": "scripts/v7_cross_market_exact_arb_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:crypto_universe",
+        "process:pure_arb_exact_relation_discovery"
+      ],
+      "outputs": [
         "research/repricing_book/cross_market_exact_arb_status.json",
         "research/repricing_book/cross_market_exact_arb.log"
       ],
       "dependencies": [
-        "crypto_universe"
+        "crypto_universe",
+        "pure_arb_exact_relation_discovery"
       ],
       "exact_sha_required": true,
       "config_identity_required": true,
