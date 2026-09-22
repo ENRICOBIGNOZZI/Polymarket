@@ -73,6 +73,13 @@ OmsLatencySnapshot oms_latency_snapshot(const OmsOrderRecord& record) noexcept {
     leg(record.wire_ns, record.ack_ns,
         OmsLatencyLeg::WireToAck, out.wire_to_ack_ns);
 
+    leg(record.submission_ns, record.delay_start_ns,
+        OmsLatencyLeg::QueueToDelay, out.queue_to_delay_ns);
+    leg(record.delay_start_ns, record.delay_release_ns,
+        OmsLatencyLeg::DelayDuration, out.delay_duration_ns);
+    leg(record.delay_release_ns, record.wire_ns,
+        OmsLatencyLeg::DelayToWire, out.delay_to_wire_ns);
+
     // End-to-end causal metrics are stricter than pairwise legs. Do not report
     // trigger->wire/ACK if an intermediate timestamp is missing or reversed;
     // that would make a malformed trace look fast. signal_ready is optional,
