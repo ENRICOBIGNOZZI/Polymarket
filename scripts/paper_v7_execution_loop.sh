@@ -541,6 +541,18 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_arrival_survival_shadow.py \
   --maximum-book-age-ms 100 --interval-ms 5 \
   >> "$PURE_ARB_DIR/pure_arb_arrival_survival.log" 2>&1 &
 v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_deep_sizing_shadow.py \
+  --candidates "$PURE_ARB_DIR/pure_arb_trades.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/pure_arb_deep_sizing_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/pure_arb_deep_sizing_status.json" \
+  --reserve-per-share 0.0005 --maximum-shares 10000 \
+  --prefunded-complete-set-shares 1000 \
+  --timeout-seconds 2 --interval-seconds 0.25 \
+  >> "$PURE_ARB_DIR/pure_arb_deep_sizing.log" 2>&1 &
+v7_register_optional_child "$!"
 read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS MAKER_ROTATION_MIN_FILL MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
@@ -634,7 +646,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 14
+v7_assert_registered_child_count 15
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
