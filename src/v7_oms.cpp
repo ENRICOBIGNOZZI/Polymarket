@@ -29,6 +29,7 @@ const char* to_string(OrderState state) noexcept {
         case OrderState::Unknown: return "UNKNOWN";
         case OrderState::Reconciling: return "RECONCILING";
         case OrderState::Lost: return "LOST";
+        case OrderState::PendingDelay: return "PENDING_DELAY";
     }
     return "UNKNOWN";
 }
@@ -153,6 +154,32 @@ OmsTransitionResult OmsOrder::apply(const OmsEvent& event) noexcept {
                 return result(false, true, false, false);
             }
             break;
+
+        case OmsEventType::BeginDelay:
+            if (record_.state == OrderState::SendPending && event.timestamp_ns > 0) {
+                record_.state = OrderState::PendingDelay;
+                record_.delay_start_ns = event.timestamp_ns;
+                mark_event(event);
+                return result(true, false, false, false);
+            }
+            if (record_.state == OrderState::PendingDelay) {
+                return result(false, true, false, false);
+            }
+            return result(false, false, false, true);
+
+        case OmsEventType::DelayElapsed:
+            if (record_.state == OrderState::PendingDelay
+                && event.timestamp_ns >= record_.delay_start_ns && event.timestamp_ns > 0) {
+                record_.state = OrderState::SendPending;
+                record_.delay_release_ns = event.timestamp_ns;
+                mark_event(event);
+                return result(true, false, false, false);
+            }
+            if (record_.state == OrderState::SendPending
+                && record_.delay_release_ns > 0) {
+                return result(false, true, false, false);
+            }
+            return result(false, false, false, true);
 
         case OmsEventType::WireSend:
             if (record_.state == OrderState::SendPending) {
