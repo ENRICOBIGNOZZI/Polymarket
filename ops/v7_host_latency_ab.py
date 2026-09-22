@@ -19,7 +19,7 @@ PROFILES = (
     {"name": "ena_interrupt_moderation_zero", "coalesce": True},
     {"name": "irq_feed_affinity", "irq": True},
     {"name": "socket_busy_poll_50", "busy_poll_us": 50},
-    {"name": "decision_affinity", "pin_decision": True},
+    {"name": "process_affinity", "pin_process": True},
     {
         "name": "combined_runtime_tuning",
         "governor": True,
@@ -27,7 +27,7 @@ PROFILES = (
         "coalesce": True,
         "irq": True,
         "busy_poll_us": 50,
-        "pin_decision": True,
+        "pin_process": True,
     },
 )
 
@@ -322,7 +322,7 @@ def main() -> int:
                 if profile.get("cstate"):
                     cstate_fd = open_cstate_constraint(original)
                 pin = int(original["roles"]["decision"]) \
-                    if profile.get("pin_decision") else None
+                    if profile.get("pin_process") else None
                 candidate = run_probe(
                     args.probe, args.samples, args.interval_ms,
                     int(profile.get("busy_poll_us", 0)), pin)
