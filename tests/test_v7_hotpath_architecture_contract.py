@@ -84,6 +84,11 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     assert args.minimum_tte_ns == 105_000_000_000
     assert args.maximum_tte_ns == 120_000_000_000
     assert args.maker_share_cap_microunits==1_000_000
+    assert args.pure_arb_shadow
+    assert args.pure_arb_reserve_per_share == 0.0005
+    assert args.pure_arb_max_leg_skew_ns == 100_000_000
+    assert args.pure_arb_max_receive_to_decision_ns == 50_000_000
+    assert args.pure_arb_prefunded_complete_set_shares == 1000.0
 
 
 def test_observation_only_defaults_to_decision_capture_not_full_firehose() -> None:
