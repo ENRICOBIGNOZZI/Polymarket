@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
