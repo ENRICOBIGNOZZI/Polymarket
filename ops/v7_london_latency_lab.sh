@@ -98,6 +98,10 @@ run_sign pgo-use
 "$WORK/build-ipo/polymarket_v7_pure_arb_handoff_bench" --samples "$SAMPLES" \
   > "$OUT_DIR/handoff.json"
 
+install -m 0755 \
+  "$WORK/build-ipo/polymarket_v7_public_paired_clob_transport_probe" \
+  "$OUT_DIR/public-paired-clob-probe"
+
 soft_before="$(awk '/^softirq /{print $2}' /proc/stat 2>/dev/null || echo 0)"
 ctxt_before="$(awk '/^ctxt /{print $2}' /proc/stat 2>/dev/null || echo 0)"
 drops_before="$(python3 - <<'PY'
