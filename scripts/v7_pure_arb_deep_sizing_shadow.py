@@ -22,6 +22,7 @@ import urllib.request
 from typing import Any
 
 from v7_pm_repricing_common import atomic_json
+from v7_pure_arb_economics import raw_fee_per_share, rounded_fee_usdc
 
 CYCLE_SCHEMAS={
     "polymarket_v7_pure_arb_paper_cycle_v2",
@@ -38,10 +39,7 @@ def load(path:Path)->dict[str,Any]:
 
 
 def fee(price:float,rate:float,exponent:float)->float:
-    if not(math.isfinite(price) and 0<price<1 and math.isfinite(rate)
-           and 0<=rate<=1 and math.isfinite(exponent) and exponent>=0):
-        return math.nan
-    return rate*(price*(1-price))**exponent if rate else 0.0
+    return raw_fee_per_share(price,rate,exponent)
 
 
 def selection_map(v:dict[str,Any],sha:str)->dict[str,dict[str,Any]]:
@@ -92,13 +90,15 @@ def sweep(a:list[tuple[float,float]],b:list[tuple[float,float]],rate:float,expon
         if ar<=1e-12:ar=a[i][1]
         if br<=1e-12:br=b[j][1]
         pa,pb=a[i][0],b[j][0]
-        fees=fee(pa,rate,exponent)+fee(pb,rate,exponent)
-        if not math.isfinite(fees):break
+        take=min(ar,br,max_shares-q)
+        if take<=1e-12:break
+        fee_a=rounded_fee_usdc(take,pa,rate,exponent)
+        fee_b=rounded_fee_usdc(take,pb,rate,exponent)
+        if not(math.isfinite(fee_a) and math.isfinite(fee_b)):break
+        fees=(fee_a+fee_b)/take
         gross=(1-pa-pb-fees) if buy else (pa+pb-1-fees)
         edge=gross-reserve
         if edge<=1e-12:break
-        take=min(ar,br,max_shares-q)
-        if take<=1e-12:break
         q+=take;pnl+=take*edge;not_a+=take*pa;not_b+=take*pb;marginal=edge
         ar-=take;br-=take
         if ar<=1e-12:i+=1
