@@ -183,6 +183,7 @@ jobs:
           (( LATENCY_SAMPLES >= 100 && LATENCY_SAMPLES <= 20000 ))
           out="$RUNNER_TEMP/london-latency"
           mkdir -p "$out"
+          trap 'tar -C "$out" -czf "$RUNNER_TEMP/london-latency-results.tgz" . || true' EXIT
           python3 ops/v7_london_ssm_bootstrap.py \
             --expected-sha "$EXPECTED_SHA" --region eu-west-2 \
             --output "$out/bootstrap.$EXPECTED_SHA.json"
@@ -190,15 +191,14 @@ jobs:
             --expected-sha "$EXPECTED_SHA" --region eu-west-2 \
             --latency-samples "$LATENCY_SAMPLES" --output-dir "$out"
           test -s "$out/latency.$EXPECTED_SHA.shootout.json"
+          cat "$out/latency.$EXPECTED_SHA.shootout.json"
           python3 ops/v7_london_multipath_ssm.py \
             --expected-sha "$EXPECTED_SHA" --region eu-west-2 \
             --ws-duration 120 --tls-samples 30 --feed-duration 30 \
             --output "$out/multipath.$EXPECTED_SHA.json"
-          tar -C "$out" -czf "$RUNNER_TEMP/london-latency-results.tgz" .
-          cat "$out/latency.$EXPECTED_SHA.shootout.json"
 
       - name: Upload three-AZ latency evidence
-        if: env.PHASE == 'latency-lab'
+        if: always() && env.PHASE == 'latency-lab'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: v7-london-latency-${{ github.run_id }}
