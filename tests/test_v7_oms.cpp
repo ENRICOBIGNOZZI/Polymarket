@@ -193,6 +193,16 @@ void test_pending_delay_is_explicit_and_non_cancelable() {
     assert(order.record().delay_release_ns == 360);
     assert(order.apply(event(5, pm::v7::OmsEventType::WireSend, 361, 5)).state
            == pm::v7::OrderState::AckPending);
+    const auto latency = pm::v7::oms_latency_snapshot(order.record());
+    const auto has = [&](pm::v7::OmsLatencyLeg leg) {
+        return (latency.valid_mask & static_cast<std::uint32_t>(leg)) != 0;
+    };
+    assert(has(pm::v7::OmsLatencyLeg::QueueToDelay));
+    assert(has(pm::v7::OmsLatencyLeg::DelayDuration));
+    assert(has(pm::v7::OmsLatencyLeg::DelayToWire));
+    assert(latency.queue_to_delay_ns == 10);
+    assert(latency.delay_duration_ns == 250);
+    assert(latency.delay_to_wire_ns == 1);
 }
 
 void test_reconcile_filled_requires_exact_authoritative_sizes() {
