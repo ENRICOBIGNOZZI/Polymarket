@@ -990,6 +990,7 @@ public:
         connection_epoch_.fetch_add(1, std::memory_order_relaxed);
         reconnects_.fetch_add(1, std::memory_order_relaxed);
         reset_pure_arb_state();
+        std::fill(pure_arb_deep_trigger_active_.begin(), pure_arb_deep_trigger_active_.end(), 0);
         for (std::size_t i=1; i<lanes_.size(); ++i) {
             if (lanes_[i]) *lanes_[i] = pm::v7::maker::MakerInstrumentLane(1);
             feature_start_ns_[i] = 0;
@@ -2097,6 +2098,15 @@ private:
         pure_arb_event_queue_ =
             std::make_unique<pm::v7::SpscRing<PureArbQueuedEvent, kPureArbOutputCapacity>>();
     std::uint64_t pure_arb_event_queue_drops_ = 0;
+    std::unique_ptr<pm::v7::SpscRing<PureArbDeepEvidence, kPureArbDeepCapacity>>
+        pure_arb_deep_queue_ =
+            std::make_unique<pm::v7::SpscRing<PureArbDeepEvidence, kPureArbDeepCapacity>>();
+    std::uint64_t pure_arb_deep_candidates_ = 0;
+    std::uint64_t pure_arb_deep_queue_drops_ = 0;
+    std::uint64_t pure_arb_deep_snapshot_rejections_ = 0;
+    std::uint64_t pure_arb_deep_evaluations_ = 0;
+    std::vector<PureArbPairBinding> pure_arb_pair_by_handle_;
+    std::vector<std::uint8_t> pure_arb_deep_trigger_active_;
     std::vector<pm::v7::BookHotSnapshot> pure_arb_latest_books_;
     std::vector<std::uint64_t> pure_arb_book_epochs_;
     std::vector<std::int64_t> pure_arb_book_receive_wall_ms_;
