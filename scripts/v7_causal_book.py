@@ -93,6 +93,14 @@ class BookTimeline:
             except OSError: return
             self.handle.close(); self.handle = None
 
+    def between(self, market, token, start_exclusive_ms, end_inclusive_ms):
+        if end_inclusive_ms < start_exclusive_ms:
+            return []
+        return [
+            row for row in self.history.get((market, token), ())
+            if start_exclusive_ms < row["receive_wall_ms"] <= end_inclusive_ms
+        ]
+
     def asof(self, market, token, timestamp_ms):
         for row in reversed(self.history.get((market, token), ())):
             if row["receive_wall_ms"] <= timestamp_ms:
