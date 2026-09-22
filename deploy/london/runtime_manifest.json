@@ -26,6 +26,7 @@
     "scripts/paper_v7_execution_loop.sh",
     "scripts/v7_canonical_economics.py",
     "scripts/v7_capital_allocator.py",
+    "scripts/v7_clob_public_batch.py",
     "scripts/v7_clock_guard.py",
     "scripts/v7_combo_collateral_return_shadow.py",
     "scripts/v7_combo_market_source.py",
@@ -44,6 +45,7 @@
     "scripts/v7_maker_queue_calibration.py",
     "scripts/v7_model_runtime_approval.py",
     "scripts/v7_multi_asset_external_collector.py",
+    "scripts/v7_multi_az_fencing_guard.py",
     "scripts/v7_multi_crypto_oracle_hub.py",
     "scripts/v7_native_crypto_engine_manager.py",
     "scripts/v7_native_paper_settlement.py",
@@ -90,6 +92,7 @@
     "config/v7_lead_lag_taker_v1.json",
     "config/v7_live_model_scope.json",
     "config/v7_london_buffer_retention.json",
+    "config/v7_multi_az_fencing.json",
     "config/v7_native_critical_path_policy.json",
     "config/v7_native_risk_policy.json",
     "config/v7_process_manifest.json",
@@ -128,6 +131,7 @@
     "ops/systemd/polymarket-v7-retention.timer.in",
     "ops/v7_london_install_monitoring.sh",
     "ops/v7_london_monitoring_bundle.py",
+    "ops/v7_multi_az_fencing_lease.py",
     "ops/v7_runtime_supervisor.py",
     "ops/v7_service_entrypoint.sh",
     "ops/verify_v7_native_critical_path.py",
@@ -135,5 +139,5 @@
     "scripts/v7_collection_plane.sh",
     "scripts/v7_process_runtime.sh"
   ],
-  "version": 6
+  "version": 7
 }
