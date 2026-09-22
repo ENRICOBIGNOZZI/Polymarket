@@ -319,6 +319,22 @@ def test_maker_shadow_is_state_conditioned():
         assert token in source
 
 
+def test_native_wire_supports_explicit_post_only_gtc_without_enabling_it():
+    wire=(ROOT/"include/pm/v7_clob_wire.hpp").read_text()
+    serializer=(ROOT/"src/v7_clob_wire.cpp").read_text()
+    prepared=(ROOT/"src/v7_clob_prepared_order.cpp").read_text()
+    lane=(ROOT/"src/v7_native_clob_order_lane.cpp").read_text()
+    assert "GTC = 3" in wire
+    assert "bool post_only = false" in wire
+    assert '\\"postOnly\\":' in serializer
+    assert "request.post_only && !resting" in serializer
+    assert "fixed.post_only && !resting" in prepared
+    # The authenticated native lane remains taker-only: the GTC primitive is
+    # deliberately dormant until separate PAPER maker authorization.
+    assert "buy_gtc" not in lane
+    assert "sell_gtc" not in lane
+
+
 def test_runtime_remains_zero_authority():
     loop=(ROOT/"scripts/paper_v7_execution_loop.sh").read_text()
     for worker in (
