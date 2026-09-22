@@ -4,13 +4,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(PM_LONDON_RUNTIME_ONLY "Build only binaries required by the London execution runtime" OFF)
+option(PM_LONDON_LATENCY_BENCHMARKS "Build latency-only benchmarks with the London runtime" OFF)
+option(PM_V7_ENABLE_IPO "Enable Release interprocedural optimization when supported" ON)
 
 # Release-only interprocedural optimization.  This is deliberately portable:
 # unsupported toolchains fall back to ordinary Release instead of changing
 # runtime semantics or requiring host-specific ISA flags.
 include(CheckIPOSupported)
 check_ipo_supported(RESULT PM_V7_IPO_SUPPORTED OUTPUT PM_V7_IPO_ERROR LANGUAGES CXX)
-if(PM_V7_IPO_SUPPORTED)
+if(PM_V7_ENABLE_IPO AND PM_V7_IPO_SUPPORTED)
   set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 endif()
 
@@ -199,6 +201,16 @@ target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wped
 add_executable(polymarket_v7_ingress_latency_bench src/v7_ingress_latency_bench.cpp)
 target_link_libraries(polymarket_v7_ingress_latency_bench PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_ingress_latency_bench PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(PM_LONDON_RUNTIME_ONLY AND PM_LONDON_LATENCY_BENCHMARKS)
+add_executable(polymarket_v7_pure_arb_handoff_bench src/v7_pure_arb_handoff_bench.cpp)
+target_link_libraries(polymarket_v7_pure_arb_handoff_bench PRIVATE pm_v7_common Threads::Threads)
+target_compile_options(polymarket_v7_pure_arb_handoff_bench PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(polymarket_v7_paired_sign_bench src/v7_paired_sign_bench.cpp)
+target_link_libraries(polymarket_v7_paired_sign_bench PRIVATE pm_v7_clob_native Threads::Threads)
+target_compile_options(polymarket_v7_paired_sign_bench PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtime.cpp)
