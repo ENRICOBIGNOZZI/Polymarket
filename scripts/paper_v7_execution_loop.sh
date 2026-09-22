@@ -316,7 +316,7 @@ v7_register_child "$!"
 # crypto asset×horizon context. The universe collector atomically maintains the
 # exact 30-market / 60-token zero-authority selection and this observer reloads
 # at rollover. Model fitting and retrospective shadows remain off London.
-v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA"   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only   --output-dir "$RUN_ROOT/research/repricing_book"   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" --pure-arb-paper   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
+v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA"   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only   --output-dir "$RUN_ROOT/research/repricing_book"   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" --pure-arb-paper   --pure-arb-reserve-per-share 0.0005 --pure-arb-max-leg-skew-ms 100   --pure-arb-max-receive-to-decision-ms 50   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 # Zero-authority PM book evidence is diagnostically important but reconstructible.
 # It must not stop the native execution owner if it rolls or exits during market refresh.
 v7_register_optional_child "$!"
@@ -472,6 +472,46 @@ if [[ "$universe_ready" != 1 ]]; then
   echo "adaptive V7 universe did not complete exhaustive discovery" >&2
   exit 77
 fi
+
+# Pure-arbitrage frequency expansion stays zero-authority PAPER. These workers
+# consume the canonical causal PM tape and verified settlement metadata only;
+# they cannot submit orders, allocate capital, or promote themselves.
+PURE_ARB_DIR="$RUN_ROOT/research/repricing_book"
+mkdir -p "$PURE_ARB_DIR"
+
+v7_exec_class COLLECTOR python3 scripts/v7_multi_crypto_oracle_hub.py \
+  --output "$PURE_ARB_DIR/oracle_hub_status.json" --model-sha "$SHA" \
+  --settlement-registry "$CRYPTO_SETTLEMENT_MARKET_REGISTRY" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  >> "$PURE_ARB_DIR/oracle_hub.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_settlement_source_arb_shadow.py \
+  --oracle-status "$PURE_ARB_DIR/oracle_hub_status.json" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/settlement_source_arb_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/settlement_source_arb_status.json" \
+  --target-shares 5 --minimum-fill-shares 1 \
+  --redemption-reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
+  --paper-arrival-delay-ms 50 --maximum-book-age-ms 100 --interval-ms 5 \
+  >> "$PURE_ARB_DIR/settlement_source_arb.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_two_sided_complete_set_shadow.py \
+  --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --trade-tape "$PURE_ARB_DIR/fillability_ws.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/two_sided_complete_set_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/two_sided_complete_set_status.json" \
+  --ttl-arms-ms 250,500,1000 --quote-depth-fraction 0.25 \
+  --min-quote-shares 1 --max-quote-shares 20 --queue-ahead-multiplier 1.25 \
+  --reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
+  --maximum-leg-skew-ms 100 --interval-ms 10 \
+  >> "$PURE_ARB_DIR/two_sided_complete_set.log" 2>&1 &
+v7_register_optional_child "$!"
 read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS MAKER_ROTATION_MIN_FILL MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
