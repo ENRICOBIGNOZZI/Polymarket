@@ -5,6 +5,7 @@
 #include "pm/v7_coinbase_l2_observer.hpp"
 #include "pm/v7_crypto_decision_lane.hpp"
 #include "pm/v7_probability_model.hpp"
+#include "pm/v7_pure_arb_lane.hpp"
 #include "pm/v7_external_ingress.hpp"
 #include "pm/v7_external_ws.hpp"
 #include "pm/v7_ingress_wakeup.hpp"
@@ -120,6 +121,9 @@ struct Options {
     CapitalLimits capital_limits{};
     double taker_fee_rate = 0.0;
     double taker_fee_exponent = 1.0;
+    double pure_arb_reserve_per_share = 0.0005;
+    std::int64_t pure_arb_max_leg_skew_ns = 100'000'000LL;
+    bool pure_arb_native_shadow = false;
     int duration_seconds = 0;
     std::int64_t paper_venue_delay_ns = -1;
     std::int64_t paper_assumed_transport_delay_ns = 250'000'000LL;
@@ -182,6 +186,9 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--max-single-order-microdollars") out.capital_limits.max_single_order_microdollars = bounded_integer<std::int64_t>(next(), 1, 333'333'333);
         else if (arg == "--taker-fee-rate") out.taker_fee_rate = bounded_double(next(), 0.0, 1.0);
         else if (arg == "--taker-fee-exponent") out.taker_fee_exponent = bounded_double(next(), 0.0, 10.0);
+        else if (arg == "--pure-arb-reserve-per-share") out.pure_arb_reserve_per_share = bounded_double(next(), 0.0, 0.25);
+        else if (arg == "--pure-arb-max-leg-skew-ns") out.pure_arb_max_leg_skew_ns = bounded_integer<std::int64_t>(next(), 1'000, 5'000'000'000LL);
+        else if (arg == "--pure-arb-native-shadow") out.pure_arb_native_shadow = true;
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 0, 86'400);
         else if (arg == "--paper-venue-delay-ns") out.paper_venue_delay_ns = bounded_integer<std::int64_t>(next(), -1, 5'000'000'000LL);
         else if (arg == "--paper-assumed-transport-delay-ns") out.paper_assumed_transport_delay_ns = bounded_integer<std::int64_t>(next(), 1, 5'000'000'000LL);
