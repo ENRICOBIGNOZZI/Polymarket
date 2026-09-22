@@ -537,9 +537,9 @@ v7_exec_class CONTROL python3 scripts/v7_clock_guard.py \
 v7_register_child "$!"
 
 v7_exec_class CONTROL python3 scripts/v7_multi_az_fencing_supervisor.py \
-  --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
-  --server-id "$SERVER_ID" --owner-id "$RUN_ID:$SERVER_ID" \
-  --ttl-seconds 15 --interval-seconds 5 \
+  --repository-root "$ROOT" --run-root "$RUN_ROOT" \
+  --config "$ROOT/config/v7_failover_fencing.json" --model-sha "$SHA" \
+  --server-id "$SERVER_ID" --run-id "$RUN_ID" --interval-seconds 1 \
   >> "$RUN_ROOT/fencing_supervisor.log" 2>&1 &
 v7_register_child "$!"
 
@@ -549,7 +549,7 @@ if [[ "${PM_V7_MULTI_AZ_FENCING_REQUIRED:-0}" == "1" ]]; then
 fi
 v7_exec_class CONTROL python3 scripts/v7_multi_az_fencing_guard.py \
   --receipt "$RUN_ROOT/control/az_fencing_lease.json" \
-  --model-sha "$SHA" --owner-id "$SERVER_ID" \
+  --model-sha "$SHA" --owner-id "$RUN_ID:$SERVER_ID" \
   --output "$RUN_ROOT/control/az_fencing_guard.json" --kill-marker "$KILL" \
   --minimum-remaining-ms 5000 --interval-ms 1000 \
   "${FENCING_GUARD_ARGS[@]}" \
@@ -816,7 +816,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 30
+v7_assert_registered_child_count 31
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
