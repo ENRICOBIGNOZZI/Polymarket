@@ -287,8 +287,7 @@ class Shadow:
             "no_fill_ms": None,
             "queue_arms": {
                 f"q={arm:.3f}|c={relief:.3f}": {
-                    "multiplier": float(arm.get("multiplier") or 0.0),
-                    "cancel_relief_fraction": float(arm.get("cancel_relief_fraction") or 0.0),
+                    "multiplier": arm,
                     "cancel_relief_fraction": relief,
                     "yes_queue": arm * yes_q,
                     "no_queue": arm * no_q,
