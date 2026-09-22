@@ -25,30 +25,39 @@ jobs:
           role-to-assume: ${{ env.ROLE_ARN }}
           role-session-name: rich-history-stale-cleanup
           aws-region: eu-west-2
-      - name: Kill only stale research process
+      - name: Kill only exact-cwd stale research process
         shell: bash
         run: |
           set -euo pipefail
           instance="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-stale-cleanup.json"))["instance_id"])')"
           stale="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-stale-cleanup.json"))["stale_prefix"])')"
-          keep="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-stale-cleanup.json"))["keep_prefix"])')"
-          python3 - "$stale" "$keep" <<'PY' >/tmp/params.json
+          python3 - "$stale" <<'PY' >/tmp/params.json
           import json,shlex,sys
-          stale,keep=sys.argv[1],sys.argv[2]
+          stale=sys.argv[1]
           assert stale.startswith('/tmp/polymarket-rich-history-')
-          assert keep.startswith('/tmp/polymarket-rich-history-')
-          assert stale != keep
-          cmd=(
-              "set -eu; "
-              "echo BEFORE; ps -eo pid,etime,pcpu,pmem,rss,args | grep -F "+shlex.quote(stale)+" | grep -v grep || true; "
-              "pids=$(ps -eo pid=,args= | awk -v s="+shlex.quote(stale)+" 'index($0,s){print $1}'); "
-              "if [ -n \"$pids\" ]; then kill $pids || true; sleep 2; fi; "
-              "pids=$(ps -eo pid=,args= | awk -v s="+shlex.quote(stale)+" 'index($0,s){print $1}'); "
-              "if [ -n \"$pids\" ]; then kill -9 $pids || true; fi; "
-              "rm -rf "+shlex.quote(stale)+"; "
-              "echo AFTER_STALE; ps -eo pid,etime,pcpu,pmem,rss,args | grep -F "+shlex.quote(stale)+" | grep -v grep || true; "
-              "echo KEEP; ps -eo pid,etime,pcpu,pmem,rss,args | grep -F "+shlex.quote(keep)+" | grep -v grep || true"
-          )
+          cmd=f'''set -eu
+echo BEFORE
+for p in /proc/[0-9]*; do
+  pid=${{p##*/}}
+  cwd=$(readlink "$p/cwd" 2>/dev/null || true)
+  [ "$cwd" = {shlex.quote(stale)} ] || continue
+  tr '\\0' ' ' < "$p/cmdline" 2>/dev/null || true
+  echo
+  kill "$pid" 2>/dev/null || true
+done
+sleep 2
+for p in /proc/[0-9]*; do
+  pid=${{p##*/}}
+  cwd=$(readlink "$p/cwd" 2>/dev/null || true)
+  [ "$cwd" = {shlex.quote(stale)} ] || continue
+  kill -9 "$pid" 2>/dev/null || true
+done
+rm -rf {shlex.quote(stale)}
+echo AFTER
+for p in /proc/[0-9]*; do
+  cwd=$(readlink "$p/cwd" 2>/dev/null || true)
+  [ "$cwd" = {shlex.quote(stale)} ] && echo "STALE_REMAINS $p" || true
+done'''
           print(json.dumps({"commands":[cmd]}))
           PY
           cmdid="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters file:///tmp/params.json --query 'Command.CommandId' --output text)"
