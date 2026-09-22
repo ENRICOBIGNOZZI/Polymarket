@@ -71,6 +71,7 @@ jobs:
           profile="$RUNNER_TEMP/v7-tailnet-chrome"
           mkdir -p "$profile"
           google-chrome \
+            --headless=new \
             --remote-debugging-port=9222 \
             --user-data-dir="$profile" \
             --no-first-run \
