@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Long-running fail-closed multi-AZ lease supervisor for the V7 PAPER runtime."""
+"""Long-running wrapper for the canonical AWS active/passive fencing lease.
+
+When multi-AZ fencing is disabled this remains an idle, healthy control process.
+When enabled it launches exactly one canonical DynamoDB lease worker and mirrors
+its state. Lease loss is fatal and propagated through process exit.
+"""
 from __future__ import annotations
 import argparse,json,os,signal,subprocess,sys,time
 from pathlib import Path
@@ -10,68 +15,81 @@ _STOP=False
 def stop(*_):
     global _STOP;_STOP=True
 
+def load(path:Path)->dict:
+    try:v=json.loads(path.read_text(encoding="utf-8"))
+    except (OSError,json.JSONDecodeError):return {}
+    return v if isinstance(v,dict) else {}
+
 def atomic(path:Path,value:dict)->None:
     path.parent.mkdir(parents=True,exist_ok=True)
     tmp=path.with_suffix(path.suffix+".tmp")
-    tmp.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8");tmp.replace(path)
+    tmp.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8")
+    os.replace(tmp,path)
 
 def main()->int:
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repository-root",type=Path,required=True)
     ap.add_argument("--run-root",type=Path,required=True)
+    ap.add_argument("--config",type=Path,required=True)
     ap.add_argument("--model-sha",required=True);ap.add_argument("--server-id",required=True)
-    ap.add_argument("--owner-id",required=True);ap.add_argument("--lease-key",default="polymarket-v7-paper")
-    ap.add_argument("--ttl-seconds",type=int,default=15);ap.add_argument("--interval-seconds",type=float,default=5)
+    ap.add_argument("--run-id",required=True)
+    ap.add_argument("--interval-seconds",type=float,default=1.0)
     args=ap.parse_args()
-    if len(args.model_sha)!=40 or not args.server_id or not args.owner_id:
-        raise SystemExit("invalid fencing identity")
-    receipt=args.run_root/"control/fencing_receipt.json"
+    cfg=load(args.config)
+    if (cfg.get("schema")!="polymarket_v7_failover_fencing_v1"
+        or cfg.get("paper_only") is not True or len(args.model_sha)!=40):
+        raise SystemExit("invalid fencing config")
+    enabled=cfg.get("enabled") is True
+    table_env=str(cfg.get("table_name_environment") or "PM_V7_FENCING_TABLE")
+    table=os.environ.get(table_env,"").strip()
+    receipt=args.run_root/"control/az_fencing_lease.json"
     status=args.run_root/"control/fencing_supervisor_status.json"
-    table=os.environ.get("PM_V7_FENCING_TABLE","").strip()
-    required=os.environ.get("PM_V7_MULTI_AZ_FENCING_REQUIRED","").lower() in {"1","true","yes"}
+    owner=f"{args.run_id}:{args.server_id}"
     signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
-    if required and not table:
-        atomic(status,{"schema":SCHEMA,"state":"REQUIRED_TABLE_MISSING","safe":False,
-                       "paper_only":True,"model_sha":args.model_sha})
-        return 2
-    if not table:
+    if not enabled:
         while not _STOP:
-            atomic(status,{"schema":SCHEMA,"state":"NOT_REQUIRED_SINGLE_NODE","safe":True,
+            atomic(status,{"schema":SCHEMA,"state":"DISABLED_SINGLE_ACTIVE_NODE","safe":True,
                            "paper_only":True,"authenticated_execution":False,
                            "real_order_submission":False,"model_sha":args.model_sha,
-                           "server_id":args.server_id,"timestamp_ms":time.time_ns()//1_000_000})
+                           "owner":owner,"timestamp_ms":time.time_ns()//1_000_000})
             time.sleep(args.interval_seconds)
         return 0
-    lease=args.repository_root/"ops/v7_multi_az_fencing_lease.py"
-    guard=args.repository_root/"scripts/v7_multi_az_fencing_guard.py"
-    action="acquire"
+    if not table:
+        atomic(status,{"schema":SCHEMA,"state":"FENCING_TABLE_MISSING","safe":False,
+                       "paper_only":True,"model_sha":args.model_sha,"owner":owner})
+        return 2
+    worker=args.repository_root/"ops/v7_aws_fencing_lease.py"
+    lease_id=str(cfg.get("lease_id") or "")
+    lease_ms=int(cfg.get("lease_duration_ms") or 15000)
+    renew_ms=int(cfg.get("renew_interval_ms") or 5000)
+    region=str(cfg.get("region") or "eu-west-2")
+    proc=subprocess.Popen([
+        sys.executable,str(worker),"--table",table,"--lease-id",lease_id,
+        "--owner",owner,"--model-sha",args.model_sha,"--run-id",args.run_id,
+        "--region",region,"--lease-ms",str(lease_ms),"--renew-ms",str(renew_ms),
+        "--output",str(receipt)],cwd=args.repository_root)
     try:
         while not _STOP:
-            cmd=[sys.executable,str(lease),action,"--table",table,"--lease-key",args.lease_key,
-                 "--owner-id",args.owner_id,"--server-id",args.server_id,
-                 "--model-sha",args.model_sha,"--ttl-seconds",str(args.ttl_seconds),
-                 "--output",str(receipt)]
-            cp=subprocess.run(cmd,cwd=args.repository_root,text=True,capture_output=True)
-            if cp.returncode!=0:
-                atomic(status,{"schema":SCHEMA,"state":"LEASE_ACQUIRE_OR_RENEW_FAILED",
-                               "safe":False,"paper_only":True,"model_sha":args.model_sha,
-                               "server_id":args.server_id,"timestamp_ms":time.time_ns()//1_000_000})
-                return 2
-            gp=subprocess.run([
-                sys.executable,str(guard),"--receipt",str(receipt),
-                "--model-sha",args.model_sha,"--server-id",args.server_id,
-                "--output",str(status),"--minimum-remaining-ms","5000","--required"],
-                cwd=args.repository_root,text=True,capture_output=True)
-            if gp.returncode!=0:return 2
-            action="renew";time.sleep(args.interval_seconds)
+            rc=proc.poll()
+            current=load(receipt)
+            held=(current.get("state")=="LEASE_HELD" and current.get("model_sha")==args.model_sha
+                  and current.get("owner")==owner)
+            atomic(status,{"schema":SCHEMA,
+                           "state":"LEASE_HELD" if held and rc is None else "LEASE_NOT_HELD",
+                           "safe":bool(held and rc is None),
+                           "paper_only":True,"authenticated_execution":False,
+                           "real_order_submission":False,"model_sha":args.model_sha,
+                           "owner":owner,"worker_returncode":rc,
+                           "fencing_token":current.get("fencing_token"),
+                           "lease_until_ms":current.get("lease_until_ms"),
+                           "timestamp_ms":time.time_ns()//1_000_000})
+            if rc is not None:return 3
+            time.sleep(args.interval_seconds)
     finally:
-        if table and receipt.exists():
-            subprocess.run([
-                sys.executable,str(lease),"release","--table",table,
-                "--lease-key",args.lease_key,"--owner-id",args.owner_id,
-                "--server-id",args.server_id,"--model-sha",args.model_sha,
-                "--ttl-seconds",str(args.ttl_seconds),"--output",str(receipt)],
-                cwd=args.repository_root,text=True,capture_output=True)
+        if proc.poll() is None:
+            proc.terminate()
+            try:proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:proc.kill()
     return 0
 
 if __name__=="__main__":raise SystemExit(main())
