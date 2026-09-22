@@ -88,6 +88,23 @@ struct NativeObservation {
     std::uint8_t kind = 0, reason = 0, valid = 0, accepted = 0, trade_side = 0;
     std::uint8_t expected_fill_probability_valid = 0;
     std::uint8_t economic_score_fill_conditioned = 0;
+
+    // kind=7: zero-authority complete-set pure-arb shadow. These fields are
+    // research evidence only and never enter OMS, capital or inventory.
+    std::int64_t pure_arb_shares_microunits = 0;
+    std::int64_t pure_arb_decision_compute_ns = 0;
+    std::int64_t pure_arb_receive_to_decision_ns = 0;
+    double pure_arb_reserve_per_share = 0.0;
+    double pure_arb_gross_edge_per_share = 0.0;
+    double pure_arb_conservative_edge_per_share = 0.0;
+    double pure_arb_marginal_edge_per_share = 0.0;
+    double pure_arb_gross_locked_pnl = 0.0;
+    double pure_arb_conservative_locked_pnl = 0.0;
+    double pure_arb_yes_vwap = 0.0;
+    double pure_arb_no_vwap = 0.0;
+    std::uint16_t pure_arb_yes_levels_used = 0;
+    std::uint16_t pure_arb_no_levels_used = 0;
+    std::uint8_t pure_arb_kind = 0; // 1=BUY_COMPLETE_SET, 2=SELL_COMPLETE_SET
 };
 
 struct NativeRuntimeEvidenceConfig {
