@@ -1304,7 +1304,7 @@ public:
                 {"no_vwap", queued.no_vwap},
                 {"yes_levels_used", queued.yes_levels_used},
                 {"no_levels_used", queued.no_levels_used},
-                {"sizing_depth", "L10_VWAP_POSITIVE_MARGINAL_EDGE"},
+                {"sizing_depth", "LOCAL_DEEP_BOOK_POSITIVE_MARGINAL_EDGE"},
                 {"fee_rate", market.fee_rate},
                 {"fee_exponent", market.fee_exponent},
                 {"artificial_delay_ms", 0},
@@ -1481,23 +1481,89 @@ public:
 
         if (buy_sweep.shares_microunits > 0) {
             ++pure_arb_funnel_.buy_fresh_decision;
-            if (!market.buy.active) {
-                record_pure_arb_cycle(
-                    token->market_handle, market, market.buy, 1, buy_sweep,
-                    micro_shares(buy_qty_l1), row.receive_wall_ms,
-                    row.receive_monotonic_ns, decision_ns);
-            }
         } else {
             market.buy.active = false;
         }
 
         if (sell_sweep.shares_microunits > 0) {
             ++pure_arb_funnel_.sell_fresh_decision;
+        } else {
+            market.sell.active = false;
+        }
+    }
+
+    void evaluate_pure_arb_deep(const PureArbDeepEvidence& row) {
+        if (!pure_arb_paper_ || row.market_handle == 0
+            || row.market_handle >= pure_arb_markets_.size()) return;
+        if (row.connection_epoch != connection_epoch_.load(std::memory_order_relaxed)) {
+            ++pure_arb_deep_snapshot_rejections_;
+            return;
+        }
+        auto& market = pure_arb_markets_[row.market_handle];
+        if (!(market.start_wall_ms <= row.receive_wall_ms
+              && row.receive_wall_ms < market.end_wall_ms)
+            || market.fee_verified == 0
+            || row.yes.valid == 0 || row.no.valid == 0
+            || row.yes.lineage_continuous == 0 || row.no.lineage_continuous == 0
+            || row.yes.bid_truncated != 0 || row.yes.ask_truncated != 0
+            || row.no.bid_truncated != 0 || row.no.ask_truncated != 0) {
+            ++pure_arb_deep_snapshot_rejections_;
+            return;
+        }
+        const auto skew_ns = row.yes.receive_monotonic_ns >= row.no.receive_monotonic_ns
+            ? row.yes.receive_monotonic_ns - row.no.receive_monotonic_ns
+            : row.no.receive_monotonic_ns - row.yes.receive_monotonic_ns;
+        if (skew_ns > pure_arb_max_leg_skew_ms_ * 1'000'000LL) {
+            ++pure_arb_deep_snapshot_rejections_;
+            return;
+        }
+
+        const auto prefund_microunits = static_cast<std::int64_t>(std::llround(
+            std::max(0.0, market.prefunded_complete_set_shares_remaining)
+            * kMicrounitsPerShare));
+        const auto buy_sweep = sweep_pure_arb(row.yes, row.no, market, true);
+        const auto sell_sweep = sweep_pure_arb(
+            row.yes, row.no, market, false, prefund_microunits);
+        ++pure_arb_deep_evaluations_;
+
+        const auto decision_ns = monotonic_ns();
+        const auto receive_to_decision = std::max<std::int64_t>(
+            0, decision_ns - row.trigger_receive_monotonic_ns);
+        if (receive_to_decision > pure_arb_receive_to_decision_limit_ns_) {
+            ++pure_arb_funnel_.stale_decision_rejections;
+            market.buy.active = false;
+            market.sell.active = false;
+            return;
+        }
+
+        const double buy_l1 = row.yes.ask_level_count > 0 && row.no.ask_level_count > 0
+            ? micro_shares(std::min(
+                row.yes.ask_levels[0].quantity_microunits,
+                row.no.ask_levels[0].quantity_microunits))
+            : 0.0;
+        const double sell_l1 = row.yes.bid_level_count > 0 && row.no.bid_level_count > 0
+            ? micro_shares(std::min(
+                row.yes.bid_levels[0].quantity_microunits,
+                row.no.bid_levels[0].quantity_microunits))
+            : 0.0;
+
+        if (buy_sweep.shares_microunits > 0) {
+            if (!market.buy.active) {
+                record_pure_arb_cycle(
+                    row.market_handle, market, market.buy, 1, buy_sweep,
+                    buy_l1, row.receive_wall_ms,
+                    row.trigger_receive_monotonic_ns, decision_ns);
+            }
+        } else {
+            market.buy.active = false;
+        }
+
+        if (sell_sweep.shares_microunits > 0) {
             if (!market.sell.active) {
                 record_pure_arb_cycle(
-                    token->market_handle, market, market.sell, 2, sell_sweep,
-                    micro_shares(sell_qty_l1), row.receive_wall_ms,
-                    row.receive_monotonic_ns, decision_ns);
+                    row.market_handle, market, market.sell, 2, sell_sweep,
+                    sell_l1, row.receive_wall_ms,
+                    row.trigger_receive_monotonic_ns, decision_ns);
                 market.prefunded_complete_set_shares_remaining = std::max(
                     0.0,
                     market.prefunded_complete_set_shares_remaining - sell_sweep.shares());
