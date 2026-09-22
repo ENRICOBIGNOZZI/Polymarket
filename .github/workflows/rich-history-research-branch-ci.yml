@@ -1,0 +1,36 @@
+name: Rich-history research branch CI
+
+on:
+  push:
+    branches:
+      - rich-history-alpha-20260922
+    paths:
+      - research/walk_forward_v3/rich_history_information.py
+      - ops/v7_rich_history_information_ssm.py
+      - .github/workflows/rich-history-research-branch-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Compile research modules
+        run: |
+          python3 -m py_compile \
+            research/walk_forward_v3/rich_history_information.py \
+            ops/v7_rich_history_information_ssm.py
+      - name: Static research-safety assertions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text=Path('research/walk_forward_v3/rich_history_information.py').read_text()
+          assert 'ONE_ENTRY_PER_SHOCK' in text
+          assert 'WHOLE_MARKET_START_CHRONOLOGICAL_60_20_20' in text
+          assert 'MIN_VALIDATION_MSE_ON_OBSERVED_NET_CASH_PNL' in text
+          assert 'real_order_submission' not in text or 'SAFETY' in text
+          PY
