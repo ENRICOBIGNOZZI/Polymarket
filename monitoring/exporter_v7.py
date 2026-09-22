@@ -310,6 +310,11 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
         _metric("polymarket_pure_arb_fee_blocked_evaluations_total",
                 status.get("fee_blocked_evaluations")),
         _metric("polymarket_pure_arb_fee_ready_contexts", status.get("fee_ready_contexts")),
+        _metric("polymarket_pure_arb_active_contexts", status.get("active_contexts")),
+        _metric("polymarket_pure_arb_subscribed_contexts", status.get("subscribed_contexts")),
+        _metric("polymarket_pure_arb_preloaded_contexts", status.get("preloaded_contexts")),
+        _metric("polymarket_pure_arb_subscribed_fee_ready_contexts",
+                status.get("subscribed_fee_ready_contexts")),
         _metric("polymarket_pure_arb_last_decision_compute_ns",
                 status.get("last_decision_compute_ns")),
         _metric("polymarket_pure_arb_max_decision_compute_ns",
@@ -340,6 +345,9 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
             continue
         asset = _prom_label(row.get("asset"))
         horizon = _prom_label(row.get("horizon"))
+        context_labels = {"asset": asset, "horizon": horizon}
+        lines.append(_metric("polymarket_pure_arb_context_window_active",
+                             row.get("active_window") is True, context_labels))
         for field, kind in (
             ("buy_complete_set", "BUY_COMPLETE_SET"),
             ("sell_complete_set", "SELL_COMPLETE_SET"),
