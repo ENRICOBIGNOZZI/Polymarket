@@ -149,6 +149,38 @@ int main() {
         observation.expected_fill_probability_valid = 1;
         observation.economic_score_fill_conditioned = 0;
         assert(writer.publish_observation(observation));
+
+        NativeObservation pure_arb{};
+        pure_arb.kind = 7;
+        pure_arb.instrument_handle = 11;
+        pure_arb.book_version = 10;
+        pure_arb.connection_epoch = 3;
+        pure_arb.receive_ns = 1'000'020'000;
+        pure_arb.exchange_ns = 1'700'000'000'250'000'000LL;
+        pure_arb.observed_ns = 1'000'040'000;
+        pure_arb.decision_ns = 1'000'040'000;
+        pure_arb.close_ns = 2'000'010'000;
+        pure_arb.valid = 1;
+        pure_arb.accepted = 1;
+        pure_arb.repricing_pair_valid = 1;
+        pure_arb.yes_bid_e4 = 4000; pure_arb.yes_ask_e4 = 4100;
+        pure_arb.no_bid_e4 = 5800; pure_arb.no_ask_e4 = 5900;
+        pure_arb.pure_arb_kind = 1;
+        pure_arb.pure_arb_shares_microunits = 5'000'000;
+        pure_arb.pure_arb_decision_compute_ns = 7'000;
+        pure_arb.pure_arb_receive_to_decision_ns = 20'000;
+        pure_arb.pure_arb_reserve_per_share = .0005;
+        pure_arb.pure_arb_gross_edge_per_share = .01;
+        pure_arb.pure_arb_conservative_edge_per_share = .0095;
+        pure_arb.pure_arb_marginal_edge_per_share = .008;
+        pure_arb.pure_arb_gross_locked_pnl = .05;
+        pure_arb.pure_arb_conservative_locked_pnl = .0475;
+        pure_arb.pure_arb_yes_vwap = .40;
+        pure_arb.pure_arb_no_vwap = .59;
+        pure_arb.pure_arb_yes_levels_used = 2;
+        pure_arb.pure_arb_no_levels_used = 1;
+        assert(writer.publish_optional_observation(pure_arb));
+
         NativeEvidenceEvent probability_order = order;
         probability_order.command.client_order_id = 21;
         probability_order.probability = {.up=.60, .lower=.52, .upper=.68,
@@ -180,6 +212,9 @@ int main() {
         assert(status.at("decision_observations").as_int64() == 1);
         assert(status.at("accepted_decision_observations").as_int64() == 1);
         assert(status.at("rejected_decision_observations").as_int64() == 0);
+        assert(status.at("pure_arb_shadow_observations").as_int64() == 1);
+        assert(status.at("pure_arb_shadow_buy_cycles").as_int64() == 1);
+        assert(status.at("pure_arb_shadow_sell_cycles").as_int64() == 0);
         assert(status.at("decision_reason_counts").as_object().at("EXPIRED_SIGNAL").as_int64() == 1);
     }
 
@@ -290,6 +325,18 @@ int main() {
         assert(observation.at("trigger_wall_ns").as_int64() > 0);
         assert(observation.at("close_wall_ns").as_int64() > observation.at("decision_wall_ns").as_int64());
         assert(observation.at("bids").as_array().size() == 1);
+        std::string pure_arb_line;
+        assert(std::getline(input, pure_arb_line));
+        const auto pure_arb_observation = json::parse(pure_arb_line).as_object();
+        assert(pure_arb_observation.at("kind").as_int64() == 7);
+        assert(!pure_arb_observation.at("execution_authority").as_bool());
+        const auto& pure = pure_arb_observation.at("pure_arb_shadow").as_object();
+        assert(!pure.at("execution_authority").as_bool());
+        assert(pure.at("kind").as_string() == "BUY_COMPLETE_SET");
+        assert(pure.at("shares_microunits").as_int64() == 5'000'000);
+        assert(pure.at("reserve_per_share").as_double() == .0005);
+        assert(pure.at("decision_compute_ns").as_int64() == 7'000);
+        assert(pure.at("receive_to_decision_ns").as_int64() == 20'000);
         ++observation_files;
     }
     assert(observation_files == 1); // Observations never increase the ledger rows.
