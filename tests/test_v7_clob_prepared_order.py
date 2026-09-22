@@ -15,7 +15,7 @@ using namespace pm::v7::clob_wire;
 bool same_case(std::string_view side, MarketOrderType type,
                std::string_view maker_amount, std::string_view salt,
                std::string_view signature, std::string_view taker_amount,
-               std::string_view timestamp) {
+               std::string_view timestamp, bool post_only = false) {
     SignedMarketOrderView order{
         "0x0000000000000000000000000000000000000000000000000000000000000000",
         "0",
@@ -31,10 +31,11 @@ bool same_case(std::string_view side, MarketOrderType type,
         timestamp,
         "71321045679252212594626385532706912750332728571942532289631379312455583992563"
     };
-    PostMarketOrderView request{order, "owner-test-key", type};
+    PostMarketOrderView request{order, "owner-test-key", type, post_only};
     PreparedMarketOrderStaticView fixed{
         order.builder, order.expiration, order.maker, order.metadata, order.side,
-        order.signature_type, order.signer, order.token_id, request.owner, request.order_type};
+        order.signature_type, order.signer, order.token_id, request.owner, request.order_type,
+        post_only};
     PreparedMarketOrderJson prepared(fixed);
     if (!prepared.valid()) return false;
     MarketOrderDynamicView dynamic{
@@ -71,6 +72,13 @@ int main() {
     fixed.side = "BUY";
     fixed.expiration = "1";
     if (PreparedMarketOrderJson(fixed).valid()) return 9;
+    fixed.expiration = "0";
+    fixed.order_type = MarketOrderType::FAK;
+    fixed.post_only = true;
+    if (PreparedMarketOrderJson(fixed).valid()) return 11;
+    fixed.order_type = MarketOrderType::GTC;
+    fixed.post_only = true;
+    if (!PreparedMarketOrderJson(fixed).valid()) return 12;
     return 0;
 }
 '''
