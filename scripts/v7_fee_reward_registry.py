@@ -72,10 +72,9 @@ def _fee(market: dict[str, Any], now_ms: int, ttl_ms: int) -> dict[str, Any]:
 
 def _reward(row: dict[str, Any] | None, snapshot: dict[str, Any], now_ms: int,
             ttl_ms: int, exchange_semantics: dict[str, Any] | None = None) -> dict[str, Any]:
-    # Rebates are ancillary realized PnL, never part of the entry-edge gate.
-    # Until a market-scoped realized reward source exists, expected value stays
-    # exactly zero. The current crypto rebate fraction is retained only as a
-    # reference parameter for attribution/counterfactuals.
+    # Rewards/rebates are ancillary PnL and can never rescue a negative entry
+    # edge. A reward contribution becomes allocatable only from an explicit,
+    # market-scoped, fresh, verified realized-PnL rate snapshot.
     semantics=exchange_semantics if isinstance(exchange_semantics,dict) else {}
     rebate=semantics.get("maker_rebates") if isinstance(semantics.get("maker_rebates"),dict) else {}
     try: reference_fraction=float(rebate.get("crypto_reference_fraction"))
@@ -85,17 +84,43 @@ def _reward(row: dict[str, Any] | None, snapshot: dict[str, Any], now_ms: int,
         and math.isfinite(reference_fraction) and 0<=reference_fraction<=1
         and rebate.get("use_in_entry_gate") is False
     )
+
+    verified=False
+    realized_rate=0.0
+    source="unknown_reward_forced_zero"
+    observed=now_ms
+    expires=now_ms
+    if (snapshot.get("schema")=="polymarket_v7_verified_maker_reward_snapshot_v1"
+            and isinstance(row,dict) and row.get("verified") is True):
+        try:
+            observed=int(row.get("observed_at_ms") or 0)
+            expires=int(row.get("expires_at_ms") or 0)
+            realized_rate=float(row.get("realized_pnl_pusd_per_capital_second"))
+        except (TypeError,ValueError):
+            realized_rate=math.nan
+        verified=(
+            observed>0 and observed<=now_ms<=expires
+            and math.isfinite(realized_rate) and realized_rate>=0.0
+        )
+        if verified:
+            source="verified_realized_maker_reward_rate"
+        else:
+            realized_rate=0.0
+            observed=now_ms
+            expires=now_ms
+
     return {
-        "verified": False, "eligible": False, "expected_value_usd": 0.0,
+        "verified": verified, "eligible": verified, "expected_value_usd": 0.0,
+        "realized_pnl_pusd_per_capital_second": realized_rate if verified else 0.0,
         "maximum_spread_cents": None, "minimum_quote_shares": None,
-        "pool_daily_rate_usd": 0.0, "source": "unknown_reward_forced_zero",
-        "observed_at_ms": now_ms, "expires_at_ms": now_ms,
-        "confidence": 0.0, "scoring_formula": None,
-        "payout_status": "NOT_ATTRIBUTED",
+        "pool_daily_rate_usd": 0.0, "source": source,
+        "observed_at_ms": observed, "expires_at_ms": expires,
+        "confidence": 1.0 if verified else 0.0, "scoring_formula": None,
+        "payout_status": "REALIZED_RATE_VERIFIED" if verified else "NOT_ATTRIBUTED",
         "maker_rebate_reference_fraction": reference_fraction if reference_verified else None,
         "maker_rebate_reference_verified": reference_verified,
         "maker_rebate_used_in_entry_gate": False,
-        "reference_semantics": "ANCILLARY_ONLY_NOT_EXPECTED_VALUE",
+        "reference_semantics": "ANCILLARY_ONLY_NOT_ENTRY_EDGE",
     }
 
 
