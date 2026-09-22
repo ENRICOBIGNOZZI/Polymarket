@@ -200,9 +200,10 @@ enum class DecisionReason : std::uint8_t {
     LegSkewExceeded = 6,
     LineageInvalid = 7,
     BookInvalid = 8,
-    NoPositiveEdge = 9,
-    BelowVenueMinimum = 10,
-    SellInventoryUnavailable = 11,
+    FeeInvalid = 9,
+    NoPositiveEdge = 10,
+    BelowVenueMinimum = 11,
+    SellInventoryUnavailable = 12,
 };
 
 enum class Direction : std::uint8_t {
@@ -251,6 +252,14 @@ struct PureArbExecutionPlan {
     LegPlan yes{};
     LegPlan no{};
     SweepResult economics{};
+    double buy_raw_edge_per_share = 0.0;
+    double sell_raw_edge_per_share = 0.0;
+    double buy_fee_per_share = 0.0;
+    double sell_fee_per_share = 0.0;
+    double buy_edge_per_share = 0.0;
+    double sell_edge_per_share = 0.0;
+    double buy_l1_shares = 0.0;
+    double sell_l1_shares = 0.0;
     std::uint64_t market_handle = 0;
     std::uint64_t event_handle = 0;
     std::int64_t trigger_receive_monotonic_ns = 0;
@@ -318,6 +327,36 @@ struct PureArbExecutionPlan {
         out.reason = DecisionReason::BookInvalid;
         return out;
     }
+
+    const double yes_ask = price(input.yes.best_ask_e4);
+    const double no_ask = price(input.no.best_ask_e4);
+    const double yes_bid = price(input.yes.best_bid_e4);
+    const double no_bid = price(input.no.best_bid_e4);
+    out.buy_l1_shares = static_cast<double>(std::min(
+        input.yes.best_ask_microunits, input.no.best_ask_microunits))
+        / kMicrounitsPerShare;
+    out.sell_l1_shares = static_cast<double>(std::min(
+        input.yes.best_bid_microunits, input.no.best_bid_microunits))
+        / kMicrounitsPerShare;
+    out.buy_fee_per_share =
+        (fee_usdc(out.buy_l1_shares, yes_ask, input.fee_rate, input.fee_exponent)
+         + fee_usdc(out.buy_l1_shares, no_ask, input.fee_rate, input.fee_exponent))
+        / out.buy_l1_shares;
+    out.sell_fee_per_share =
+        (fee_usdc(out.sell_l1_shares, yes_bid, input.fee_rate, input.fee_exponent)
+         + fee_usdc(out.sell_l1_shares, no_bid, input.fee_rate, input.fee_exponent))
+        / out.sell_l1_shares;
+    if (!std::isfinite(out.buy_fee_per_share)
+        || !std::isfinite(out.sell_fee_per_share)) {
+        out.reason = DecisionReason::FeeInvalid;
+        return out;
+    }
+    out.buy_raw_edge_per_share = 1.0 - yes_ask - no_ask;
+    out.sell_raw_edge_per_share = yes_bid + no_bid - 1.0;
+    out.buy_edge_per_share =
+        out.buy_raw_edge_per_share - out.buy_fee_per_share;
+    out.sell_edge_per_share =
+        out.sell_raw_edge_per_share - out.sell_fee_per_share;
 
     const auto buy = sweep(
         input.yes, input.no, input.fee_rate, input.fee_exponent,
