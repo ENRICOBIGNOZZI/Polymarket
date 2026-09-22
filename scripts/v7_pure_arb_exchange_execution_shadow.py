@@ -448,7 +448,11 @@ class Shadow:
     def ingest(self):
         selection=selection_map(load(self.args.selection),self.args.model_sha)
         venue=load(self.args.venue_mode)
-        can_taker=venue_policy(venue)["new_taker"]
+        simulation_policy=venue_policy(venue)
+        observed_raw=venue.get("observed_policy") if isinstance(venue.get("observed_policy"),dict) else {}
+        observed_policy={k:observed_raw.get(k) is True for k in ("new_taker","new_maker","cancel")}
+        can_taker=simulation_policy["new_taker"]
+        observed_can_taker=observed_policy["new_taker"]
         for c in self.tail.poll():
             mid=str(c.get("market_id") or "");kind=str(c.get("kind") or "")
             try:detected=int(c.get("receive_wall_ms") or 0)
@@ -472,6 +476,13 @@ class Shadow:
                                 "scenario_id":sid,"candidate":c,"market":market,
                                 "fingerprint":fingerprint(market),"terms":terms,
                                 "venue_taker_allowed":can_taker,
+                                "observed_taker_allowed":observed_can_taker,
+                                "observed_mode":str(venue.get("observed_mode") or "DEGRADED"),
+                                "observed_account_mode":str(venue.get("observed_account_mode") or "UNKNOWN"),
+                                "simulation_mode":str(venue.get("simulation_mode") or ""),
+                                "simulation_account_mode":str(venue.get("simulation_account_mode") or ""),
+                                "paper_counterfactual":venue.get("paper_counterfactual") is True,
+                                "paper_account_counterfactual":venue.get("paper_account_counterfactual") is True,
                                 "execution_mode":execution_mode,
                                 "transport_ms":transport,"skew_ms":skew,"order":order,
                                 "total_delay_ms":total_delay,
@@ -497,6 +508,17 @@ class Shadow:
             "scenario_id":item["scenario_id"],"market_id":mid,
             "asset":str(c.get("asset") or ""),"horizon":str(c.get("horizon") or ""),
             "kind":kind,"execution_mode":mode,
+            "observed_taker_allowed":item.get("observed_taker_allowed") is True,
+            "simulation_taker_allowed":item.get("venue_taker_allowed") is True,
+            "counterfactual_only":(
+                item.get("venue_taker_allowed") is True
+                and item.get("observed_taker_allowed") is not True),
+            "observed_venue_mode":item.get("observed_mode"),
+            "observed_account_mode":item.get("observed_account_mode"),
+            "simulation_venue_mode":item.get("simulation_mode"),
+            "simulation_account_mode":item.get("simulation_account_mode"),
+            "paper_venue_counterfactual":item.get("paper_counterfactual") is True,
+            "paper_account_counterfactual":item.get("paper_account_counterfactual") is True,
             "transport_delay_ms":item["transport_ms"],
             "market_end_ms":int(m.get("end_timestamp_ms") or 0),
             "mandatory_taker_delay_ns":item["terms"].get("mandatory_taker_delay_ns") if item["terms"] else None,
@@ -737,6 +759,8 @@ class Shadow:
             "fee_semantics":"CLOB_V2_MATCH_TIME_USDC_VALUE_ROUNDED_5DP",
             "multileg_semantics":"CAUSAL_MULTILEVEL_FOK_SEQUENTIAL_PARALLEL_BATCH_WITH_INDEPENDENT_RESULTS_AND_UNWIND",
             "unknown_terms_policy":"FAIL_CLOSED",
+            "counterfactual_semantics":"OBSERVED_AND_PAPER_SIMULATION_EXECUTABILITY_RECORDED_SEPARATELY",
+            "counterfactual_only_scenarios":sum(r.get("counterfactual_only") is True for r in self.rows),
         })
 
     def run(self):
