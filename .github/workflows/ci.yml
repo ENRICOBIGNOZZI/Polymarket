@@ -350,7 +350,9 @@ jobs:
             scripts/v7_combo_collateral_return_shadow.py \
             scripts/v7_clock_guard.py \
             scripts/v7_maker_self_fill_calibration.py \
-            scripts/v7_multi_az_fencing_guard.py
+            scripts/v7_multi_az_fencing_guard.py \
+            scripts/v7_multi_az_fencing_supervisor.py \
+            ops/v7_aws_fencing_lease.py
           python3 tests/test_v7_pure_arb_sota.py
           python3 tests/test_v7_pure_arb_frequency.py
           python3 tests/test_v7_pure_arb_exchange_native.py
