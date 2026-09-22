@@ -318,6 +318,13 @@ class V7RuntimeChaosContractTest(unittest.TestCase):
             "monitoring": "restart_monitoring_only",
             "clock_jump": "withdraw_and_quarantine",
             "cancel_pending_reconnect": "hold_withdrawn_until_reconciled",
+            "pure_arb_taker_delay_pending": "hold_non_cancelable_until_arrival",
+            "pure_arb_one_leg_failure": "unwind_and_quarantine_market",
+            "market_semantic_change": "cancel_reset_and_rebuild",
+            "venue_degraded": "no_new_risk_cancel_only",
+            "venue_cancel_only": "no_new_risk_cancel_only",
+            "deep_snapshot_truncated": "reject_opportunity_and_resnapshot",
+            "fee_semantics_unknown": "quarantine_taker",
         }
         for failure, action in expected.items():
             with self.subTest(failure=failure):
