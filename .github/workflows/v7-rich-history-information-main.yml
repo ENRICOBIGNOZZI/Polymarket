@@ -1,0 +1,144 @@
+name: V7 rich-history information research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-rich-history-information-main-request.json
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+
+      - name: Validate trusted-main request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,re
+          p='deploy/v7-rich-history-information-main-request.json'
+          j=json.load(open(p))
+          required={
+            'schema','version','request_id','instance_id','expected_research_sha',
+            'research_branch','publish_branch','minimum_wall_ns',
+            'maximum_history_hours','output_directory','paper_only',
+            'authenticated_execution','real_order_submission','real_capital_at_risk',
+            'automatic_promotion'
+          }
+          assert set(j)==required
+          assert j['schema']=='polymarket_v7_rich_history_information_main_request_v1'
+          assert j['version']==1
+          assert re.fullmatch(r'i-[0-9a-f]+',j['instance_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',j['expected_research_sha'])
+          assert j['research_branch']=='rich-history-alpha-20260922'
+          assert j['publish_branch']=='rich-history-results-20260922'
+          assert j['output_directory']=='docs/research/rich-history-information-2026-09-22'
+          assert isinstance(j['minimum_wall_ns'],int) and j['minimum_wall_ns']>0
+          assert float(j['maximum_history_hours'])>0
+          assert j['paper_only'] is True
+          assert j['authenticated_execution'] is False
+          assert j['real_order_submission'] is False
+          assert j['real_capital_at_risk'] is False
+          assert j['automatic_promotion'] is False
+          print(j['expected_research_sha'])
+          PY
+
+      - name: Fetch exact frozen research source
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["expected_research_sha"])')"
+          branch="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["research_branch"])')"
+          git fetch --no-tags origin "$branch"
+          actual="$(git rev-parse FETCH_HEAD)"
+          test "$actual" = "$sha"
+          rm -rf /tmp/rich-frozen
+          git worktree add --detach /tmp/rich-frozen "$sha"
+
+      - name: Compile frozen source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile             /tmp/rich-frozen/research/walk_forward_v3/rich_history_information.py             /tmp/rich-frozen/ops/v7_rich_history_information_ssm.py             /tmp/rich-frozen/research/walk_forward_v3/multi_alpha_2h.py
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: rich-history-information-research
+          aws-region: eu-west-2
+
+      - name: Run rich-history PAPER research
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["instance_id"])')"
+          sha="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["expected_research_sha"])')"
+          minimum="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["minimum_wall_ns"])')"
+          hours="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["maximum_history_hours"])')"
+          out="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["output_directory"])')"
+          rm -rf "$out"
+          mkdir -p "$out"
+          PYTHONPATH=/tmp/rich-frozen/ops python3 /tmp/rich-frozen/ops/v7_rich_history_information_ssm.py             --instance-id "$instance"             --source-sha "$sha"             --minimum-wall-ns "$minimum"             --maximum-history-hours "$hours"             --output-dir "$out"
+
+      - name: Validate package
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["output_directory"])')"
+          python3 - "$out" <<'PY'
+          import csv,json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          m=json.load(open(root/'30_rich_history_manifest.json'))
+          assert m['paper_only'] is True
+          assert m['automatic_promotion'] is False
+          assert m['window']['profitability_used_for_selection'] is False
+          assert m['selection_guards']['lambda_selected_on_test_pnl'] is False
+          assert len(m['latencies_ms'])==9
+          assert len(m['requested_exit_horizons_ms'])==16
+          c=json.load(open(root/'31_rich_data_coverage_by_crypto.json'))
+          assert len(c['rows_by_asset'])>=6
+          with open(root/'34_rich_crypto_grid.csv',newline='') as f:
+              rows=list(csv.DictReader(f))
+          assert rows
+          assert len({r['asset'] for r in rows})>=6
+          print('RICH_HISTORY_PACKAGE_VALID')
+          PY
+
+      - name: Publish isolated research results
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["expected_research_sha"])')"
+          publish="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["publish_branch"])')"
+          out="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-information-main-request.json"))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$publish" || true
+          git checkout -B "$publish" "$source_sha"
+          git add "$out"
+          git diff --cached --check
+          git commit -m "Publish rich-history crypto information research"
+          git push --force-with-lease origin "$publish"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-rich-history-information-${{ github.run_id }}
+          path: docs/research/rich-history-information-2026-09-22
+          if-no-files-found: error
+          retention-days: 30
