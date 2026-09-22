@@ -263,3 +263,48 @@ def test_persist_does_not_republish_unchanged_book_selection():
         universe.persist(root,changed,later)
         third=(root/"book_selection.json").read_bytes()
         assert third!=second
+
+
+def test_book_selection_preloads_next_m5_m15_without_expanding_active_contract():
+    assets = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+    horizons = {"M5":300, "M15":900, "H1":3600, "H4":14400, "D1":86400}
+    rows=[]
+    index=0
+    for asset in assets:
+        for horizon,seconds in horizons.items():
+            index+=1
+            rows.append({
+                "market_id":f"current-{index}", "event_ids":[f"e-current-{index}"],
+                "clob_token_ids":[f"up-current-{index}",f"down-current-{index}"],
+                "outcomes":["Up","Down"], "asset":asset, "horizon":horizon,
+                "horizon_seconds":seconds, "window_start_unix":NOW-10,
+                "close_timestamp_unix":NOW+seconds, "active":True, "closed":False,
+                "accepting_orders":True, "research_only":False,
+            })
+            if horizon in {"M5","M15"}:
+                rows.append({
+                    "market_id":f"next-{index}", "event_ids":[f"e-next-{index}"],
+                    "clob_token_ids":[f"up-next-{index}",f"down-next-{index}"],
+                    "outcomes":["Up","Down"], "asset":asset, "horizon":horizon,
+                    "horizon_seconds":seconds, "window_start_unix":NOW+seconds,
+                    "close_timestamp_unix":NOW+2*seconds, "active":True, "closed":False,
+                    "accepting_orders":True, "research_only":False,
+                })
+    snap={
+        "schema":universe.SNAPSHOT_SCHEMA, "version":7,
+        "paper_only":True, "authenticated_execution":False,
+        "real_order_submission":False, "execution_authority":False,
+        "model_sha":SHA, "timestamp_ms":NOW*1000, "markets":rows,
+    }
+    selection,blocker=universe.build_book_selection(snap)
+    assert blocker==""
+    assert selection["version"]==2
+    assert selection["active_market_count"]==30
+    assert selection["active_token_count"]==60
+    assert selection["preloaded_market_count"]==12
+    assert selection["preloaded_token_count"]==24
+    assert selection["market_count"]==42
+    assert selection["token_count"]==84
+    assert sum(x["role"]=="CURRENT" for x in selection["markets"])==30
+    assert sum(x["role"]=="NEXT" for x in selection["markets"])==12
+    assert all(x["horizon"] in {"M5","M15"} for x in selection["markets"] if x["role"]=="NEXT")
