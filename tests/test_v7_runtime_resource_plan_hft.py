@@ -37,4 +37,6 @@ def test_larger_host_keeps_four_high_cpus_hot():
     assert plan["housekeeping_cpus"] == [0]
     assert plan["control_cpus"] == [1]
     assert plan["collector_cpus"] == [2, 3]
-    assert plan["spare_cpus"] == [4, 5, 6, 7]
+    assert plan["latency_observer_cpus"] == [7]
+    assert plan["latency_observer_isolated"] is True
+    assert plan["spare_cpus"] == [4, 5, 6]
