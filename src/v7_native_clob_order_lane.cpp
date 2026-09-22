@@ -226,6 +226,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     std::span<RoutedOmsEvent> routed_scratch) noexcept {
     NativeClobSubmitResult out;
     out.client_order_id = command.client_order_id;
+    out.latency.submit_start_monotonic_ns = now_ns();
     // No bytes may leave the lane for a mutated/unreserved command. Preserve
     // the real admitted order for reconciliation instead of rejecting a copy.
     if (!matches_pending_command(oms_owner, command)) {
@@ -271,6 +272,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
             oms_owner, command.client_order_id,
             NativeClobSubmitReason::RateLimitBudgetExhausted);
     }
+    out.latency.rate_limit_complete_monotonic_ns = now_ns();
 
     const auto salt = impl_->salt.next();
     if (salt == 0) {
@@ -293,6 +295,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     auto& order_hasher = command.side == Side::Buy
         ? impl_->buy_order_hasher : impl_->sell_order_hasher;
     std::array<char, poly1271::kWrappedSignatureHexChars> order_signature;
+    out.latency.sign_start_monotonic_ns = now_ns();
     if (!poly1271::sign_prepared_poly1271_hex(
             order_hasher, impl_->poly_hasher, impl_->signer,
             salt, amounts.maker_amount, amounts.taker_amount,
@@ -300,6 +303,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
     }
+    out.latency.sign_complete_monotonic_ns = now_ns();
 
     clob_wire::MarketOrderDynamicView dynamic{};
     dynamic.maker_amount = maker_sv;
@@ -328,11 +332,13 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::PreWireFailure);
     }
+    out.latency.frame_complete_monotonic_ns = now_ns();
     auto& tls = impl_->transport.lane(clob::TransportLane::Order);
     if (!tls.connected()) {
         return fail_before_wire(oms_owner, command.client_order_id,
                                 NativeClobSubmitReason::TransportFailure);
     }
+    out.latency.wire_start_monotonic_ns = now_ns();
     const auto write = tls.write_all({frame.data(), frame_size});
     if (!write.ok) {
         return fail_after_wire(oms_owner, command.client_order_id,
