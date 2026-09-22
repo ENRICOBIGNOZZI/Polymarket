@@ -107,17 +107,52 @@ def market_terms(root:Path,market_id:str)->dict[str,Any]:
 def validate_semantics(v:dict[str,Any])->bool:
     fee=v.get("fee_semantics") if isinstance(v.get("fee_semantics"),dict) else {}
     safety=v.get("safety") if isinstance(v.get("safety"),dict) else {}
+    supported=fee.get("supported_buy_collection_modes")
+    mode=str(fee.get("buy_collection_mode") or "")
     return (
         v.get("schema")==SEMANTICS_SCHEMA
         and v.get("production_clob_version")=="V2"
         and v.get("collateral_asset")=="pUSD"
         and fee.get("calculation_time")=="MATCH_TIME"
         and fee.get("settlement_asset")=="USDC_VALUE"
+        and isinstance(supported,list)
+        and set(str(x) for x in supported)=={"USDC_VALUE","SHARES_ON_BUY"}
+        and mode in {"USDC_VALUE","SHARES_ON_BUY"}
         and float(fee.get("maker_fee_rate",math.nan))==0.0
+        and safety.get("unverified_buy_collection_mode_policy")=="NON_EXECUTABLE_TAKER"
         and safety.get("paper_only") is True
         and safety.get("authenticated_execution") is False
         and safety.get("real_order_submission") is False
     )
+
+
+def buy_pair_edge_per_net_share(
+    yes_price:float,no_price:float,rate:float,exponent:float,mode:str
+)->float:
+    fy=fee_per_share(yes_price,rate,exponent)
+    fn=fee_per_share(no_price,rate,exponent)
+    if not(math.isfinite(fy) and math.isfinite(fn)):return math.nan
+    if mode=="USDC_VALUE":
+        return 1.0-yes_price-no_price-fy-fn
+    if mode=="SHARES_ON_BUY":
+        yes_net_factor=1.0-fy/yes_price
+        no_net_factor=1.0-fn/no_price
+        if yes_net_factor<=0 or no_net_factor<=0:return math.nan
+        return 1.0-yes_price/yes_net_factor-no_price/no_net_factor
+    return math.nan
+
+
+def gross_buy_quantity_for_net(
+    net_quantity:float,price:float,rate:float,exponent:float,mode:str
+)->float:
+    if not(math.isfinite(net_quantity) and net_quantity>0):return math.nan
+    f=fee_per_share(price,rate,exponent)
+    if not math.isfinite(f):return math.nan
+    if mode=="USDC_VALUE":return net_quantity
+    if mode=="SHARES_ON_BUY":
+        factor=1.0-f/price
+        return net_quantity/factor if factor>0 else math.nan
+    return math.nan
 
 
 def venue_policy(v:dict[str,Any])->dict[str,bool]:
@@ -187,10 +222,14 @@ def fok_fill(point:dict[str,float]|None,*,side:str,limit:float,quantity:float,
     return price_ok and float(point["depth"])+1e-12>=quantity
 
 
-def entry_pnl(side:str,price:float,quantity:float,fee_rate:float,fee_exp:float)->float:
+def entry_pnl(side:str,price:float,quantity:float,fee_rate:float,fee_exp:float,
+              buy_collection_mode:str="USDC_VALUE")->float:
     fee=fee_per_share(price,fee_rate,fee_exp)
     if not math.isfinite(fee):return math.nan
-    return (-price-fee)*quantity if side=="BUY" else (price-fee)*quantity
+    if side=="SELL":return (price-fee)*quantity
+    if buy_collection_mode=="USDC_VALUE":return (-price-fee)*quantity
+    if buy_collection_mode=="SHARES_ON_BUY":return -price*quantity
+    return math.nan
 
 
 def unwind_pnl(side:str,price:float,quantity:float,fee_rate:float,fee_exp:float)->float:
@@ -287,6 +326,10 @@ class Shadow:
         if fp is None:
             base["state"]="CENSORED_FEE_UNVERIFIED";return base
         rate,exp=fp
+        fee_semantics=self.semantics.get("fee_semantics") or {}
+        buy_collection_mode=str(fee_semantics.get("buy_collection_mode") or "")
+        if buy_collection_mode not in {"USDC_VALUE","SHARES_ON_BUY"}:
+            base["state"]="CENSORED_BUY_FEE_COLLECTION_UNVERIFIED";return base
         yes,no=str(current.get("yes_token") or ""),str(current.get("no_token") or "")
         target=int(item["target_ms"]);skew=int(item["skew_ms"])
         if target<=0 or q<self.args.minimum_shares:
@@ -304,16 +347,45 @@ class Shadow:
 
         fees=fee_per_share(y0["price"],rate,exp)+fee_per_share(n0["price"],rate,exp)
         raw=(1-y0["price"]-n0["price"]) if buy else (y0["price"]+n0["price"]-1)
-        edge=raw-fees-self.args.reserve_per_share
+        if buy:
+            configured_before_reserve=buy_pair_edge_per_net_share(
+                y0["price"],n0["price"],rate,exp,buy_collection_mode)
+            sensitivity={
+                mode:buy_pair_edge_per_net_share(y0["price"],n0["price"],rate,exp,mode)
+                for mode in ("USDC_VALUE","SHARES_ON_BUY")
+            }
+            edge=configured_before_reserve-self.args.reserve_per_share
+        else:
+            configured_before_reserve=raw-fees
+            sensitivity={}
+            edge=configured_before_reserve-self.args.reserve_per_share
         base.update({
             "revalidation_wall_ms":target,"revalidation_yes_price":y0["price"],
             "revalidation_no_price":n0["price"],"revalidation_raw_edge":raw,
-            "revalidation_fee_per_share":fees,"revalidation_edge_after_reserve":edge,
+            "revalidation_fee_per_share":fees,
+            "buy_fee_collection_mode":buy_collection_mode if buy else None,
+            "buy_fee_collection_edge_sensitivity":sensitivity,
+            "revalidation_edge_before_reserve":configured_before_reserve,
+            "revalidation_edge_after_reserve":edge,
         })
         if not math.isfinite(fees) or edge<=0:
             base["state"]="REVALIDATION_REJECTED"
             base["lifecycle"].append("REVALIDATION_REJECTED");return base
         base["lifecycle"].append("ARRIVAL_REVALIDATED")
+
+        if buy:
+            leg_quantities={
+                "YES":gross_buy_quantity_for_net(
+                    q,y0["price"],rate,exp,buy_collection_mode),
+                "NO":gross_buy_quantity_for_net(
+                    q,n0["price"],rate,exp,buy_collection_mode),
+            }
+            if not all(math.isfinite(x) and x>0 for x in leg_quantities.values()):
+                base["state"]="CENSORED_BUY_FEE_COLLECTION_INVALID";return base
+        else:
+            leg_quantities={"YES":q,"NO":q}
+        base["leg_gross_quantities"]=leg_quantities
+        base["target_net_paired_shares"]=q
 
         limits={"YES":y0["price"],"NO":n0["price"]}
         times={
@@ -326,13 +398,17 @@ class Shadow:
                     "NO" if item["order"].startswith("YES") else "YES"):
             token=yes if leg=="YES" else no
             point=book_point(self.book,mid,token,times[leg],side)
-            ok=fok_fill(point,side=side,limit=limits[leg],quantity=q,
+            gross_quantity=leg_quantities[leg]
+            ok=fok_fill(point,side=side,limit=limits[leg],quantity=gross_quantity,
                         target_ms=times[leg],maximum_book_age_ms=self.args.maximum_book_age_ms)
             fills[leg]={"filled":ok,"wall_ms":times[leg],
+                        "gross_quantity":gross_quantity,
+                        "net_position_shares":q if ok else 0.0,
                         "price":point["price"] if point else None}
             base["lifecycle"].append(f"{leg}_{'FILLED' if ok else 'REJECTED'}")
             if ok and point is not None:
-                leg_pnl=entry_pnl(side,point["price"],q,rate,exp)
+                leg_pnl=entry_pnl(
+                    side,point["price"],gross_quantity,rate,exp,buy_collection_mode)
                 entry_cash+=leg_pnl
 
         filled=[leg for leg,v in fills.items() if v["filled"]]
