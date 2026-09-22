@@ -1,0 +1,38 @@
+name: V7 mamma direct SSH probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-mamma-direct-ssh-probe-request.json
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate
+        run: |
+          python3 - deploy/v7-mamma-direct-ssh-probe-request.json <<'PY'
+          import json,sys
+          assert json.load(open(sys.argv[1]))=={"schema":"polymarket_v7_mamma_direct_ssh_probe_v1","read_only":True}
+          PY
+      - name: Probe DNS and SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          host=Mac.usilu.net
+          echo "=== DNS ==="
+          getent ahosts "$host" || true
+          echo "=== TCP22 ==="
+          timeout 8 bash -c "cat < /dev/null > /dev/tcp/$host/22" && echo TCP22_OPEN=1 || echo TCP22_OPEN=0
+          echo "=== SSH ==="
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes             -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8             enrico@"$host" 'echo DIRECT_SSH_OK=1; hostname; uname -s'
