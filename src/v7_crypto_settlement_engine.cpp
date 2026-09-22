@@ -623,6 +623,153 @@ int main(int argc, char** argv) {
                 out.no_ask_quantity = no_book.best_ask_microunits;
             }
         };
+        const auto publish_pure_arb_shadow_cycle =
+            [&](const MarketWsEvent& event, std::uint64_t epoch, std::uint8_t kind,
+                const pm::v7::pure_arb::SweepResult& result,
+                std::int64_t decision_started_ns, std::int64_t decision_ns) noexcept {
+                NativeObservation point{};
+                point.kind = 7;
+                point.instrument_handle = event.instrument_handle;
+                point.book_version = event.book.state_version;
+                point.connection_epoch = epoch;
+                point.receive_ns = event.receive_monotonic_ns;
+                point.exchange_ns = event.exchange_event_ns;
+                point.observed_ns = decision_ns;
+                point.decision_ns = decision_ns;
+                point.close_ns = market.close_monotonic_ns;
+                point.event_receive_ns = event.receive_monotonic_ns;
+                point.event_exchange_ns = event.exchange_event_ns;
+                point.event_kind = static_cast<std::uint8_t>(event.kind);
+                point.valid = 1;
+                point.accepted = 1;
+                point.bid_e4 = event.book.best_bid_e4;
+                point.ask_e4 = event.book.best_ask_e4;
+                point.tick_e4 = event.book.tick_size_e4;
+                point.bid_quantity = event.book.best_bid_microunits;
+                point.ask_quantity = event.book.best_ask_microunits;
+                point.proposed_quantity = result.shares_microunits;
+                decorate_pm_pair(point);
+                point.pure_arb_kind = kind;
+                point.pure_arb_shares_microunits = result.shares_microunits;
+                point.pure_arb_decision_compute_ns =
+                    std::max<std::int64_t>(0, decision_ns - decision_started_ns);
+                point.pure_arb_receive_to_decision_ns =
+                    std::max<std::int64_t>(0, decision_ns - event.receive_monotonic_ns);
+                point.pure_arb_reserve_per_share = options.pure_arb_reserve_per_share;
+                point.pure_arb_gross_edge_per_share = result.gross_edge_per_share();
+                point.pure_arb_conservative_edge_per_share =
+                    result.conservative_edge_per_share();
+                point.pure_arb_marginal_edge_per_share = result.marginal_edge_per_share;
+                point.pure_arb_gross_locked_pnl = result.gross_locked_pnl;
+                point.pure_arb_conservative_locked_pnl = result.conservative_locked_pnl;
+                point.pure_arb_yes_vwap = result.yes_vwap();
+                point.pure_arb_no_vwap = result.no_vwap();
+                point.pure_arb_yes_levels_used = result.yes_levels_used;
+                point.pure_arb_no_levels_used = result.no_levels_used;
+                if (!evidence_writer.publish_optional_observation(point)) {
+                    ++pure_arb_shadow_evidence_drops;
+                }
+            };
+
+        const auto evaluate_pure_arb_shadow =
+            [&](const MarketWsEvent& event, std::uint64_t epoch) noexcept {
+                if (!options.pure_arb_shadow) return;
+                const auto decision_started_ns = monotonic_now_ns();
+                ++pure_arb_shadow_evaluations;
+
+                if (event.instrument_handle == kYes) pure_arb_yes_epoch = epoch;
+                else if (event.instrument_handle == kNo) pure_arb_no_epoch = epoch;
+
+                const bool pair_valid =
+                    pure_arb_yes_epoch != 0 && pure_arb_yes_epoch == pure_arb_no_epoch
+                    && yes_book.valid != 0 && no_book.valid != 0
+                    && yes_book.lineage_continuous != 0 && no_book.lineage_continuous != 0
+                    && yes_book.best_bid_e4 > 0 && yes_book.best_ask_e4 > yes_book.best_bid_e4
+                    && yes_book.best_ask_e4 < 10'000
+                    && no_book.best_bid_e4 > 0 && no_book.best_ask_e4 > no_book.best_bid_e4
+                    && no_book.best_ask_e4 < 10'000
+                    && yes_book.best_bid_microunits > 0 && yes_book.best_ask_microunits > 0
+                    && no_book.best_bid_microunits > 0 && no_book.best_ask_microunits > 0
+                    && yes_book.bid_level_count > 0 && yes_book.ask_level_count > 0
+                    && no_book.bid_level_count > 0 && no_book.ask_level_count > 0;
+                const auto skew_ns = yes_book.receive_monotonic_ns >= no_book.receive_monotonic_ns
+                    ? yes_book.receive_monotonic_ns - no_book.receive_monotonic_ns
+                    : no_book.receive_monotonic_ns - yes_book.receive_monotonic_ns;
+                if (!pair_valid || skew_ns > options.pure_arb_max_leg_skew_ns) {
+                    ++pure_arb_shadow_invalid_pair;
+                    pure_arb_buy_active = false;
+                    pure_arb_sell_active = false;
+                    const auto done = monotonic_now_ns();
+                    if (pure_arb_shadow_compute.size() < pure_arb_shadow_compute.capacity()) {
+                        pure_arb_shadow_compute.push_back(
+                            std::max<std::int64_t>(0, done - decision_started_ns));
+                        pure_arb_shadow_receive_to_decision.push_back(
+                            std::max<std::int64_t>(0, done - event.receive_monotonic_ns));
+                    }
+                    return;
+                }
+
+                const auto buy = pm::v7::pure_arb::sweep(
+                    yes_book, no_book, options.taker_fee_rate, options.taker_fee_exponent,
+                    options.pure_arb_reserve_per_share, true);
+                const auto sell = pm::v7::pure_arb::sweep(
+                    yes_book, no_book, options.taker_fee_rate, options.taker_fee_exponent,
+                    options.pure_arb_reserve_per_share, false,
+                    pure_arb_prefunded_remaining_microunits);
+                const auto decision_ns = monotonic_now_ns();
+                const auto compute_ns =
+                    std::max<std::int64_t>(0, decision_ns - decision_started_ns);
+                const auto receive_to_decision_ns =
+                    std::max<std::int64_t>(0, decision_ns - event.receive_monotonic_ns);
+                if (pure_arb_shadow_compute.size() < pure_arb_shadow_compute.capacity()) {
+                    pure_arb_shadow_compute.push_back(compute_ns);
+                    pure_arb_shadow_receive_to_decision.push_back(receive_to_decision_ns);
+                }
+
+                if (receive_to_decision_ns > options.pure_arb_max_receive_to_decision_ns) {
+                    ++pure_arb_shadow_stale;
+                    pure_arb_buy_active = false;
+                    pure_arb_sell_active = false;
+                    return;
+                }
+
+                const bool buy_executable =
+                    buy.shares_microunits >= options.min_order_microunits;
+                const bool sell_executable =
+                    sell.shares_microunits >= options.min_order_microunits;
+                if (buy.shares_microunits > 0 && !buy_executable) {
+                    ++pure_arb_shadow_below_minimum;
+                }
+                if (sell.shares_microunits > 0 && !sell_executable) {
+                    ++pure_arb_shadow_below_minimum;
+                }
+
+                if (buy_executable) {
+                    if (!pure_arb_buy_active) {
+                        ++pure_arb_shadow_buy_cycles;
+                        publish_pure_arb_shadow_cycle(
+                            event, epoch, 1, buy, decision_started_ns, decision_ns);
+                    }
+                    pure_arb_buy_active = true;
+                } else {
+                    pure_arb_buy_active = false;
+                }
+
+                if (sell_executable) {
+                    if (!pure_arb_sell_active) {
+                        ++pure_arb_shadow_sell_cycles;
+                        publish_pure_arb_shadow_cycle(
+                            event, epoch, 2, sell, decision_started_ns, decision_ns);
+                        pure_arb_prefunded_remaining_microunits = std::max<std::int64_t>(
+                            0, pure_arb_prefunded_remaining_microunits
+                                - sell.shares_microunits);
+                    }
+                    pure_arb_sell_active = true;
+                } else {
+                    pure_arb_sell_active = false;
+                }
+            };
+
         const auto start_repricing_window = [&](std::uint64_t signal_version,
                                                  std::int64_t trigger_ns,
                                                  std::int64_t decision_ns,
