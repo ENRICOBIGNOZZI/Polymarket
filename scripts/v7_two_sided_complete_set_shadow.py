@@ -137,6 +137,20 @@ def stable(*parts: Any) -> str:
     return hashlib.sha256("|".join(str(x) for x in parts).encode()).hexdigest()
 
 
+def semantic_fingerprint(row: dict[str, Any]) -> str:
+    payload={
+        "market_id":str(row.get("market_id") or ""),
+        "event_id":str(row.get("event_id") or ""),
+        "yes_token":str(row.get("yes_token") or ""),
+        "no_token":str(row.get("no_token") or ""),
+        "start_timestamp_ms":int(row.get("start_timestamp_ms") or 0),
+        "end_timestamp_ms":int(row.get("end_timestamp_ms") or 0),
+        "normalized_rules_hash":str(row.get("normalized_rules_hash") or ""),
+        "rule_snapshot_sha256":str(row.get("rule_snapshot_sha256") or ""),
+    }
+    return hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+
+
 def wilson_lower(successes: int, n: int, z: float = 1.6448536269514722) -> float | None:
     """One-sided 90% Wilson lower bound for a binomial probability."""
     if n <= 0:
@@ -238,6 +252,8 @@ class Shadow:
         return {
             "cycle_id": cycle_id,
             "market_id": mid,
+            "semantic_fingerprint": semantic_fingerprint(market),
+            "market_end_ms": int(market.get("end_timestamp_ms") or 0),
             "asset": str(market.get("asset") or ""),
             "horizon": str(market.get("horizon") or ""),
             "yes_token": yes,
@@ -293,6 +309,12 @@ class Shadow:
             candidate = self._candidate(market, now_ms)
             current = self.active.get(mid)
             if current is None:
+                if candidate is not None:
+                    self.active[mid] = candidate
+                continue
+            if current.get("semantic_fingerprint") != semantic_fingerprint(market):
+                self.cancels["SEMANTIC_RESET"] += 1
+                self.finalize(mid, "SEMANTIC_RESET")
                 if candidate is not None:
                     self.active[mid] = candidate
                 continue
@@ -434,6 +456,8 @@ class Shadow:
             "horizon": c["horizon"],
             "cycle_id": c["cycle_id"],
             "market_id": c["market_id"],
+            "semantic_fingerprint": c.get("semantic_fingerprint"),
+            "market_end_ms": c.get("market_end_ms"),
             "origin_ms": c["origin_ms"],
             "expires_ms": c["expires_ms"],
             "finalized_ms": mark_ms,
