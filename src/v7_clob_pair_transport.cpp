@@ -116,6 +116,8 @@ private:
                 if (state == clob_transport::Http1ResponseState::Complete) {
                     out.ack_complete_monotonic_ns = read.completed_monotonic_ns;
                     out.http_status = parser_.status_code();
+                    out.incoming_cpu = read.incoming_cpu;
+                    out.incoming_napi_id = read.incoming_napi_id;
                     out.response_ok = 1;
                     break;
                 }
@@ -275,6 +277,8 @@ BatchTransportResult PairPersistentTlsTransport::submit_batch(
         if (state == clob_transport::Http1ResponseState::Complete) {
             out.ack_complete_monotonic_ns = read.completed_monotonic_ns;
             out.http_status = impl_->batch_parser.status_code();
+            out.incoming_cpu = read.incoming_cpu;
+            out.incoming_napi_id = read.incoming_napi_id;
             out.response_ok = 1;
             return out;
         }
