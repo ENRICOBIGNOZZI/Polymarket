@@ -92,7 +92,26 @@ def wait_for_human_2sv(page, timeout_s: int = 420) -> bool:
                 if chosen is not None:
                     break
             if chosen is not None:
-                chosen.click()
+                clicked = False
+                try:
+                    target = chosen.locator(
+                        "xpath=ancestor::*[@role='link' or @role='button' or @tabindex='0'][1]"
+                    )
+                    if target.count() and target.first.is_visible():
+                        target.first.click(timeout=5000, force=True)
+                        clicked = True
+                except Exception:
+                    clicked = False
+                if not clicked:
+                    try:
+                        chosen.click(timeout=5000, force=True)
+                        clicked = True
+                    except Exception:
+                        clicked = False
+                if not clicked:
+                    print("tailnet_auth_google_prompt_click_deferred=true", flush=True)
+                    page.wait_for_timeout(1200)
+                    continue
                 prompt_triggered = True
                 print("tailnet_auth_google_prompt_triggered=true", flush=True)
                 page.wait_for_timeout(1500)
