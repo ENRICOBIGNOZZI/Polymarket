@@ -1071,6 +1071,12 @@ int main(int argc, char** argv) {
                     consume_arrivals(event.instrument_handle,
                         event.instrument_handle == kYes ? yes_book : no_book,
                         event.receive_monotonic_ns);
+                    // Pure-arb consumes the newly applied causal PM book before
+                    // maker feature work or research capture. It has zero
+                    // authority here: no candidate is appended to arbitration.
+                    if (event.instrument_handle == kYes) yes_book = event.book;
+                    else if (event.instrument_handle == kNo) no_book = event.book;
+                    evaluate_pure_arb_shadow(event, pending_pm.connection_epoch);
                     if (options.capture_native_observations
                         || (options.capture_execution_windows
                             && event.receive_monotonic_ns <= execution_window_until_ns)) {
@@ -1129,11 +1135,9 @@ int main(int argc, char** argv) {
                     maker_context.risk.new_risk_frozen = maker_quantity == 0 ? 1 : 0;
                     if (maker_quantity > 0) maker_model.base_quote_shares = maker_quantity / 1'000'000.0;
                     if (event.instrument_handle == kYes) {
-                        yes_book = event.book;
                         maker_decision = yes_maker.on_market_event(event, maker_context, maker_model);
                         maker_event = true;
                     } else if (event.instrument_handle == kNo) {
-                        no_book = event.book;
                         maker_decision = no_maker.on_market_event(event, maker_context, maker_model);
                         maker_event = true;
                     }
