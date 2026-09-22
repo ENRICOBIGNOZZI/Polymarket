@@ -53,6 +53,7 @@ void test_snapshot_delta_trade_and_reconnect_lineage() {
     assert(result.book_apply_ns >= 0);
     assert(result.receive_to_book_ns > 0);
     assert(output[0].kind == pm::v7::MarketWsEventKind::BookChanged);
+    assert(output[0].decode_complete_monotonic_ns >= output[0].receive_monotonic_ns);
     assert(output[0].frame_parse_ns == result.parse_ns);
     assert(output[0].book_apply_ns == result.book_apply_ns);
     assert(output[0].instrument_handle == 301);

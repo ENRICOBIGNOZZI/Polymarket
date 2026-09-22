@@ -29,6 +29,7 @@ struct NativeSettlementAuthorityResult {
     ExecutionAdmissionResult admission{};
     NativeOrderTxResult tx{};
     NativeCancelTxResult cancel{};
+    std::int64_t risk_admitted_monotonic_ns = 0;
     NativeSettlementAuthorityReason reason = NativeSettlementAuthorityReason::InvalidPlan;
     std::uint8_t accepted = 0;
     std::uint8_t capital_released_on_failure = 0;

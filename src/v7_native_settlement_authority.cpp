@@ -260,7 +260,13 @@ NativeSettlementAuthorityResult NativeSettlementAuthority::submit(
         out.reason = NativeSettlementAuthorityReason::AdmissionDenied;
         return out;
     }
+    // Preserve the caller's monotonic clock domain. Runtime telemetry may
+    // stamp the exact post-admission instant outside this deterministic owner.
+    out.risk_admitted_monotonic_ns = now_monotonic_ns;
     out.tx = order_tx_.prepare_submit(plan, now_monotonic_ns);
+    if (out.tx.accepted != 0) {
+        out.tx.command.risk_admitted_monotonic_ns = now_monotonic_ns;
+    }
     if (out.tx.accepted == 0 || out.tx.oms.state != OrderState::SendPending) {
         if (out.admission.capital_reserved != 0) {
             out.capital_released_on_failure = capital_.release_order(intent.intent_id) ? 1 : 0;

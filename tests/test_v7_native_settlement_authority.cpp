@@ -77,6 +77,9 @@ void test_one_authority_accepts_maker_and_taker_buy_paths() {
              Side::Buy, ExecutionPolicyId::AggressiveTaker),
         5'000'000, 2'000);
     assert(taker.accepted == 1);
+    assert(taker.risk_admitted_monotonic_ns >= taker.tx.command.decision_monotonic_ns);
+    assert(taker.tx.command.risk_admitted_monotonic_ns == taker.risk_admitted_monotonic_ns);
+    assert(taker.tx.command.queue_monotonic_ns >= taker.risk_admitted_monotonic_ns);
     assert(taker.tx.oms.state == OrderState::SendPending);
 
     const auto maker = authority.submit(

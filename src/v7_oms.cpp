@@ -118,6 +118,10 @@ OmsTransitionResult OmsOrder::result(bool applied, bool duplicate,
 void OmsOrder::mark_event(const OmsEvent& event) noexcept {
     if (event.event_id != 0) record_.last_event_id = event.event_id;
     if (event.source_version != 0) record_.last_source_version = event.source_version;
+    if (event.user_ws_match_monotonic_ns > 0) {
+        record_.user_ws_match_ns = std::max(
+            record_.user_ws_match_ns, event.user_ws_match_monotonic_ns);
+    }
     ++record_.state_version;
 }
 

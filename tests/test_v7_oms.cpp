@@ -205,6 +205,23 @@ void test_pending_delay_is_explicit_and_non_cancelable() {
     assert(latency.delay_to_wire_ns == 1);
 }
 
+void test_user_ws_match_timestamp_is_preserved_separately_from_http_ack() {
+    pm::v7::OmsOrder order(quote_intent(), 9013);
+    assert(order.apply(event(1, pm::v7::OmsEventType::QueueSend, 100, 1)).applied);
+    assert(order.apply(event(2, pm::v7::OmsEventType::WireSend, 130, 2)).applied);
+    auto http_ack = event(3, pm::v7::OmsEventType::AckLive, 210, 3);
+    assert(order.apply(http_ack).applied);
+    assert(order.record().ack_ns == 210);
+    assert(order.record().user_ws_match_ns == 0);
+
+    auto user_fill = event(4, pm::v7::OmsEventType::FillDelta, 260, 4);
+    user_fill.fill_delta_microunits = 1'000'000;
+    user_fill.user_ws_match_monotonic_ns = 260;
+    assert(order.apply(user_fill).applied);
+    assert(order.record().ack_ns == 210);
+    assert(order.record().user_ws_match_ns == 260);
+}
+
 void test_reconcile_filled_requires_exact_authoritative_sizes() {
     pm::v7::OmsOrder order(quote_intent(), 9005);
     assert(order.apply(event(1, pm::v7::OmsEventType::QueueSend, 100, 1)).applied);
@@ -231,6 +248,7 @@ int main() {
     test_causal_wire_latency_preserves_grid_delay_and_wire_ack();
     test_causal_latency_never_fabricates_missing_or_reversed_stages();
     test_pending_delay_is_explicit_and_non_cancelable();
+    test_user_ws_match_timestamp_is_preserved_separately_from_http_ack();
     test_reconcile_filled_requires_exact_authoritative_sizes();
     return 0;
 }
