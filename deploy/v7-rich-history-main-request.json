@@ -1,0 +1,16 @@
+{
+  "schema": "polymarket_v7_rich_history_main_request_v1",
+  "version": 1,
+  "request_id": "rich-history-crypto-information-20260922",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "expected_research_sha": "de38680075deecfe2c1c16124df784ce736d129b",
+  "minimum_wall_ns": 1789921800000000000,
+  "maximum_history_hours": 168,
+  "research_branch": "rich-history-alpha-20260922",
+  "output_directory": "docs/research/rich-history-alpha-2026-09-22",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}
