@@ -73,12 +73,10 @@ jobs:
           mkdir -p "$profile"
           google-chrome \
             --remote-debugging-port=9222 \
-            --remote-debugging-address=127.0.0.1 \
             --user-data-dir="$profile" \
             --no-first-run \
             --no-default-browser-check \
             --disable-dev-shm-usage \
-            --no-sandbox \
             about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
           chrome_pid=$!
           cleanup_browser(){ kill "$chrome_pid" "$xvfb_pid" >/dev/null 2>&1 || true; }
@@ -91,7 +89,12 @@ jobs:
             fi
             sleep 0.1
           done
-          test "$ready" = 1
+          if [[ "$ready" != 1 ]]; then
+            echo "CDP_NOT_READY" >&2
+            tail -n 120 "$RUNNER_TEMP/chrome.log" >&2 || true
+            tail -n 80 "$RUNNER_TEMP/xvfb.log" >&2 || true
+            exit 1
+          fi
           python3 -u ops/v7_tailscale_browser_cleanup.py \
             --credentials "$RUNNER_TEMP/tailnet-login.json" \
             --repository "$GITHUB_REPOSITORY" \
