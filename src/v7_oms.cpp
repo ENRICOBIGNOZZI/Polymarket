@@ -29,6 +29,7 @@ const char* to_string(OrderState state) noexcept {
         case OrderState::Unknown: return "UNKNOWN";
         case OrderState::Reconciling: return "RECONCILING";
         case OrderState::Lost: return "LOST";
+        // Exchange-native taker hold: non-cancelable until DelayElapsed.
         case OrderState::PendingDelay: return "PENDING_DELAY";
     }
     return "UNKNOWN";
