@@ -45,12 +45,19 @@ struct NativeClobLaneConfig {
 };
 
 struct NativeClobLatencyTrace {
+    std::int64_t frame_receive_monotonic_ns = 0;
+    std::int64_t decode_complete_monotonic_ns = 0;
+    std::int64_t arb_decision_monotonic_ns = 0;
+    std::int64_t risk_admitted_monotonic_ns = 0;
     std::int64_t submit_start_monotonic_ns = 0;
     std::int64_t rate_limit_complete_monotonic_ns = 0;
     std::int64_t sign_start_monotonic_ns = 0;
     std::int64_t sign_complete_monotonic_ns = 0;
     std::int64_t frame_complete_monotonic_ns = 0;
     std::int64_t wire_start_monotonic_ns = 0;
+    std::int64_t wire_complete_monotonic_ns = 0;
+    std::int64_t http_ack_monotonic_ns = 0;
+    std::int64_t user_ws_match_monotonic_ns = 0;
 
     [[nodiscard]] std::int64_t prewire_ns() const noexcept {
         return frame_complete_monotonic_ns >= submit_start_monotonic_ns
