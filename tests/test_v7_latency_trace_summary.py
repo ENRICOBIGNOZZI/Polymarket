@@ -18,14 +18,18 @@ def test_binary_trace_summary_ignores_missing_stages():
         partial=MOD.RECORD.pack(
             1,0x7,2,7,12,0,
             300,320,350,0,0,0,0,0,0,0)
-        path.write_bytes(header+full+partial)
+        final_for_partial=MOD.RECORD.pack(
+            1,0x3f8,2,7,12,202,
+            0,0,0,360,370,380,390,400,450,500)
+        path.write_bytes(header+full+partial+final_for_partial)
         out=MOD.summarize(MOD.read(path))
-        assert out["record_count"]==2
+        assert out["record_count"]==3
+        assert out["trace_count"]==2
         assert out["segments"]["frame_receive_to_decode"]["count"]==2
         assert out["segments"]["frame_receive_to_decode"]["p50"] in {10,20}
-        assert out["segments"]["arb_decision_to_risk"]["count"]==1
-        assert out["segments"]["http_ack_to_user_ws_match"]["count"]==1
-        assert out["segments"]["frame_receive_to_user_ws_match"]["max"]==150
+        assert out["segments"]["arb_decision_to_risk"]["count"]==2
+        assert out["segments"]["http_ack_to_user_ws_match"]["count"]==2
+        assert out["segments"]["frame_receive_to_user_ws_match"]["max"]==200
 
 if __name__=="__main__":
     test_binary_trace_summary_ignores_missing_stages()
