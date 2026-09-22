@@ -274,7 +274,7 @@ print('V7_COLLECTION_READY='+json.dumps({{
  'authenticated_execution':False,
  'real_order_submission':False,
  'real_capital_at_risk':False,
- 'execution_authority':'ZERO_AUTHORITY_DATA_COLLECTION',
+ "execution_authority":"ZERO_AUTHORITY_DATA_COLLECTION",
 }},sort_keys=True,separators=(',',':')))
 PY
 """
