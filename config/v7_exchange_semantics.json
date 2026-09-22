@@ -1,0 +1,43 @@
+{
+  "schema": "polymarket_v7_exchange_semantics_v1",
+  "version": 1,
+  "as_of": "2026-09-22",
+  "production_clob_version": "V2",
+  "production_clob_url": "https://clob.polymarket.com",
+  "collateral_asset": "pUSD",
+  "collateral_backing_asset": "USDC",
+  "fee_semantics": {
+    "calculation_time": "MATCH_TIME",
+    "settlement_asset": "USDC_VALUE",
+    "maker_fee_rate": 0.0,
+    "market_fee_parameters_must_be_verified": true,
+    "legacy_buy_fee_in_shares_is_not_production_v2": true
+  },
+  "maker_rebates": {
+    "crypto_reference_fraction": 0.20,
+    "use_in_entry_gate": false,
+    "account_as_ancillary_realized_pnl": true,
+    "runtime_reverification_required": true
+  },
+  "taker_delay": {
+    "descriptor_field": "itode",
+    "delay_ns_when_true": 250000000,
+    "pending_orders_cancelable": false,
+    "revalidate_after_delay": true
+  },
+  "order_modes": [
+    "NORMAL",
+    "POST_ONLY",
+    "CANCEL_ONLY",
+    "PAUSED",
+    "DEGRADED"
+  ],
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false,
+    "unknown_fee_policy": "NON_EXECUTABLE",
+    "unknown_delay_policy": "NON_EXECUTABLE_TAKER",
+    "unknown_venue_mode_policy": "NO_NEW_RISK"
+  }
+}
