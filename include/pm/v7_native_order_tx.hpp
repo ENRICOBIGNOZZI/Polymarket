@@ -46,7 +46,10 @@ struct NativeOrderCommand {
     std::uint64_t market_state_version = 0;
     std::int64_t price_tick = 0;
     std::int64_t quantity_microunits = 0;
+    std::int64_t frame_receive_monotonic_ns = 0;
+    std::int64_t decode_complete_monotonic_ns = 0;
     std::int64_t decision_monotonic_ns = 0;
+    std::int64_t risk_admitted_monotonic_ns = 0;
     std::int64_t queue_monotonic_ns = 0;
     std::int32_t tick_size_e4 = 0;
     Side side = Side::None;
