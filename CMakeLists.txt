@@ -49,6 +49,7 @@ add_library(pm_v7_common
   src/v7_oms.cpp
   src/v7_paper_queue.cpp
   src/v7_market_state.cpp
+  src/v7_pure_arb_lane.cpp
   src/v7_markout.cpp
   src/v7_market_ws.cpp
   src/v7_capital.cpp
@@ -256,6 +257,11 @@ if(BUILD_TESTING)
   add_executable(pm_v7_paper_queue_tests tests/test_v7_paper_queue.cpp)
   target_link_libraries(pm_v7_paper_queue_tests PRIVATE pm_v7_common)
   add_test(NAME pm_v7_paper_queue_tests COMMAND pm_v7_paper_queue_tests)
+
+  add_executable(pm_v7_pure_arb_lane_tests tests/test_v7_pure_arb_lane.cpp)
+  target_link_libraries(pm_v7_pure_arb_lane_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_pure_arb_lane_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_pure_arb_lane_tests COMMAND pm_v7_pure_arb_lane_tests)
 
   add_executable(pm_v7_market_state_tests tests/test_v7_market_state.cpp)
   target_link_libraries(pm_v7_market_state_tests PRIVATE pm_v7_common)
