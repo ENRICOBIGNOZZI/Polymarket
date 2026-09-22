@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
+          fetch-depth: 2
       - id: diff
         name: Classify exact-SHA change
         shell: bash
@@ -65,6 +65,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base_sha="${{ github.event.pull_request.base.sha }}"
             [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+            git fetch --no-tags --depth=1 origin "$base_sha"
             git cat-file -e "$base_sha^{commit}"
             changed="$(git diff --name-only "$base_sha" HEAD)"
           elif git rev-parse HEAD^1 >/dev/null 2>&1; then
