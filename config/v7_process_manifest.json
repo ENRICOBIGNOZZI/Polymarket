@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 32,
-  "expected_launcher_child_count": 31,
+  "expected_process_count": 31,
+  "expected_launcher_child_count": 30,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -413,32 +413,6 @@
       "runtime_class": "CONTROL"
     },
     {
-      "id": "multi_az_fencing_guard",
-      "executable": "scripts/v7_multi_az_fencing_guard.py",
-      "arguments": [
-        "--model-sha",
-        "${SHA}"
-      ],
-      "profile": "core",
-      "inputs": [
-        "control/az_fencing_lease.json",
-        "config/v7_failover_fencing.json"
-      ],
-      "outputs": [
-        "control/az_fencing_guard.json",
-        "az_fencing_guard.log"
-      ],
-      "dependencies": [
-        "multi_az_fencing_supervisor"
-      ],
-      "exact_sha_required": true,
-      "config_identity_required": true,
-      "launcher_log": "az_fencing_guard.log",
-      "london_deployed": true,
-      "runtime_class": "CONTROL",
-      "authority_overrides": {}
-    },
-    {
       "id": "pure_arb_oracle_hub",
       "executable": "scripts/v7_multi_crypto_oracle_hub.py",
       "arguments": [
@@ -637,18 +611,14 @@
       "executable": "scripts/v7_multi_az_fencing_supervisor.py",
       "arguments": [
         "--model-sha",
-        "${SHA}",
-        "--server-id",
-        "${SERVER_ID}",
-        "--run-id",
-        "${RUN_ID}"
+        "${SHA}"
       ],
       "profile": "core",
       "inputs": [
-        "config/v7_failover_fencing.json"
+        "config/v7_failover_fencing.json",
+        "control/fencing_receipt.json"
       ],
       "outputs": [
-        "control/az_fencing_lease.json",
         "control/fencing_supervisor_status.json",
         "fencing_supervisor.log"
       ],
