@@ -2619,7 +2619,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total{job=\"polymarket-v7\",instance=~\".+\"}",
+          "expr": "(polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -2664,7 +2664,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_cycles_total{job=\"polymarket-v7\",instance=~\".+\"}",
+          "expr": "(polymarket_pure_arb_cycles_total{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -2709,7 +2709,7 @@
       },
       "targets": [
         {
-          "expr": "max(polymarket_pure_arb_context_last_edge_per_share{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}) * 10000",
+          "expr": "max((polymarket_pure_arb_context_last_edge_per_share{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)) * 10000",
           "refId": "A",
           "instant": true,
           "range": false
@@ -2754,7 +2754,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_last_receive_to_decision_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6",
+          "expr": "(polymarket_pure_arb_last_receive_to_decision_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -2799,7 +2799,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_fee_ready_contexts{job=\"polymarket-v7\",instance=~\".+\"}",
+          "expr": "(polymarket_pure_arb_fee_ready_contexts{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -2844,7 +2844,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_context_paper_locked_pnl_pre_gas_usd_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_pure_arb_context_paper_locked_pnl_pre_gas_usd_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "legendFormat": "{{asset}} {{horizon}} {{kind}}",
           "range": true,
@@ -2891,7 +2891,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_context_last_edge_per_share{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"} * 10000",
+          "expr": "(polymarket_pure_arb_context_last_edge_per_share{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"} * 10000) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "legendFormat": "{{asset}} {{horizon}} {{kind}}",
           "range": true,
@@ -2939,7 +2939,7 @@
       },
       "targets": [
         {
-          "expr": "sum(polymarket_pure_arb_context_active{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"})",
+          "expr": "sum((polymarket_pure_arb_context_active{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1))",
           "refId": "A",
           "instant": true,
           "range": false
@@ -2997,7 +2997,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_context_last_edge_per_share{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"} * 10000",
+          "expr": "(polymarket_pure_arb_context_last_edge_per_share{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"} * 10000) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "legendFormat": "{{asset}} {{horizon}} {{kind}}",
           "instant": true,
@@ -3040,7 +3040,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_context_last_executable_shares_l1{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_pure_arb_context_last_executable_shares_l1{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "legendFormat": "{{asset}} {{horizon}} {{kind}}",
           "instant": true,
@@ -3083,7 +3083,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_context_cycles_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}",
+          "expr": "(polymarket_pure_arb_context_cycles_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "legendFormat": "{{asset}} {{horizon}} {{kind}}",
           "instant": true,
@@ -3126,14 +3126,14 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(polymarket_pure_arb_context_cycles_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}[5m]))",
+          "expr": "sum((increase(polymarket_pure_arb_context_cycles_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}[5m])) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1))",
           "refId": "A",
           "legendFormat": "cycles / 5m",
           "range": true,
           "instant": false
         },
         {
-          "expr": "sum(increase(polymarket_pure_arb_context_paper_locked_pnl_pre_gas_usd_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}[5m]))",
+          "expr": "sum((increase(polymarket_pure_arb_context_paper_locked_pnl_pre_gas_usd_total{job=\"polymarket-v7\",instance=~\".+\",asset=~\"$asset\",horizon=~\"$horizon\"}[5m])) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1))",
           "refId": "B",
           "legendFormat": "L1 capacity PnL / 5m",
           "range": true,
@@ -3180,21 +3180,21 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_last_receive_to_decision_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6",
+          "expr": "(polymarket_pure_arb_last_receive_to_decision_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "legendFormat": "receive → decision ms",
           "range": true,
           "instant": false
         },
         {
-          "expr": "polymarket_pure_arb_last_decision_compute_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6",
+          "expr": "(polymarket_pure_arb_last_decision_compute_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "B",
           "legendFormat": "compute ms",
           "range": true,
           "instant": false
         },
         {
-          "expr": "polymarket_pure_arb_max_receive_to_decision_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6",
+          "expr": "(polymarket_pure_arb_max_receive_to_decision_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "C",
           "legendFormat": "max receive → decision ms",
           "range": true,
@@ -3271,7 +3271,7 @@
       },
       "targets": [
         {
-          "expr": "sum(polymarket_pure_arb_context_active{job=\"polymarket-v7\",instance=~\".+\"})",
+          "expr": "sum((polymarket_pure_arb_context_active{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1))",
           "refId": "A",
           "instant": true,
           "range": false
@@ -3317,7 +3317,7 @@
       },
       "targets": [
         {
-          "expr": "rate(polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total{job=\"polymarket-v7\",instance=~\".+\"}[5m]) * 3600",
+          "expr": "(rate(polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total{job=\"polymarket-v7\",instance=~\".+\"}[5m]) * 3600) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -3363,7 +3363,7 @@
       },
       "targets": [
         {
-          "expr": "rate(polymarket_pure_arb_cycles_total{job=\"polymarket-v7\",instance=~\".+\"}[5m]) * 60",
+          "expr": "(rate(polymarket_pure_arb_cycles_total{job=\"polymarket-v7\",instance=~\".+\"}[5m]) * 60) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -3409,7 +3409,7 @@
       },
       "targets": [
         {
-          "expr": "polymarket_pure_arb_max_receive_to_decision_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6",
+          "expr": "(polymarket_pure_arb_max_receive_to_decision_ns{job=\"polymarket-v7\",instance=~\".+\"} / 1e6) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1)",
           "refId": "A",
           "instant": true,
           "range": false
@@ -3455,7 +3455,7 @@
       },
       "targets": [
         {
-          "expr": "max(polymarket_pure_arb_context_last_executable_shares_l1{job=\"polymarket-v7\",instance=~\".+\"})",
+          "expr": "max((polymarket_pure_arb_context_last_executable_shares_l1{job=\"polymarket-v7\",instance=~\".+\"}) and on(job,instance) (polymarket_v7_exporter_snapshot_usable{job=\"polymarket-v7\",instance=~\".+\"} == 1))",
           "refId": "A",
           "instant": true,
           "range": false
