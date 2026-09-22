@@ -95,7 +95,10 @@ int main(int argc, char** argv) {
     assert(result.latency.sign_complete_monotonic_ns >= result.latency.sign_start_monotonic_ns);
     assert(result.latency.frame_complete_monotonic_ns >= result.latency.sign_complete_monotonic_ns);
     assert(result.latency.wire_start_monotonic_ns >= result.latency.frame_complete_monotonic_ns);
-    assert(result.wire_monotonic_ns >= result.latency.wire_start_monotonic_ns);
+    assert(result.latency.wire_complete_monotonic_ns >= result.latency.wire_start_monotonic_ns);
+    assert(result.latency.http_ack_monotonic_ns >= result.latency.wire_complete_monotonic_ns);
+    assert(result.wire_monotonic_ns == result.latency.wire_complete_monotonic_ns);
+    assert(result.response_complete_monotonic_ns == result.latency.http_ack_monotonic_ns);
     assert(result.latency.prewire_ns() > 0);
     assert(result.latency.signing_ns() > 0);
 
