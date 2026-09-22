@@ -174,8 +174,10 @@ ReferencePlan reference_evaluate(const PairInput& in) noexcept {
     out.sell=ref_sweep(in.yes,in.no,in.fee_rate,in.fee_exponent,in.reserve_per_share,false,
                        std::max<std::int64_t>(0,in.sell_available_microunits));
     const RefSweep* selected=nullptr;
-    if(out.buy.shares_microunits>0){selected=&out.buy;out.direction=Direction::BuyCompleteSet;out.side=Side::Buy;}
-    else if(out.sell.shares_microunits>0){selected=&out.sell;out.direction=Direction::SellCompleteSet;out.side=Side::Sell;}
+    Direction direction=Direction::None;
+    Side side=Side::None;
+    if(out.buy.shares_microunits>0){selected=&out.buy;direction=Direction::BuyCompleteSet;side=Side::Buy;}
+    else if(out.sell.shares_microunits>0){selected=&out.sell;direction=Direction::SellCompleteSet;side=Side::Sell;}
     else {
         out.reason=in.sell_available_microunits<in.minimum_order_microunits
             ? DecisionReason::SellInventoryUnavailable : DecisionReason::NoPositiveEdge;
@@ -184,10 +186,11 @@ ReferencePlan reference_evaluate(const PairInput& in) noexcept {
     if(selected->shares_microunits<in.minimum_order_microunits){
         out.reason=DecisionReason::BelowVenueMinimum;return out;
     }
-    if(out.direction==Direction::SellCompleteSet
+    if(direction==Direction::SellCompleteSet
        && in.sell_available_microunits<selected->shares_microunits){
         out.reason=DecisionReason::SellInventoryUnavailable;return out;
     }
+    out.direction=direction; out.side=side;
     out.reason=DecisionReason::Accepted; out.accepted=1; out.economics=*selected;
     out.yes_instrument=in.yes_instrument_handle; out.no_instrument=in.no_instrument_handle;
     out.yes_version=in.yes.state_version; out.no_version=in.no.state_version;
