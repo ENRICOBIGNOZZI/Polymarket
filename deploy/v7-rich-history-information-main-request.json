@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_rich_history_information_main_request_v1",
   "version": 1,
-  "request_id": "rich-history-information-20260922-v1",
+  "request_id": "rich-history-information-20260922-v2",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "f8d35188c702bf2522e5e6ab098fd9e0ffb57d7c",
+  "expected_research_sha": "dfd177172a7eec5795583a5cee926180c57fc0e4",
   "research_branch": "rich-history-alpha-20260922",
   "publish_branch": "rich-history-results-20260922",
   "minimum_wall_ns": 1789921800000000000,
