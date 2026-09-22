@@ -1,5 +1,7 @@
 #include "pm/v7_native_latency_tape.hpp"
 
+#include <array>
+#include <bit>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -9,10 +11,72 @@ namespace pm::v7 {
 namespace {
 constexpr std::size_t kLatencyTapeCapacity = 32768;
 constexpr std::size_t kLatencyTapeBatch = 256;
+static_assert(std::has_single_bit(kLatencyTapeCapacity));
+
+class LatencyMpscRing final {
+public:
+    LatencyMpscRing() noexcept {
+        for (std::size_t i = 0; i < slots_.size(); ++i) {
+            slots_[i].sequence.store(i, std::memory_order_relaxed);
+        }
+    }
+
+    [[nodiscard]] bool try_push(const NativeLatencyEvent& value) noexcept {
+        std::size_t pos = head_.load(std::memory_order_relaxed);
+        for (;;) {
+            auto& slot = slots_[pos & mask_];
+            const auto sequence = slot.sequence.load(std::memory_order_acquire);
+            const auto diff = static_cast<std::intptr_t>(sequence)
+                - static_cast<std::intptr_t>(pos);
+            if (diff == 0) {
+                if (head_.compare_exchange_weak(
+                        pos, pos + 1,
+                        std::memory_order_relaxed,
+                        std::memory_order_relaxed)) {
+                    slot.value = value;
+                    slot.sequence.store(pos + 1, std::memory_order_release);
+                    return true;
+                }
+                continue;
+            }
+            if (diff < 0) return false;
+            pos = head_.load(std::memory_order_relaxed);
+        }
+    }
+
+    [[nodiscard]] bool try_pop(NativeLatencyEvent& value) noexcept {
+        const auto pos = tail_.load(std::memory_order_relaxed);
+        auto& slot = slots_[pos & mask_];
+        const auto sequence = slot.sequence.load(std::memory_order_acquire);
+        const auto diff = static_cast<std::intptr_t>(sequence)
+            - static_cast<std::intptr_t>(pos + 1);
+        if (diff != 0) return false;
+        value = slot.value;
+        slot.sequence.store(pos + kLatencyTapeCapacity, std::memory_order_release);
+        tail_.store(pos + 1, std::memory_order_release);
+        return true;
+    }
+
+    [[nodiscard]] std::size_t approximate_size() const noexcept {
+        const auto head = head_.load(std::memory_order_acquire);
+        const auto tail = tail_.load(std::memory_order_acquire);
+        return head >= tail ? head - tail : 0;
+    }
+
+private:
+    struct Slot {
+        std::atomic<std::size_t> sequence{0};
+        NativeLatencyEvent value{};
+    };
+    static constexpr std::size_t mask_ = kLatencyTapeCapacity - 1;
+    std::array<Slot, kLatencyTapeCapacity> slots_{};
+    alignas(64) std::atomic<std::size_t> head_{0};
+    alignas(64) std::atomic<std::size_t> tail_{0};
+};
 }
 
 struct NativeLatencyTape::Impl {
-    SpscRing<NativeLatencyEvent, kLatencyTapeCapacity> queue{};
+    LatencyMpscRing queue{};
     std::atomic<bool> stopping{false};
     std::atomic<bool> healthy{false};
     std::atomic<std::uint64_t> published{0};
