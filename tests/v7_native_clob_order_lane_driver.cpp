@@ -5,6 +5,7 @@
 #include <array>
 #include <cassert>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 
 using namespace pm::v7;
@@ -58,7 +59,12 @@ int main(int argc, char** argv) {
     NativeClobOrderLane rejected_identity(mismatched, private_key);
     assert(!rejected_identity.valid());
 
-    NativeClobOrderLane lane(config, private_key);
+    const auto latency_path = std::filesystem::temp_directory_path()
+        / "pm-v7-native-clob-latency-driver.bin";
+    std::error_code latency_ec;
+    std::filesystem::remove(latency_path, latency_ec);
+    NativeLatencyTape latency_tape(latency_path.string());
+    NativeClobOrderLane lane(config, private_key, &latency_tape);
     assert(lane.valid());
     assert(lane.connect(argv[2]));
     assert(lane.connected());
@@ -101,6 +107,9 @@ int main(int argc, char** argv) {
     assert(result.response_complete_monotonic_ns == result.latency.http_ack_monotonic_ns);
     assert(result.latency.prewire_ns() > 0);
     assert(result.latency.signing_ns() > 0);
+    latency_tape.stop();
+    assert(std::filesystem::file_size(latency_path)
+        == 5 * sizeof(NativeLatencyEvent));
 
     const auto* record = oms.find(prepared.command.client_order_id);
     assert(record != nullptr);
@@ -124,6 +133,7 @@ int main(int argc, char** argv) {
     assert(authority.capital_snapshot().inventory_committed_microdollars == 2'500'000);
     assert(oms.find(prepared.command.client_order_id)->filled_microunits == 5'000'000);
     lane.close();
+    std::filesystem::remove(latency_path, latency_ec);
     std::cout << "NATIVE_CLOB_ORDER_LANE_PASS\n";
     return 0;
 }
