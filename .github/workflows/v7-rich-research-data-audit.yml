@@ -1,0 +1,116 @@
+name: V7 rich research data audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-rich-research-data-audit.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: rich-research-data-audit
+          aws-region: eu-west-2
+      - name: Audit immutable native research coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-research-data-audit.json"))["instance_id"])')"
+          cat >/tmp/audit.py <<'PY'
+          import gzip,json
+          from pathlib import Path
+          from collections import Counter,defaultdict
+
+          roots=[]
+          for hft in list(Path('/mnt/polymarket-data').glob('*/research/hft_permanent'))+list(Path('/home').glob('*/polymarket-runs/*/research/hft_permanent')):
+              if hft.is_dir() and not hft.is_symlink():
+                  files=[p for folder in ('compact','compact_closed') for p in (hft/folder).glob('*.jsonl*') if p.is_file() and not p.is_symlink()]
+                  if files:
+                      roots.append((sum(p.stat().st_size for p in files),hft,files))
+          if not roots:
+              raise SystemExit('NO_HFT_ROOT')
+          _,hft,files=max(roots)
+          op=gzip.open if False else None
+          k2=Counter(); k6=Counter(); keys6=Counter(); reason=Counter()
+          mn2=mx2=mn6=mx6=None
+          samples=[]
+          total=invalid=0
+          for p in sorted(files):
+              opener=gzip.open if str(p).endswith('.gz') else open
+              with opener(p,'rt',encoding='utf-8') as f:
+                  for line in f:
+                      total+=1
+                      try:r=json.loads(line)
+                      except Exception:
+                          invalid+=1;continue
+                      if r.get('schema')!='polymarket_v7_native_observation_v1':
+                          continue
+                      kind=r.get('kind')
+                      if kind==2:
+                          t=r.get('decision_wall_ns')
+                          if isinstance(t,int) and t>0:
+                              mn2=t if mn2 is None else min(mn2,t); mx2=t if mx2 is None else max(mx2,t)
+                          k2[(str(r.get('asset') or 'UNKNOWN'),str(r.get('horizon') or 'UNKNOWN'))]+=1
+                      elif kind==6:
+                          t=r.get('decision_wall_ns')
+                          if isinstance(t,int) and t>0:
+                              mn6=t if mn6 is None else min(mn6,t); mx6=t if mx6 is None else max(mx6,t)
+                          for k in r: keys6[k]+=1
+                          # discover any explicit horizon-like fields without assuming schema.
+                          hv=[]
+                          for k,v in r.items():
+                              lk=str(k).lower()
+                              if ('horizon' in lk or 'offset' in lk or 'delay' in lk or 'repric' in lk) and isinstance(v,(int,float,str,bool)):
+                                  hv.append((k,v))
+                          k6[tuple(sorted(hv))]+=1
+                          if len(samples)<12:
+                              samples.append({k:r.get(k) for k in sorted(r) if k in {
+                                  'asset','horizon','kind','decision_wall_ns','decision_monotonic_ns',
+                                  'repricing_origin_signal_version','repricing_horizon_ms',
+                                  'repricing_delay_ms','repricing_offset_ms','signal_version',
+                                  'yes_bid_e4','yes_ask_e4','no_bid_e4','no_ask_e4'
+                              }})
+          out={
+              'root':str(hft.parent.parent),
+              'files':len(files),
+              'bytes':sum(p.stat().st_size for p in files),
+              'total_json_lines':total,'invalid_json':invalid,
+              'kind2_min_ns':mn2,'kind2_max_ns':mx2,
+              'kind6_min_ns':mn6,'kind6_max_ns':mx6,
+              'kind2_span_hours':None if not (mn2 and mx2) else (mx2-mn2)/3.6e12,
+              'kind6_span_hours':None if not (mn6 and mx6) else (mx6-mn6)/3.6e12,
+              'kind2_asset_horizon':{f'{a}::{h}':n for (a,h),n in sorted(k2.items())},
+              'kind6_horizon_signatures':[{'fields':dict(sig),'count':n} for sig,n in k6.most_common(30)],
+              'kind6_top_keys':keys6.most_common(80),
+              'kind6_samples':samples,
+          }
+          print('RICH_DATA_AUDIT='+json.dumps(out,separators=(',',':'),sort_keys=True))
+          PY
+          b64="$(base64 -w0 /tmp/audit.py)"
+          params="$(python3 - "$b64" <<'PY'
+          import json,shlex,sys
+          b=sys.argv[1]
+          print(json.dumps({'commands':[f"printf %s {shlex.quote(b)} | base64 -d | nice -n 18 python3"]}))
+          PY
+          )"
+          cmd="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --timeout-seconds 1500 --parameters "$params" --query 'Command.CommandId' --output text)"
+          for i in $(seq 1 180); do
+            status="$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query Status --output text 2>/dev/null || true)"
+            case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+            sleep 5
+          done
+          aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query '{Status:Status,Stdout:StandardOutputContent,Stderr:StandardErrorContent}' --output json
