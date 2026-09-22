@@ -381,6 +381,86 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
     return lines
 
 
+
+def _render_settlement_source_arb_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_settlement_source_arb_status_v2"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+    )
+    lines = [
+        _metric("polymarket_settlement_source_arb_up", safe and status.get("state") == "COLLECTING"),
+        _metric("polymarket_settlement_source_arb_cycles_total", status.get("cycles")),
+        _metric("polymarket_settlement_source_arb_locked_total", status.get("paper_locked_arbitrages")),
+        _metric("polymarket_settlement_source_arb_locked_pnl_usd_total", status.get("locked_pnl")),
+        _metric("polymarket_settlement_source_arb_pending_outcomes", status.get("pending_outcomes")),
+        _metric("polymarket_settlement_source_arb_cached_markets", status.get("cached_markets")),
+    ]
+    if not safe:
+        return lines
+    for kind, row in sorted((status.get("by_kind") or {}).items()):
+        if not isinstance(row, dict):
+            continue
+        labels = {"kind": _prom_label(kind)}
+        lines.extend([
+            _metric("polymarket_settlement_source_arb_kind_cycles_total", row.get("cycles"), labels),
+            _metric("polymarket_settlement_source_arb_kind_locked_total",
+                    row.get("paper_locked_arbitrages"), labels),
+            _metric("polymarket_settlement_source_arb_kind_locked_pnl_usd_total",
+                    row.get("locked_pnl"), labels),
+        ])
+    for state, count in sorted((status.get("states") or {}).items()):
+        lines.append(_metric("polymarket_settlement_source_arb_state_total", count,
+                             {"state": _prom_label(state)}))
+    return lines
+
+
+def _render_complete_set_maker_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_two_sided_complete_set_shadow_status_v2"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+    )
+    lines = [
+        _metric("polymarket_complete_set_maker_shadow_up", safe and status.get("state") == "COLLECTING"),
+        _metric("polymarket_complete_set_maker_cycles_total", status.get("cycles")),
+        _metric("polymarket_complete_set_maker_active_cycles", status.get("active_cycles")),
+        _metric("polymarket_complete_set_maker_paired_fill_probability",
+                status.get("paired_fill_probability_direct")),
+        _metric("polymarket_complete_set_maker_both_any_probability",
+                status.get("both_any_probability_direct")),
+        _metric("polymarket_complete_set_maker_one_leg_probability",
+                status.get("one_leg_probability_direct")),
+        _metric("polymarket_complete_set_maker_total_shadow_pnl_usd",
+                status.get("total_shadow_pnl")),
+        _metric("polymarket_complete_set_maker_mean_shadow_pnl_usd",
+                status.get("mean_total_shadow_pnl")),
+        _metric("polymarket_complete_set_maker_total_legging_loss_usd",
+                status.get("total_legging_loss")),
+        _metric("polymarket_complete_set_maker_mean_legging_loss_usd",
+                status.get("mean_legging_loss")),
+    ]
+    if not safe:
+        return lines
+    for state, count in sorted((status.get("states") or {}).items()):
+        lines.append(_metric("polymarket_complete_set_maker_state_total", count,
+                             {"state": _prom_label(state)}))
+    for context, states in sorted((status.get("by_context") or {}).items()):
+        if not isinstance(states, dict):
+            continue
+        asset, _, horizon = str(context).partition(":")
+        for state, count in sorted(states.items()):
+            lines.append(_metric("polymarket_complete_set_maker_context_state_total", count, {
+                "asset": _prom_label(asset), "horizon": _prom_label(horizon),
+                "state": _prom_label(state),
+            }))
+    return lines
+
+
 def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, multi_crypto_shadow_run_root: Path | None = None, include_profit_experiment_report: bool = True) -> dict[str, Any]:
     live_observation_clock = now is None
     now = int(time.time()) if now is None else int(now)
@@ -526,6 +606,10 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         multi_crypto_shadow_run_root, now_ns=now * 1_000_000_000,
     )
     snapshot["pure_arb"] = _json(run_root / "research/repricing_book/pure_arb_status.json")
+    snapshot["settlement_source_arb"] = _json(
+        run_root / "research/repricing_book/settlement_source_arb_status.json")
+    snapshot["complete_set_maker_shadow"] = _json(
+        run_root / "research/repricing_book/two_sided_complete_set_status.json")
     return snapshot
 
 
@@ -895,6 +979,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     lines.extend(render_multi_crypto_prometheus(snapshot.get("multi_crypto_performance") or {}))
     lines.extend(render_shadow_prometheus(snapshot.get("multi_crypto_shadow") or {}))
     lines.extend(_render_pure_arb_metrics(snapshot.get("pure_arb") or {}))
+    lines.extend(_render_settlement_source_arb_metrics(snapshot.get("settlement_source_arb") or {}))
+    lines.extend(_render_complete_set_maker_metrics(snapshot.get("complete_set_maker_shadow") or {}))
     retention=operations.get('retention') or {}
     storage=retention.get('hft_storage') or {}
     population=retention.get('hft_opportunity_preservation') or {}
