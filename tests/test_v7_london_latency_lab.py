@@ -90,6 +90,23 @@ def test_three_az_bootstrap_repairs_git_metadata_ownership_before_fetch():
     assert 'chown -R {service_user}:"$SERVICE_GROUP" "$APP/.git"' in bootstrap
 
 
+def test_london_bootstrap_propagates_exact_sha_ci_reuse_to_stage_release():
+    bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
+    assert 'REUSE_EXACT_SHA_CI="${POLYMARKET_REUSE_EXACT_SHA_CI:-0}"' in bootstrap
+    assert 'CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"' in bootstrap
+    call = bootstrap[bootstrap.index("# Stage the exact release"):]
+    assert 'POLYMARKET_REUSE_EXACT_SHA_CI="$REUSE_EXACT_SHA_CI"' in call
+    assert 'PM_V7_CI_REPOSITORY="$CI_REPOSITORY"' in call
+
+
+def test_london_bootstrap_forwards_exact_sha_ci_reuse_to_stage_release():
+    bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
+    assert 'REUSE_EXACT_SHA_CI="${POLYMARKET_REUSE_EXACT_SHA_CI:-0}"' in bootstrap
+    assert 'CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"' in bootstrap
+    assert 'POLYMARKET_REUSE_EXACT_SHA_CI="$REUSE_EXACT_SHA_CI"' in bootstrap
+    assert 'PM_V7_CI_REPOSITORY="$CI_REPOSITORY"' in bootstrap
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
