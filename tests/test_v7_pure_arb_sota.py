@@ -50,11 +50,21 @@ def test_execution_fok_preserves_boolean_contract_with_detail():
     point={"ts":1000,"levels":[(0.40,2.0),(0.41,3.0)]}
     ok=execution.fok_fill(
         point,side="BUY",limit=.41,quantity=5,target_ms=1000,maximum_book_age_ms=100)
-    assert ok
+    assert ok["filled"] is True
     assert ok["levels_used"]==2
     no=execution.fok_fill(
         point,side="BUY",limit=.40,quantity=5,target_ms=1000,maximum_book_age_ms=100)
-    assert not no
+    assert no["filled"] is False
+
+
+def test_transport_modes_have_distinct_arrival_semantics():
+    seq,order=execution.leg_arrival_times("SEQUENTIAL","YES_FIRST",1000,5,2)
+    par,_=execution.leg_arrival_times("PARALLEL","YES_FIRST",1000,5,2)
+    bat,_=execution.leg_arrival_times("BATCH","YES_FIRST",1000,5,2)
+    assert order==("YES","NO")
+    assert seq=={"YES":1000,"NO":1007}
+    assert par=={"YES":1000,"NO":1002}
+    assert bat=={"YES":1000,"NO":1000}
 
 
 def test_taker_tier_schedule_and_unknown_is_zero():
@@ -241,7 +251,22 @@ def test_http_parser_exposes_retry_after():
         subprocess.run([str(binary)],check=True,capture_output=True,text=True)
 
 
+def test_cpp_detector_uses_venue_fee_precision():
+    source=(ROOT/"src/v7_maker_fillability_observer.cpp").read_text()
+    assert "pure_arb_fee_usdc" in source
+    assert "raw < 0.00001" in source
+    assert "std::round(raw * 100000.0) / 100000.0" in source
+
+
 def test_cross_market_registry_remains_empty_until_proof_exists():
     value=json.loads((ROOT/"config/v7_exact_arb_relations.json").read_text())
     assert value["relations"]==[]
     assert value["automatic_promotion"] is False
+
+
+if __name__=="__main__":
+    tests=[value for name,value in sorted(globals().items())
+           if name.startswith("test_") and callable(value)]
+    for test in tests:
+        test()
+    print(f"pure_arb_sota_tests={len(tests)}")
