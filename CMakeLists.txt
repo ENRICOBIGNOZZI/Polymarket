@@ -84,7 +84,8 @@ add_library(pm_v7_clob_native
   src/v7_clob_http1_response.cpp
   src/v7_clob_http_response.cpp
   src/v7_clob_order_identity.cpp
-  src/v7_clob_tls.cpp)
+  src/v7_clob_tls.cpp
+  src/v7_clob_pair_transport.cpp)
 target_include_directories(pm_v7_clob_native PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_clob_native PUBLIC pm_json Threads::Threads OpenSSL::SSL OpenSSL::Crypto PkgConfig::SECP256K1)
 target_compile_options(pm_v7_clob_native PRIVATE -Wall -Wextra -Wpedantic)
@@ -372,6 +373,11 @@ if(BUILD_TESTING)
   add_executable(pm_v7_native_clob_order_lane_driver tests/v7_native_clob_order_lane_driver.cpp)
   target_link_libraries(pm_v7_native_clob_order_lane_driver PRIVATE pm_v7_account_native)
   target_compile_options(pm_v7_native_clob_order_lane_driver PRIVATE -UNDEBUG)
+
+  add_executable(pm_v7_clob_pair_transport_driver
+    tests/v7_clob_pair_transport_driver.cpp)
+  target_link_libraries(pm_v7_clob_pair_transport_driver PRIVATE pm_v7_clob_native)
+  target_compile_options(pm_v7_clob_pair_transport_driver PRIVATE -UNDEBUG)
 
   add_executable(pm_v7_user_oms_bridge_latency_tests
     tests/test_v7_user_oms_bridge_latency.cpp)
