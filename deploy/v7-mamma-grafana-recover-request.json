@@ -1,4 +1,4 @@
 {
-    "schema": "polymarket_v7_mamma_grafana_recover_v1",
-    "monitoring_only": true
+  "schema": "polymarket_v7_mamma_grafana_recover_v1",
+  "monitoring_only": true
 }
