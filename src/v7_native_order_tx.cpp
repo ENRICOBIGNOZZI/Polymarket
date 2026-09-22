@@ -13,6 +13,7 @@ namespace {
 }
 
 [[nodiscard]] AdapterTimeInForce tif_for(const ExecutionPlan& plan) noexcept {
+    if (plan.policy == ExecutionPolicyId::PureArbFok) return AdapterTimeInForce::Fok;
     if (plan.policy == ExecutionPolicyId::AggressiveTaker) return AdapterTimeInForce::Fak;
     return AdapterTimeInForce::Gtc;
 }
