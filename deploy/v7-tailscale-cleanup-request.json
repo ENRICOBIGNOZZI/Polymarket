@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_tailscale_cleanup_request_v1",
   "version": 1,
-  "expected_parent_sha": "6446902ff7d10319757e78c0cfbc4cda29d1e04e",
+  "expected_parent_sha": "ff17a37942ba3ffd32c7cf13c1f1177fbb36f77a",
   "client_id": "TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL",
   "audience": "api.tailscale.com/TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL",
   "maximum_deletions": 1200,
