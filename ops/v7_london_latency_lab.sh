@@ -73,7 +73,7 @@ build_one(){
   cmake --build "$dir" --parallel "$(nproc)" --target \
     polymarket_v7_paired_sign_bench \
     polymarket_v7_pure_arb_handoff_bench \
-    polymarket_v7_public_paired_tls_probe >/dev/null
+    polymarket_v7_public_paired_clob_transport_probe >/dev/null
 }
 
 build_one noipo OFF
@@ -114,12 +114,12 @@ if command -v perf >/dev/null 2>&1 \
   perf_used=1
   perf stat -x, -o "$OUT_DIR/perf-public.csv" \
     -e task-clock,context-switches,cpu-migrations \
-    "$WORK/build-ipo/polymarket_v7_public_paired_tls_probe" \
+    "$WORK/build-ipo/polymarket_v7_public_paired_clob_transport_probe" \
       --samples "$SAMPLES" --warmup 8 \
-      > "$OUT_DIR/public-paired-tls.json"
+      > "$OUT_DIR/public-paired-clob.json"
 else
-  "$WORK/build-ipo/polymarket_v7_public_paired_tls_probe" \
-    --samples "$SAMPLES" --warmup 8 > "$OUT_DIR/public-paired-tls.json"
+  "$WORK/build-ipo/polymarket_v7_public_paired_clob_transport_probe" \
+    --samples "$SAMPLES" --warmup 8 > "$OUT_DIR/public-paired-clob.json"
 fi
 soft_after="$(awk '/^softirq /{print $2}' /proc/stat 2>/dev/null || echo 0)"
 ctxt_after="$(awk '/^ctxt /{print $2}' /proc/stat 2>/dev/null || echo 0)"
@@ -139,7 +139,7 @@ from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]
 def load(name):return json.loads((root/name).read_text())
 base=load("sign-noipo.json"); ipo=load("sign-ipo.json"); pgo=load("sign-pgo-use.json")
-handoff=load("handoff.json"); net=load("public-paired-tls.json")
+handoff=load("handoff.json"); net=load("public-paired-clob.json")
 def sign(d):
     x=d["latency_ns"]["parallel_pair_completion"]
     return {"p50":x["p50"],"p95":x["p95"],"p99":x["p99"],"p999":x["p999"],"max":x["max"]}
