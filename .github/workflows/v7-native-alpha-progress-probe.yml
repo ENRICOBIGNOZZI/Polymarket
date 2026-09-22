@@ -26,30 +26,97 @@ jobs:
           role-to-assume: ${{ env.ROLE_ARN }}
           role-session-name: native-alpha-progress-probe
           aws-region: eu-west-2
-      - name: Probe research processes and outputs
+      - name: Probe research outputs and grid summary
         shell: bash
         run: |
           set -euo pipefail
           instance="$(python3 -c 'import json;print(json.load(open("deploy/v7-native-alpha-progress-probe.json"))["instance_id"])')"
-          command_id="$(aws ssm send-command \
-            --instance-ids "$instance" \
-            --document-name AWS-RunShellScript \
-            --parameters commands='[
-              "set -eu",
+          cat >/tmp/remote_summary.py <<'PY'
+          import csv,json,statistics
+          from pathlib import Path
+
+          print("===PROCESSES===")
+          # Process listing is handled by shell after this script.
+
+          cands=[]
+          for p in Path('/tmp').glob('polymarket-native-alpha-2h-*/output/21_native_alpha_grid.csv'):
+              if p.is_file():
+                  cands.append((p.stat().st_mtime_ns,p))
+          if not cands:
+              print("GRID_SUMMARY="+json.dumps({'state':'NO_GRID'}))
+              raise SystemExit(0)
+          p=max(cands)[1]
+          rows=list(csv.DictReader(p.open()))
+          by={}
+          for r in rows:
+              try:
+                  pnl=float(r['total_pnl'])
+              except Exception:
+                  continue
+              r['_pnl']=pnl
+              by.setdefault(r['alpha'],[]).append(r)
+
+          summary=[]
+          for a,rr in by.items():
+              vals=[x['_pnl'] for x in rr]
+              best=max(rr,key=lambda x:x['_pnl'])
+              worst=min(rr,key=lambda x:x['_pnl'])
+              summary.append({
+                  'alpha':a,
+                  'median':round(statistics.median(vals),6),
+                  'mean':round(statistics.fmean(vals),6),
+                  'positive_fraction':round(sum(v>0 for v in vals)/len(vals),4),
+                  'best':[int(best['entry_latency_ms']),int(best['exit_horizon_ms']),round(best['_pnl'],6)],
+                  'worst':[int(worst['entry_latency_ms']),int(worst['exit_horizon_ms']),round(worst['_pnl'],6)],
+                  'median_observed':statistics.median(int(float(x.get('observed') or 0)) for x in rr),
+                  'median_fills':statistics.median(int(float(x.get('fills') or 0)) for x in rr),
+              })
+          summary.sort(key=lambda x:(x['median'],x['positive_fraction'],x['mean']),reverse=True)
+          allrows=[r for rr in by.values() for r in rr]
+          def compact(r):
+              return {
+                  'alpha':r['alpha'],
+                  'l':int(r['entry_latency_ms']),
+                  'h':int(r['exit_horizon_ms']),
+                  'pnl':round(r['_pnl'],6),
+                  'selected':int(float(r.get('selected') or 0)),
+                  'observed':int(float(r.get('observed') or 0)),
+                  'fills':int(float(r.get('fills') or 0)),
+              }
+          baseline=sorted(by.get('baseline_continuation',[]),key=lambda r:(int(r['entry_latency_ms']),int(r['exit_horizon_ms'])))
+          out={
+              'state':'READY',
+              'grid':str(p),
+              'alpha_count':len(by),
+              'rows':len(rows),
+              'top_alpha_by_median':summary[:15],
+              'bottom_alpha_by_median':summary[-8:],
+              'top_cells':[compact(r) for r in sorted(allrows,key=lambda r:r['_pnl'],reverse=True)[:12]],
+              'bottom_cells':[compact(r) for r in sorted(allrows,key=lambda r:r['_pnl'])[:12]],
+              'baseline':[compact(r) for r in baseline],
+          }
+          print("GRID_SUMMARY="+json.dumps(out,separators=(',',':'),sort_keys=True))
+          PY
+          b64="$(base64 -w0 /tmp/remote_summary.py)"
+          params="$(python3 - "$b64" <<'PY'
+          import json,shlex,sys
+          b=sys.argv[1]
+          commands=[
               "echo ===PROCESSES===",
-              "ps -eo pid,etime,pcpu,pmem,args | grep -E \"native_2h_alpha|multi_alpha_2h|polymarket-native-alpha-2h\" | grep -v grep || true",
-              "echo ===OUTPUTS===",
-              "find /tmp -maxdepth 4 -type f \\( -path \"*polymarket-native-alpha-2h*/output/*\" -o -path \"*polymarket-multi-alpha-2h*/output/*\" \\) -printf \"%TY-%Tm-%Td %TH:%TM:%TS %s %p\\n\" 2>/dev/null | sort || true",
+              "ps -eo pid,etime,pcpu,pmem,args | grep -E 'native_2h_alpha|polymarket-native-alpha-2h' | grep -v grep || true",
+              f"printf %s {shlex.quote(b)} | base64 -d | python3",
               "echo ===DISK===",
-              "df -h /tmp"
-            ]' \
-            --query 'Command.CommandId' --output text)"
-          for i in $(seq 1 30); do
-            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text)"
+              "df -h /tmp",
+          ]
+          print(json.dumps({'commands':commands}))
+          PY
+          )"
+          command_id="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters "$params" --query 'Command.CommandId' --output text)"
+          for i in $(seq 1 60); do
+            status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query Status --output text 2>/dev/null || true)"
             case "$status" in
               Success|Failed|Cancelled|TimedOut) break ;;
             esac
             sleep 2
           done
-          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" \
-            --query '{Status:Status,Stdout:StandardOutputContent,Stderr:StandardErrorContent}' --output json
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --query '{Status:Status,Stdout:StandardOutputContent,Stderr:StandardErrorContent}' --output json
