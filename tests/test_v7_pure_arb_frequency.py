@@ -98,6 +98,8 @@ def test_cpp_hot_path_contract_contains_new_frequency_guards():
         "sell_reserve_positive",
         "pure_arb_receive_to_decision_limit_ns_",
         "last_executable_shares_l10",
+        "buy_cycles_recorded",
+        "sell_cycles_recorded",
     ]
     for token in required:
         assert token in source,token
@@ -121,6 +123,14 @@ def test_runtime_wires_all_zero_authority_frequency_workers_once():
         assert loop.count(worker)==1,worker
     assert "--pure-arb-prefunded-complete-set-shares 1000" in loop
     assert "v7_assert_registered_child_count 15" in loop
+
+
+
+def test_rollover_policy_preloads_slow_contexts_inside_final_five_minutes():
+    universe=(ROOT/"scripts/v7_crypto_universe.py").read_text(encoding="utf-8")
+    assert "near_rollover = 0 < earliest_start - now_s <= 300" in universe
+    assert 'horizon in {"M5", "M15"}' in universe
+
 
 
 def test_arrival_shadow_defines_delay_and_reserve_counterfactuals():
@@ -198,7 +208,7 @@ def test_ten_point_program_contract_is_complete():
         assert token in cpp
     assert "pure_arb_receive_to_decision_limit_ns_" in cpp
     # 9 zero-downtime current+next preload
-    assert "CURRENT_PLUS_NEXT_M5_M15" in universe
+    assert "CURRENT_PLUS_NEXT_M5_M15_AND_ALL_CONTEXTS_WITHIN_300S" in universe
     assert "defer_pure_arb_membership_reload" in cpp
     # 10 event-driven taker with hot-path IO removed
     assert "evaluate_pure_arb(row)" in cpp
