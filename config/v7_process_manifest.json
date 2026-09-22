@@ -338,7 +338,16 @@
         "--capture-native-decisions",
         "--capture-execution-windows",
         "--execution-window-ns",
-        "5000000000"
+        "5000000000",
+        "--pure-arb-shadow",
+        "--pure-arb-reserve-per-share",
+        "0.0005",
+        "--pure-arb-max-leg-skew-ns",
+        "100000000",
+        "--pure-arb-max-receive-to-decision-ns",
+        "50000000",
+        "--pure-arb-prefunded-complete-set-shares",
+        "1000"
       ],
       "profile": "core",
       "inputs": [
