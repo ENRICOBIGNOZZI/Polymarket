@@ -129,13 +129,60 @@ def test_book_selection_covers_all_30_runtime_contexts_and_60_tokens():
     }
     selection,blocker=universe.build_book_selection(snap)
     assert blocker==""
+    assert selection["active_market_count"]==30 and selection["active_token_count"]==60
     assert selection["market_count"]==30 and selection["token_count"]==60
+    assert selection["preloaded_market_count"]==0
     assert len(selection["markets"])==30
     assert {f"{x['asset']}:{x['horizon']}" for x in selection["markets"]}=={
         f"{a}:{h}" for a in assets for h in horizons
     }
     assert all(x["yes_token"].startswith("up") and x["no_token"].startswith("down")
                for x in selection["markets"])
+
+
+
+def test_book_selection_preloads_next_m5_m15_without_changing_active_contract():
+    assets = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+    horizons = {"M5":300, "M15":900, "H1":3600, "H4":14400, "D1":86400}
+    rows=[]; index=0
+    for asset in assets:
+        for horizon,seconds in horizons.items():
+            index+=1
+            rows.append({
+                "market_id":f"current-{index}", "event_ids":[f"e-current-{index}"],
+                "clob_token_ids":[f"up-current-{index}",f"down-current-{index}"],
+                "outcomes":["Up","Down"], "asset":asset, "horizon":horizon,
+                "horizon_seconds":seconds, "window_start_unix":NOW-10,
+                "close_timestamp_unix":NOW+seconds, "active":True, "closed":False,
+                "accepting_orders":True, "research_only":False,
+            })
+            if horizon in {"M5","M15"}:
+                rows.append({
+                    "market_id":f"next-{index}", "event_ids":[f"e-next-{index}"],
+                    "clob_token_ids":[f"up-next-{index}",f"down-next-{index}"],
+                    "outcomes":["Up","Down"], "asset":asset, "horizon":horizon,
+                    "horizon_seconds":seconds, "window_start_unix":NOW+seconds,
+                    "close_timestamp_unix":NOW+2*seconds, "active":True, "closed":False,
+                    "accepting_orders":True, "research_only":False,
+                })
+    snap={
+        "schema":universe.SNAPSHOT_SCHEMA, "version":7,
+        "paper_only":True, "authenticated_execution":False,
+        "real_order_submission":False, "execution_authority":False,
+        "model_sha":SHA, "timestamp_ms":NOW*1000, "markets":rows,
+    }
+    selection,blocker=universe.build_book_selection(snap)
+    assert blocker==""
+    assert selection["active_market_count"]==30
+    assert selection["active_token_count"]==60
+    assert selection["preloaded_market_count"]==12
+    assert selection["preloaded_token_count"]==24
+    assert selection["market_count"]==42
+    assert selection["token_count"]==84
+    assert sum(x["role"]=="CURRENT" for x in selection["markets"])==30
+    assert sum(x["role"]=="NEXT" for x in selection["markets"])==12
+    assert all(x["horizon"] in {"M5","M15"} for x in selection["markets"] if x["role"]=="NEXT")
+
 
 
 def test_persist_publishes_book_selection_status_atomically():
@@ -167,10 +214,14 @@ def test_persist_publishes_book_selection_status_atomically():
         universe.persist(root,snap,{})
         selection=json.loads((root/"book_selection.json").read_text())
         status=json.loads((root/"status.json").read_text())
+        assert selection["active_market_count"]==30 and selection["active_token_count"]==60
         assert selection["market_count"]==30 and selection["token_count"]==60
         assert status["book_selection_state"]=="READY"
         assert status["book_selection_contexts"]==30
         assert status["book_selection_tokens"]==60
+        assert status["book_selection_subscribed_markets"]==30
+        assert status["book_selection_subscribed_tokens"]==60
+        assert status["book_selection_preloaded_markets"]==0
 
 
 def test_persist_does_not_republish_unchanged_book_selection():
