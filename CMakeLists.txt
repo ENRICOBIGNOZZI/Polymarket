@@ -340,6 +340,11 @@ if(BUILD_TESTING)
   add_test(NAME pm_v7_native_runtime_evidence_tests
     COMMAND pm_v7_native_runtime_evidence_tests)
 
+  add_executable(pm_v7_latency_trace_tests tests/test_v7_latency_trace.cpp)
+  target_link_libraries(pm_v7_latency_trace_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_latency_trace_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_latency_trace_tests COMMAND pm_v7_latency_trace_tests)
+
   add_executable(pm_v7_native_clob_order_lane_driver tests/v7_native_clob_order_lane_driver.cpp)
   target_link_libraries(pm_v7_native_clob_order_lane_driver PRIVATE pm_v7_account_native)
   target_compile_options(pm_v7_native_clob_order_lane_driver PRIVATE -UNDEBUG)
