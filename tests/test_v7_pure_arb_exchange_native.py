@@ -100,7 +100,8 @@ def exchange_owner(tmp:Path,points):
     return owner,row
 
 
-def base_item(row,*,allowed=True,skew=2,order="YES_FIRST",target=1250):
+def base_item(row,*,observed_allowed=True,simulation_allowed=True,
+              skew=2,order="YES_FIRST",target=1250,counterfactual=False):
     candidate={
         "market_id":"m1","kind":"BUY_COMPLETE_SET","receive_wall_ms":1000,
         "asset":"BTC","horizon":"M5","executable_shares_local_deep":5.0,
@@ -109,7 +110,12 @@ def base_item(row,*,allowed=True,skew=2,order="YES_FIRST",target=1250):
         "scenario_id":"s","candidate":candidate,"market":row,
         "fingerprint":execution.fingerprint(row),
         "terms":{"mandatory_taker_delay_ns":250_000_000},
-        "venue_taker_allowed":allowed,"transport_ms":0,"skew_ms":skew,
+        "observed_venue_taker_allowed":observed_allowed,
+        "simulation_taker_allowed":simulation_allowed,
+        "observed_venue_mode":"NORMAL" if observed_allowed else "DEGRADED",
+        "simulation_venue_mode":"NORMAL" if simulation_allowed else "DEGRADED",
+        "paper_counterfactual":counterfactual,
+        "transport_ms":0,"skew_ms":skew,
         "order":order,"total_delay_ms":250,"target_ms":target,
     }
 
@@ -147,8 +153,60 @@ def test_cancel_only_blocks_new_taker():
     with tempfile.TemporaryDirectory() as d:
         root=Path(d)
         owner,row=exchange_owner(root,{})
-        result=owner.evaluate(base_item(row,allowed=False))
+        result=owner.evaluate(base_item(row,observed_allowed=False,simulation_allowed=False))
         assert result["state"]=="BLOCKED_VENUE_MODE"
+
+
+def test_counterfactual_normal_can_simulate_but_is_not_allocation_evidence():
+    with tempfile.TemporaryDirectory() as d:
+        root=Path(d)
+        points={
+            ("yes",1250):bookrow(1250,.39,.40,bidq=10,askq=10),
+            ("no",1250):bookrow(1250,.49,.50,bidq=10,askq=10),
+            ("yes",1252):bookrow(1252,.39,.40,bidq=10,askq=10),
+            ("no",1252):bookrow(1252,.49,.50,bidq=10,askq=10),
+        }
+        owner,row=exchange_owner(root,points)
+        result=owner.evaluate(base_item(
+            row,observed_allowed=False,simulation_allowed=True,
+            counterfactual=True,skew=2))
+        assert result["state"]=="COMPLETE_PAIRED"
+        assert result["paper_counterfactual"] is True
+        assert result["observed_venue_taker_allowed"] is False
+        assert result["simulation_taker_allowed"] is True
+        assert result["allocation_eligible"] is False
+
+
+def test_capital_allocator_rejects_counterfactual_taker_rows():
+    with tempfile.TemporaryDirectory() as d:
+        root=Path(d)
+        path=root/"taker.jsonl"
+        base={
+            "schema":"polymarket_v7_pure_arb_exchange_execution_cycle_v1",
+            "market_id":"m1","kind":"BUY_COMPLETE_SET",
+            "transport_delay_ms":5,"inter_leg_skew_ms":5,
+            "revalidation_wall_ms":1000,"market_end_ms":2000,
+            "target_shares":5.0,"revalidation_yes_price":0.40,
+            "revalidation_no_price":0.50,"execution_pnl_after_reserve":0.10,
+            "leg_order":"YES_FIRST",
+            "observed_venue_taker_allowed":False,
+            "allocation_eligible":False,
+        }
+        second={**base,"leg_order":"NO_FIRST"}
+        path.write_text(
+            json.dumps(base)+"\n"+json.dumps(second)+"\n",
+            encoding="utf-8")
+        policy=json.loads((ROOT/"config/v7_pure_arb_capital_policy.json").read_text())
+        assert allocator.taker_observations(path,policy)==[]
+
+        live={**base,"observed_venue_taker_allowed":True,"allocation_eligible":True}
+        live2={**second,"observed_venue_taker_allowed":True,"allocation_eligible":True}
+        path.write_text(
+            json.dumps(live)+"\n"+json.dumps(live2)+"\n",
+            encoding="utf-8")
+        rows=allocator.taker_observations(path,policy)
+        assert len(rows)==1
+        assert rows[0]["strategy"]=="TAKER_COMPLETE_SET"
 
 
 def test_current_v2_semantics_reject_legacy_share_fee_mode():
