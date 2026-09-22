@@ -111,12 +111,21 @@ PY
 perf_used=0
 if command -v perf >/dev/null 2>&1 \
    && perf stat -x, -o "$OUT_DIR/perf-check.csv" -e task-clock true >/dev/null 2>&1; then
-  perf_used=1
+  set +e
   perf stat -x, -o "$OUT_DIR/perf-public.csv" \
     -e task-clock,context-switches,cpu-migrations \
     "$WORK/build-ipo/polymarket_v7_public_paired_clob_transport_probe" \
       --samples "$SAMPLES" --warmup 8 \
       > "$OUT_DIR/public-paired-clob.json"
+  perf_rc=$?
+  set -e
+  if [[ "$perf_rc" == 0 ]]; then
+    perf_used=1
+  else
+    rm -f "$OUT_DIR/perf-public.csv" "$OUT_DIR/public-paired-clob.json"
+    "$WORK/build-ipo/polymarket_v7_public_paired_clob_transport_probe" \
+      --samples "$SAMPLES" --warmup 8 > "$OUT_DIR/public-paired-clob.json"
+  fi
 else
   "$WORK/build-ipo/polymarket_v7_public_paired_clob_transport_probe" \
     --samples "$SAMPLES" --warmup 8 > "$OUT_DIR/public-paired-clob.json"
