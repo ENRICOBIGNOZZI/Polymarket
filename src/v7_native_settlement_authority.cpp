@@ -316,6 +316,69 @@ NativeSettlementAuthorityResult NativeSettlementAuthority::submit(
     return out;
 }
 
+NativeSettlementPairResult NativeSettlementAuthority::submit_pair(
+    const ExecutionPlan& yes_plan,
+    const ExecutionPlan& no_plan,
+    std::int64_t minimum_order_microunits,
+    std::int64_t now_monotonic_ns) noexcept {
+    NativeSettlementPairResult out{};
+    const auto& y = yes_plan.intent;
+    const auto& n = no_plan.intent;
+    const bool valid =
+        minimum_order_microunits > 0 && now_monotonic_ns > 0
+        && yes_plan.policy == ExecutionPolicyId::PureArbFok
+        && no_plan.policy == ExecutionPolicyId::PureArbFok
+        && y.strategy_id == StrategyId::HardArbitrage
+        && n.strategy_id == StrategyId::HardArbitrage
+        && y.type == IntentType::TargetPosition
+        && n.type == IntentType::TargetPosition
+        && y.market_handle != 0 && y.market_handle == n.market_handle
+        && y.event_handle == n.event_handle
+        && y.instrument_handle != 0 && n.instrument_handle != 0
+        && y.instrument_handle != n.instrument_handle
+        && y.intent_id != 0 && n.intent_id != 0 && y.intent_id != n.intent_id
+        && y.quantity_microunits >= minimum_order_microunits
+        && y.quantity_microunits == n.quantity_microunits
+        && y.side == n.side && (y.side == Side::Buy || y.side == Side::Sell)
+        && y.passive == 0 && n.passive == 0
+        && y.post_only == 0 && n.post_only == 0
+        && yes_plan.tick_size_e4 > 0 && no_plan.tick_size_e4 > 0;
+    if (!valid) {
+        out.reason = NativeSettlementPairReason::InvalidPair;
+        return out;
+    }
+
+    out.yes = submit(yes_plan, minimum_order_microunits, now_monotonic_ns);
+    if (out.yes.accepted == 0) {
+        out.reason = NativeSettlementPairReason::FirstLegRejected;
+        return out;
+    }
+
+    out.no = submit(no_plan, minimum_order_microunits, now_monotonic_ns);
+    if (out.no.accepted == 0) {
+        OmsEvent reject{};
+        reject.type = OmsEventType::Reject;
+        reject.timestamp_ns = now_monotonic_ns;
+        out.rollback = apply_order_event(
+            out.yes.tx.command.client_order_id, reject);
+        const bool rolled_back =
+            out.rollback.reason == NativeSettlementAuthorityReason::Accepted
+            && out.rollback.transition.applied != 0
+            && out.rollback.transition.state == OrderState::Rejected
+            && out.rollback.terminal_retired != 0;
+        out.rollback_complete = rolled_back ? 1 : 0;
+        out.reason = rolled_back
+            ? NativeSettlementPairReason::SecondLegRejectedRolledBack
+            : NativeSettlementPairReason::RollbackFailed;
+        return out;
+    }
+
+    out.risk_admitted_monotonic_ns = now_monotonic_ns;
+    out.reason = NativeSettlementPairReason::Accepted;
+    out.accepted = 1;
+    return out;
+}
+
 NativeCancelTxResult NativeSettlementAuthority::cancel_maker_quote(
     std::uint64_t instrument_handle,
     Side side,
