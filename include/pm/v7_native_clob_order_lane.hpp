@@ -51,6 +51,8 @@ struct NativeClobLatencyTrace {
     std::int64_t sign_complete_monotonic_ns = 0;
     std::int64_t frame_complete_monotonic_ns = 0;
     std::int64_t wire_start_monotonic_ns = 0;
+    std::int64_t wire_complete_monotonic_ns = 0;
+    std::int64_t http_ack_monotonic_ns = 0;
 
     [[nodiscard]] std::int64_t prewire_ns() const noexcept {
         return frame_complete_monotonic_ns >= submit_start_monotonic_ns
