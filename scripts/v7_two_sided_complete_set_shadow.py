@@ -839,6 +839,20 @@ class Shadow:
             "reserve_per_share": self.args.reserve_per_share,
             "queue_ahead_multiplier": self.args.queue_ahead_multiplier,
             "active_cycle_ids": sorted(c["cycle_id"] for c in self.active.values()),
+            "active_states": [
+                {
+                    "market_id": str(c.get("market_id") or ""),
+                    "cycle_id": str(c.get("cycle_id") or ""),
+                    "state_bucket": str(c.get("state_bucket") or "UNKNOWN"),
+                    "asset": str(c.get("asset") or ""),
+                    "horizon": str(c.get("horizon") or ""),
+                    "ttl_ms": int(c.get("ttl_ms") or 0),
+                    "target_shares": float(c.get("target_shares") or 0.0),
+                    "locked_edge_per_share": float(c.get("locked_edge_per_share") or 0.0),
+                    "expires_ms": int(c.get("expires_ms") or 0),
+                }
+                for c in sorted(self.active.values(), key=lambda x: str(x.get("market_id") or ""))
+            ],
             "state": "COLLECTING",
         })
 
