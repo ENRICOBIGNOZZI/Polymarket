@@ -625,6 +625,11 @@ BookHotSnapshot MarketWsShard::snapshot(std::uint64_t instrument_handle) const n
     return state == nullptr ? BookHotSnapshot{} : state->book.hot_snapshot();
 }
 
+BookDeepSnapshot MarketWsShard::deep_snapshot(std::uint64_t instrument_handle) const noexcept {
+    const auto* state = impl_->find_instrument(instrument_handle);
+    return state == nullptr ? BookDeepSnapshot{} : state->book.deep_snapshot();
+}
+
 std::size_t MarketWsShard::instrument_count() const noexcept {
     return impl_->states.size();
 }

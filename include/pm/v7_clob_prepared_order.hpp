@@ -23,6 +23,7 @@ struct PreparedMarketOrderStaticView {
     std::string_view token_id;
     std::string_view owner;
     MarketOrderType order_type = MarketOrderType::FAK;
+    bool post_only = false;
 };
 
 // Per-order fields that genuinely change on the hot path.

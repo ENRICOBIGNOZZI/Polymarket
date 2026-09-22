@@ -71,22 +71,63 @@ def _fee(market: dict[str, Any], now_ms: int, ttl_ms: int) -> dict[str, Any]:
 
 
 def _reward(row: dict[str, Any] | None, snapshot: dict[str, Any], now_ms: int,
-            ttl_ms: int) -> dict[str, Any]:
-    # The canonical selector is crypto-only and performs no global reward-market
-    # discovery. Until a crypto-scoped reward source exists, reward EV is zero.
+            ttl_ms: int, exchange_semantics: dict[str, Any] | None = None) -> dict[str, Any]:
+    # Rewards/rebates are ancillary PnL and can never rescue a negative entry
+    # edge. A reward contribution becomes allocatable only from an explicit,
+    # market-scoped, fresh, verified realized-PnL rate snapshot.
+    semantics=exchange_semantics if isinstance(exchange_semantics,dict) else {}
+    rebate=semantics.get("maker_rebates") if isinstance(semantics.get("maker_rebates"),dict) else {}
+    try: reference_fraction=float(rebate.get("crypto_reference_fraction"))
+    except (TypeError,ValueError): reference_fraction=math.nan
+    reference_verified=(
+        semantics.get("schema")=="polymarket_v7_exchange_semantics_v1"
+        and math.isfinite(reference_fraction) and 0<=reference_fraction<=1
+        and rebate.get("use_in_entry_gate") is False
+    )
+
+    verified=False
+    realized_rate=0.0
+    source="unknown_reward_forced_zero"
+    observed=now_ms
+    expires=now_ms
+    if (snapshot.get("schema")=="polymarket_v7_verified_maker_reward_snapshot_v1"
+            and isinstance(row,dict) and row.get("verified") is True):
+        try:
+            observed=int(row.get("observed_at_ms") or 0)
+            expires=int(row.get("expires_at_ms") or 0)
+            realized_rate=float(row.get("realized_pnl_pusd_per_capital_second"))
+        except (TypeError,ValueError):
+            realized_rate=math.nan
+        verified=(
+            observed>0 and observed<=now_ms<=expires
+            and math.isfinite(realized_rate) and realized_rate>=0.0
+        )
+        if verified:
+            source="verified_realized_maker_reward_rate"
+        else:
+            realized_rate=0.0
+            observed=now_ms
+            expires=now_ms
+
     return {
-        "verified": False, "eligible": False, "expected_value_usd": 0.0,
+        "verified": verified, "eligible": verified, "expected_value_usd": 0.0,
+        "realized_pnl_pusd_per_capital_second": realized_rate if verified else 0.0,
         "maximum_spread_cents": None, "minimum_quote_shares": None,
-        "pool_daily_rate_usd": 0.0, "source": "unknown_reward_forced_zero",
-        "observed_at_ms": now_ms, "expires_at_ms": now_ms,
-        "confidence": 0.0, "scoring_formula": None,
-        "payout_status": "NOT_ATTRIBUTED",
+        "pool_daily_rate_usd": 0.0, "source": source,
+        "observed_at_ms": observed, "expires_at_ms": expires,
+        "confidence": 1.0 if verified else 0.0, "scoring_formula": None,
+        "payout_status": "REALIZED_RATE_VERIFIED" if verified else "NOT_ATTRIBUTED",
+        "maker_rebate_reference_fraction": reference_fraction if reference_verified else None,
+        "maker_rebate_reference_verified": reference_verified,
+        "maker_rebate_used_in_entry_gate": False,
+        "reference_semantics": "ANCILLARY_ONLY_NOT_ENTRY_EDGE",
     }
 
 
 def build(universe: dict[str, Any], rewards: dict[str, Any], *, model_sha: str,
           now_ms: int, fee_ttl_seconds: int = 300,
-          reward_ttl_seconds: int = 120) -> dict[str, Any]:
+          reward_ttl_seconds: int = 120,
+          exchange_semantics: dict[str, Any] | None = None) -> dict[str, Any]:
     if not SHA40.fullmatch(model_sha):
         raise ValueError("model_sha:not_exact")
     if universe.get("schema") != "polymarket_v7_crypto_universe_snapshot_v1":
@@ -108,7 +149,9 @@ def build(universe: dict[str, Any], rewards: dict[str, Any], *, model_sha: str,
         if not condition or not market_id:
             continue
         fee = _fee(market, now_ms, max(1, fee_ttl_seconds) * 1000)
-        reward = _reward(reward_rows.get(condition), rewards, now_ms, max(1, reward_ttl_seconds) * 1000)
+        reward = _reward(
+            reward_rows.get(condition), rewards, now_ms,
+            max(1, reward_ttl_seconds) * 1000, exchange_semantics)
         active = market.get("active") is True and market.get("closed") is False and market.get("accepting_orders") is True
         entries.append({
             "market_id": market_id, "condition_id": condition,
@@ -141,12 +184,15 @@ def main() -> int:
     parser.add_argument("--rewards", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
+    parser.add_argument("--exchange-semantics", type=Path)
     parser.add_argument("--interval", type=float, default=0.0)
     args = parser.parse_args()
     while True:
         try:
-            result = build(load(args.universe), load(args.rewards), model_sha=args.model_sha,
-                           now_ms=int(time.time() * 1000))
+            result = build(
+                load(args.universe), load(args.rewards), model_sha=args.model_sha,
+                now_ms=int(time.time() * 1000),
+                exchange_semantics=load(args.exchange_semantics) if args.exchange_semantics else None)
             atomic_json(args.output, result)
         except Exception as exc:
             atomic_json(args.output, {

@@ -22,6 +22,7 @@ enum class OrderState : std::uint8_t {
     Unknown = 12,
     Reconciling = 13,
     Lost = 14,
+    PendingDelay = 15,
 };
 
 enum class OmsEventType : std::uint8_t {
@@ -40,6 +41,8 @@ enum class OmsEventType : std::uint8_t {
     ReconcileCancelled = 13,
     ReconcileFilled = 14,
     ReconcileLost = 15,
+    BeginDelay = 16,
+    DelayElapsed = 17,
 };
 
 struct OmsEvent {
@@ -79,6 +82,8 @@ struct OmsOrderRecord {
     std::int64_t wire_ns = 0;
     std::int64_t ack_ns = 0;
     std::int64_t live_ns = 0;
+    std::int64_t delay_start_ns = 0;
+    std::int64_t delay_release_ns = 0;
     std::int64_t cancel_request_ns = 0;
     std::int64_t cancel_wire_ns = 0;
     std::int64_t cancel_ack_ns = 0;
@@ -104,6 +109,9 @@ enum OmsLatencyLeg : std::uint32_t {
     WireToAck = 1U << 5,
     TriggerToWire = 1U << 6,
     TriggerToAck = 1U << 7,
+    QueueToDelay = 1U << 8,
+    DelayDuration = 1U << 9,
+    DelayToWire = 1U << 10,
 };
 
 struct OmsLatencySnapshot {
@@ -114,6 +122,9 @@ struct OmsLatencySnapshot {
     std::int64_t decision_to_queue_ns = 0;
     std::int64_t queue_to_wire_ns = 0;
     std::int64_t wire_to_ack_ns = 0;
+    std::int64_t queue_to_delay_ns = 0;
+    std::int64_t delay_duration_ns = 0;
+    std::int64_t delay_to_wire_ns = 0;
     std::int64_t trigger_to_wire_ns = 0;
     std::int64_t trigger_to_ack_ns = 0;
 };

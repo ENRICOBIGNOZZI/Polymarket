@@ -79,7 +79,7 @@ jobs:
             cpp=true
             london=true
           fi
-          if grep -Eq '^(CMakeLists\.txt|include/|src/(http|api|event_api|config|boost_json|fast_arb|fast_ws)\.cpp)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+          if grep -Eq '^(CMakeLists\.txt|include/|src/(http|api|event_api|config|boost_json|fast_arb|fast_ws|v7_market_state|v7_market_ws|v7_maker_fillability_observer)\.cpp)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
             full=true
           fi
           if grep -Eq '^(src/v7_(maker|crypto_decision|external|ingress|market_ws)|include/.*v7_(maker|crypto_decision|external|ingress|market_ws)|config/v7_latency_slo\.json|scripts/v7_latency_gate\.py)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
@@ -231,6 +231,8 @@ jobs:
           python3 -m json.tool config/v7_strategy_registry.json >/dev/null
           python3 -m json.tool config/v7_latency_slo.json >/dev/null
           python3 -m json.tool config/v7_exact_arb_relations.json >/dev/null
+          python3 -m json.tool config/v7_exchange_semantics.json >/dev/null
+          python3 -m json.tool config/v7_pure_arb_capital_policy.json >/dev/null
           python3 -m json.tool artifacts/github_main_ruleset.json >/dev/null
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
@@ -242,6 +244,8 @@ jobs:
           python3 tests/test_v7_repository_shape.py
           python3 tests/test_v7_collection_plane.py
           python3 tests/test_v7_pure_arb_frequency.py
+          python3 tests/test_v7_pure_arb_exchange_native.py
+          python3 -m unittest tests/test_v7_chaos_runtime.py -v
       - name: Fast-path no C++ build
         if: needs.classify.outputs.cpp_required != 'true'
         run: echo "cpp_build_fast_path=skipped_no_cpp_change"

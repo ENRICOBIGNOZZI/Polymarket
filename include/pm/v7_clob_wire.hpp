@@ -11,7 +11,7 @@ struct L2HmacState;
 
 // Narrow hot-path contract for already EIP-712-signed CLOB market orders.
 // The wallet/order signature is intentionally outside this component.
-enum class MarketOrderType : std::uint8_t { FAK = 1, FOK = 2 };
+enum class MarketOrderType : std::uint8_t { FAK = 1, FOK = 2, GTC = 3 };
 
 struct SignedMarketOrderView {
     std::string_view builder;
@@ -33,6 +33,7 @@ struct PostMarketOrderView {
     SignedMarketOrderView order{};
     std::string_view owner;
     MarketOrderType order_type = MarketOrderType::FAK;
+    bool post_only = false;
 };
 
 // Serializes the exact body that must also be passed to L2HmacSigner::sign().

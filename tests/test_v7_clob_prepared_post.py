@@ -15,7 +15,7 @@ using namespace pm::v7;
 bool run_case(std::string_view side, clob_wire::MarketOrderType type,
               std::string_view maker_amount, std::string_view salt,
               std::string_view order_signature, std::string_view taker_amount,
-              std::string_view order_timestamp) {
+              std::string_view order_timestamp, bool post_only = false) {
     clob_wire::SignedMarketOrderView order{
         "0x0000000000000000000000000000000000000000000000000000000000000000",
         "0",
@@ -31,10 +31,11 @@ bool run_case(std::string_view side, clob_wire::MarketOrderType type,
         order_timestamp,
         "71321045679252212594626385532706912750332728571942532289631379312455583992563"
     };
-    clob_wire::PostMarketOrderView request{order, "owner-test-key", type};
+    clob_wire::PostMarketOrderView request{order, "owner-test-key", type, post_only};
     clob_wire::PreparedMarketOrderStaticView fixed{
         order.builder, order.expiration, order.maker, order.metadata, order.side,
-        order.signature_type, order.signer, order.token_id, request.owner, request.order_type};
+        order.signature_type, order.signer, order.token_id, request.owner, request.order_type,
+        post_only};
     clob_wire::MarketOrderDynamicView dynamic{
         order.maker_amount, order.salt_decimal, order.signature,
         order.taker_amount, order.timestamp_ms};
@@ -81,6 +82,9 @@ int main() {
     if (!run_case("SELL", clob_wire::MarketOrderType::FOK,
                   "19230800", "18446744073709551615", "0xcdcdcdcdcdcd",
                   "10000000", "1789670000999")) return 3;
+    if (!run_case("BUY", clob_wire::MarketOrderType::GTC,
+                  "10000000", "987654321", "0xefefefef",
+                  "19000000", "1789670001999", true)) return 9;
 
     clob_wire::PreparedMarketOrderStaticView fixed{
         "0x00", "0", "0x1111111111111111111111111111111111111111", "0x00",
@@ -96,6 +100,14 @@ int main() {
     if (builder.build({"1", "2", "0xab", "3", "4"}, "1x", out) != 0) return 7;
     std::array<char, 32> small{};
     if (builder.build({"1", "2", "0xab", "3", "4"}, "1789670000", small) != 0) return 8;
+    clob_wire::PreparedMarketOrderStaticView invalid_post_only{
+        "0x00", "0", "0x1111111111111111111111111111111111111111", "0x00",
+        "BUY", 3, "0x2222222222222222222222222222222222222222",
+        "1234", "owner", clob_wire::MarketOrderType::FAK, true};
+    clob_post::PreparedPostOrderBuilder invalid_builder(
+        invalid_post_only, "0x3333333333333333333333333333333333333333",
+        "api", "pass", "YWJj");
+    if (invalid_builder.valid()) return 10;
     return 0;
 }
 '''

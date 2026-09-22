@@ -175,6 +175,36 @@ void test_causal_latency_never_fabricates_missing_or_reversed_stages() {
     assert(!has(pm::v7::OmsLatencyLeg::TriggerToAck));
 }
 
+void test_pending_delay_is_explicit_and_non_cancelable() {
+    pm::v7::OmsOrder order(quote_intent(), 9012);
+    assert(order.apply(event(1, pm::v7::OmsEventType::QueueSend, 100, 1)).state
+           == pm::v7::OrderState::SendPending);
+    auto delayed = order.apply(event(2, pm::v7::OmsEventType::BeginDelay, 110, 2));
+    assert(delayed.applied);
+    assert(delayed.state == pm::v7::OrderState::PendingDelay);
+    assert(order.record().delay_start_ns == 110);
+    const auto cancel = order.apply(event(3, pm::v7::OmsEventType::RequestCancel, 120, 3));
+    assert(!cancel.applied);
+    assert(cancel.invariant_violation);
+    assert(order.record().state == pm::v7::OrderState::PendingDelay);
+    auto released = order.apply(event(4, pm::v7::OmsEventType::DelayElapsed, 360, 4));
+    assert(released.applied);
+    assert(released.state == pm::v7::OrderState::SendPending);
+    assert(order.record().delay_release_ns == 360);
+    assert(order.apply(event(5, pm::v7::OmsEventType::WireSend, 361, 5)).state
+           == pm::v7::OrderState::AckPending);
+    const auto latency = pm::v7::oms_latency_snapshot(order.record());
+    const auto has = [&](pm::v7::OmsLatencyLeg leg) {
+        return (latency.valid_mask & static_cast<std::uint32_t>(leg)) != 0;
+    };
+    assert(has(pm::v7::OmsLatencyLeg::QueueToDelay));
+    assert(has(pm::v7::OmsLatencyLeg::DelayDuration));
+    assert(has(pm::v7::OmsLatencyLeg::DelayToWire));
+    assert(latency.queue_to_delay_ns == 10);
+    assert(latency.delay_duration_ns == 250);
+    assert(latency.delay_to_wire_ns == 1);
+}
+
 void test_reconcile_filled_requires_exact_authoritative_sizes() {
     pm::v7::OmsOrder order(quote_intent(), 9005);
     assert(order.apply(event(1, pm::v7::OmsEventType::QueueSend, 100, 1)).applied);
@@ -200,6 +230,7 @@ int main() {
     test_overfill_fails_closed_to_unknown();
     test_causal_wire_latency_preserves_grid_delay_and_wire_ack();
     test_causal_latency_never_fabricates_missing_or_reversed_stages();
+    test_pending_delay_is_explicit_and_non_cancelable();
     test_reconcile_filled_requires_exact_authoritative_sizes();
     return 0;
 }

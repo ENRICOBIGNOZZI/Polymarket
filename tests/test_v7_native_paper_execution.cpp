@@ -172,6 +172,10 @@ void test_delayed_fill_requires_strict_watermark_and_fresh_previous_book() {
     ArrivalFixture f; const auto cmd = f.admit();
     auto pending = f.paper.submit(cmd, book(), 2'100);
     assert(pending.accepted && pending.pending_arrival && pending.filled_microunits == 0);
+    assert(pending.final_state == OrderState::PendingDelay);
+    const auto* delayed_record = f.endpoint.find(cmd.client_order_id);
+    assert(delayed_record != nullptr && delayed_record->state == OrderState::PendingDelay);
+    assert(delayed_record->delay_start_ns == 2'100);
     assert(f.paper.synthetic_acks() == 0 && f.authority.active_orders() == 1);
     assert(f.paper.advance_arrivals(11, arrival_book(), 2'350).count == 0);
     const auto done = f.paper.advance_arrivals(11, arrival_book(), 2'351);

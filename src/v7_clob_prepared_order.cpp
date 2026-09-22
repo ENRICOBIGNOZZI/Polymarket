@@ -61,11 +61,14 @@ private:
 
 PreparedMarketOrderJson::PreparedMarketOrderJson(
     const PreparedMarketOrderStaticView& fixed) noexcept {
+    const bool immediate = fixed.order_type == MarketOrderType::FAK
+        || fixed.order_type == MarketOrderType::FOK;
+    const bool resting = fixed.order_type == MarketOrderType::GTC;
     if (fixed.expiration != "0"
         || (fixed.side != "BUY" && fixed.side != "SELL")
         || fixed.signature_type > 3
-        || (fixed.order_type != MarketOrderType::FAK
-            && fixed.order_type != MarketOrderType::FOK)
+        || (!immediate && !resting)
+        || (fixed.post_only && !resting)
         || !json_atom(fixed.builder)
         || !json_atom(fixed.maker)
         || !json_atom(fixed.metadata)
@@ -82,7 +85,9 @@ PreparedMarketOrderJson::PreparedMarketOrderJson(
     };
 
     std::size_t begin = w.size();
-    w.append("{\"deferExec\":false,\"order\":{\"builder\":");
+    w.append("{\"deferExec\":false,\"postOnly\":");
+    w.append(fixed.post_only ? "true" : "false");
+    w.append(",\"order\":{\"builder\":");
     w.quoted(fixed.builder);
     w.append(",\"expiration\":"); w.quoted(fixed.expiration);
     w.append(",\"maker\":"); w.quoted(fixed.maker);
@@ -114,7 +119,9 @@ PreparedMarketOrderJson::PreparedMarketOrderJson(
     begin = w.size();
     w.append("\",\"tokenId\":"); w.quoted(fixed.token_id);
     w.append("},\"orderType\":\"");
-    w.append(fixed.order_type == MarketOrderType::FAK ? "FAK" : "FOK");
+    if (fixed.order_type == MarketOrderType::FAK) w.append("FAK");
+    else if (fixed.order_type == MarketOrderType::FOK) w.append("FOK");
+    else w.append("GTC");
     w.append("\",\"owner\":"); w.quoted(fixed.owner); w.append("}");
     close_chunk(5, begin);
 

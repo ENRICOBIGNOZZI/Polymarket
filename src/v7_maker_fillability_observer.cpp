@@ -44,6 +44,7 @@ constexpr double kMicrounitsPerShare = 1'000'000.0;
 // Bounded rolling window: diagnostics only; never grows the hot-path heap.
 constexpr std::size_t kPureArbLatencySamples = 4096;
 constexpr std::size_t kPureArbOutputCapacity = 4096;
+constexpr std::size_t kPureArbDeepCapacity = 64;
 constexpr std::array<double, 7> kPureArbReserveArms{
     0.0, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005
 };
@@ -541,6 +542,22 @@ struct TradeEvidence {
 };
 static_assert(std::is_trivially_copyable_v<TradeEvidence>);
 
+struct PureArbPairBinding {
+    std::uint64_t market_handle = 0;
+    std::uint64_t yes_handle = 0;
+    std::uint64_t no_handle = 0;
+};
+
+struct PureArbDeepEvidence {
+    std::uint64_t market_handle = 0;
+    std::uint64_t connection_epoch = 0;
+    std::int64_t receive_wall_ms = 0;
+    std::int64_t trigger_receive_monotonic_ns = 0;
+    pm::v7::BookDeepSnapshot yes{};
+    pm::v7::BookDeepSnapshot no{};
+};
+static_assert(std::is_trivially_copyable_v<PureArbDeepEvidence>);
+
 struct FlowSample {
     std::int64_t receive_wall_ms = 0;
     double shares = 0.0;
@@ -557,6 +574,7 @@ struct PureArbDirectionState {
     double last_edge_per_share = 0.0;
     double last_executable_shares = 0.0;
     double last_executable_shares_l10 = 0.0;
+    double last_executable_shares_deep = 0.0;
     double last_locked_pnl = 0.0;
     double last_conservative_locked_pnl = 0.0;
     std::int64_t last_detect_wall_ms = 0;
@@ -588,8 +606,8 @@ struct PureArbSweepResult {
     double yes_notional = 0.0;
     double no_notional = 0.0;
     double marginal_edge_per_share = 0.0;
-    std::uint8_t yes_levels_used = 0;
-    std::uint8_t no_levels_used = 0;
+    std::uint16_t yes_levels_used = 0;
+    std::uint16_t no_levels_used = 0;
 
     [[nodiscard]] double shares() const noexcept {
         return micro_shares(shares_microunits);
@@ -615,9 +633,9 @@ struct PureArbSweepResult {
 struct PureArbQueuedEvent {
     std::uint64_t market_handle = 0;
     std::uint8_t kind = 0; // 1=BUY_COMPLETE_SET, 2=SELL_COMPLETE_SET
-    std::uint8_t yes_levels_used = 0;
-    std::uint8_t no_levels_used = 0;
-    std::uint8_t reserved = 0;
+    std::uint8_t reserved0 = 0;
+    std::uint16_t yes_levels_used = 0;
+    std::uint16_t no_levels_used = 0;
     std::int64_t receive_wall_ms = 0;
     std::int64_t receive_to_decision_ns = 0;
     std::int64_t shares_microunits = 0;
@@ -625,6 +643,7 @@ struct PureArbQueuedEvent {
     double conservative_edge_per_share = 0.0;
     double marginal_edge_per_share = 0.0;
     double executable_shares_l1 = 0.0;
+    double executable_shares_l10 = 0.0;
     double gross_locked_pnl = 0.0;
     double conservative_locked_pnl = 0.0;
     double yes_vwap = 0.0;
@@ -728,6 +747,8 @@ public:
         pure_arb_book_epochs_.resize(max_handle + 1, 0);
         pure_arb_book_receive_wall_ms_.resize(max_handle + 1, 0);
         pure_arb_markets_.resize(max_market_handle + 1);
+        pure_arb_pair_by_handle_.resize(max_handle + 1);
+        pure_arb_deep_trigger_active_.resize(max_market_handle + 1, 0);
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
         for (const auto& token : tokens_) {
             auto& market = pure_arb_markets_[token.market_handle];
@@ -743,6 +764,11 @@ public:
                 pure_arb_prefunded_complete_set_shares_;
             if (token.is_yes != 0) market.yes_handle = token.instrument_handle;
             else market.no_handle = token.instrument_handle;
+        }
+        for (const auto& token : tokens_) {
+            const auto& market = pure_arb_markets_[token.market_handle];
+            pure_arb_pair_by_handle_[token.instrument_handle] = PureArbPairBinding{
+                token.market_handle, market.yes_handle, market.no_handle};
         }
         for (const auto& token : tokens_) {
             lanes_[token.instrument_handle] = std::make_unique<pm::v7::maker::MakerInstrumentLane>(1);
@@ -770,6 +796,56 @@ public:
             pure_arb_output_.open(pure_arb_trades_path_, std::ios::app);
             if (!pure_arb_output_) throw std::runtime_error("cannot open pure arb PAPER evidence file");
         }
+    }
+
+    void maybe_queue_pure_arb_deep(
+        const MarketWsEvent& event, const pm::fast::FeedReceiveStamp& receive) noexcept {
+        if (!pure_arb_paper_ || event.instrument_handle == 0
+            || event.instrument_handle >= pure_arb_pair_by_handle_.size()
+            || event.book.valid == 0 || event.book.lineage_continuous == 0) {
+            return;
+        }
+        const auto binding = pure_arb_pair_by_handle_[event.instrument_handle];
+        if (binding.market_handle == 0 || binding.yes_handle == 0 || binding.no_handle == 0
+            || binding.market_handle >= pure_arb_deep_trigger_active_.size()) {
+            return;
+        }
+        const auto yes_hot = decoder_->snapshot(binding.yes_handle);
+        const auto no_hot = decoder_->snapshot(binding.no_handle);
+        if (yes_hot.valid == 0 || no_hot.valid == 0
+            || yes_hot.lineage_continuous == 0 || no_hot.lineage_continuous == 0) {
+            pure_arb_deep_trigger_active_[binding.market_handle] = 0;
+            return;
+        }
+        const double raw_buy = 1.0 - e4_price(yes_hot.best_ask_e4) - e4_price(no_hot.best_ask_e4);
+        const double raw_sell = e4_price(yes_hot.best_bid_e4) + e4_price(no_hot.best_bid_e4) - 1.0;
+        const bool candidate = raw_buy > pure_arb_reserve_per_share_ + 1e-12
+            || raw_sell > pure_arb_reserve_per_share_ + 1e-12;
+        if (!candidate) {
+            pure_arb_deep_trigger_active_[binding.market_handle] = 0;
+            return;
+        }
+        if (pure_arb_deep_trigger_active_[binding.market_handle] != 0) return;
+
+        PureArbDeepEvidence deep{};
+        deep.market_handle = binding.market_handle;
+        deep.connection_epoch = connection_epoch_.load(std::memory_order_relaxed);
+        deep.receive_wall_ms = receive.wall_ms;
+        deep.trigger_receive_monotonic_ns = receive.monotonic_ns;
+        deep.yes = decoder_->deep_snapshot(binding.yes_handle);
+        deep.no = decoder_->deep_snapshot(binding.no_handle);
+        if (deep.yes.valid == 0 || deep.no.valid == 0
+            || deep.yes.bid_truncated != 0 || deep.yes.ask_truncated != 0
+            || deep.no.bid_truncated != 0 || deep.no.ask_truncated != 0) {
+            ++pure_arb_deep_snapshot_rejections_;
+            return;
+        }
+        if (!pure_arb_deep_queue_->try_push(deep)) {
+            ++pure_arb_deep_queue_drops_;
+            return;
+        }
+        pure_arb_deep_trigger_active_[binding.market_handle] = 1;
+        ++pure_arb_deep_candidates_;
     }
 
     void on_frame(std::string_view payload, const pm::fast::FeedReceiveStamp& receive) {
@@ -852,6 +928,7 @@ public:
             row.quantity_microunits = event.quantity_microunits;
             row.aggressor_side = event.side;
             row.lineage_continuous = event.book.lineage_continuous;
+            maybe_queue_pure_arb_deep(event, receive);
             row.enqueue_monotonic_ns = monotonic_ns();
             if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
         }
@@ -915,6 +992,7 @@ public:
         connection_epoch_.fetch_add(1, std::memory_order_relaxed);
         reconnects_.fetch_add(1, std::memory_order_relaxed);
         reset_pure_arb_state();
+        std::fill(pure_arb_deep_trigger_active_.begin(), pure_arb_deep_trigger_active_.end(), 0);
         for (std::size_t i=1; i<lanes_.size(); ++i) {
             if (lanes_[i]) *lanes_[i] = pm::v7::maker::MakerInstrumentLane(1);
             feature_start_ns_[i] = 0;
@@ -932,17 +1010,16 @@ public:
         return rate == 0.0 ? 0.0 : rate * std::pow(price * (1.0 - price), exponent);
     }
 
-    [[nodiscard]] PureArbSweepResult sweep_pure_arb(
-        const pm::v7::BookHotSnapshot& yes,
-        const pm::v7::BookHotSnapshot& no,
+    template <std::size_t N>
+    [[nodiscard]] PureArbSweepResult sweep_pure_arb_levels(
+        const std::array<pm::v7::PriceLevelE4, N>& yes_levels,
+        std::size_t yes_count,
+        const std::array<pm::v7::PriceLevelE4, N>& no_levels,
+        std::size_t no_count,
         const PureArbMarketState& market,
         bool buy,
-        std::int64_t maximum_shares_microunits = std::numeric_limits<std::int64_t>::max()) const noexcept {
+        std::int64_t maximum_shares_microunits) const noexcept {
         PureArbSweepResult result{};
-        const auto& yes_levels = buy ? yes.ask_levels : yes.bid_levels;
-        const auto& no_levels = buy ? no.ask_levels : no.bid_levels;
-        const std::size_t yes_count = buy ? yes.ask_level_count : yes.bid_level_count;
-        const std::size_t no_count = buy ? no.ask_level_count : no.bid_level_count;
         std::size_t yi = 0, ni = 0;
         std::int64_t yes_remaining = 0, no_remaining = 0;
         std::int64_t capacity_remaining = std::max<std::int64_t>(0, maximum_shares_microunits);
@@ -974,10 +1051,12 @@ public:
             result.yes_notional += shares * yes_price;
             result.no_notional += shares * no_price;
             result.marginal_edge_per_share = gross_edge;
-            result.yes_levels_used = static_cast<std::uint8_t>(
-                std::max<std::size_t>(result.yes_levels_used, yi + 1));
-            result.no_levels_used = static_cast<std::uint8_t>(
-                std::max<std::size_t>(result.no_levels_used, ni + 1));
+            result.yes_levels_used = static_cast<std::uint16_t>(
+                std::min<std::size_t>(std::numeric_limits<std::uint16_t>::max(),
+                                      std::max<std::size_t>(result.yes_levels_used, yi + 1)));
+            result.no_levels_used = static_cast<std::uint16_t>(
+                std::min<std::size_t>(std::numeric_limits<std::uint16_t>::max(),
+                                      std::max<std::size_t>(result.no_levels_used, ni + 1)));
 
             yes_remaining -= quantity;
             no_remaining -= quantity;
@@ -986,6 +1065,40 @@ public:
             if (no_remaining <= 0) ++ni;
         }
         return result;
+    }
+
+    [[nodiscard]] PureArbSweepResult sweep_pure_arb(
+        const pm::v7::BookHotSnapshot& yes,
+        const pm::v7::BookHotSnapshot& no,
+        const PureArbMarketState& market,
+        bool buy,
+        std::int64_t maximum_shares_microunits = std::numeric_limits<std::int64_t>::max()) const noexcept {
+        return buy
+            ? sweep_pure_arb_levels(
+                yes.ask_levels, yes.ask_level_count,
+                no.ask_levels, no.ask_level_count,
+                market, true, maximum_shares_microunits)
+            : sweep_pure_arb_levels(
+                yes.bid_levels, yes.bid_level_count,
+                no.bid_levels, no.bid_level_count,
+                market, false, maximum_shares_microunits);
+    }
+
+    [[nodiscard]] PureArbSweepResult sweep_pure_arb(
+        const pm::v7::BookDeepSnapshot& yes,
+        const pm::v7::BookDeepSnapshot& no,
+        const PureArbMarketState& market,
+        bool buy,
+        std::int64_t maximum_shares_microunits = std::numeric_limits<std::int64_t>::max()) const noexcept {
+        return buy
+            ? sweep_pure_arb_levels(
+                yes.ask_levels, yes.ask_level_count,
+                no.ask_levels, no.ask_level_count,
+                market, true, maximum_shares_microunits)
+            : sweep_pure_arb_levels(
+                yes.bid_levels, yes.bid_level_count,
+                no.bid_levels, no.bid_level_count,
+                market, false, maximum_shares_microunits);
     }
 
     void restore_pure_arb_status() {
@@ -1045,6 +1158,9 @@ public:
                         find_value(row, "last_executable_shares_l1"), 0.0);
                     direction.last_executable_shares_l10 = number64(
                         find_value(row, "last_executable_shares_l10"), direction.last_executable_shares);
+                    direction.last_executable_shares_deep = number64(
+                        find_value(row, "last_executable_shares_deep"),
+                        direction.last_executable_shares_l10);
                     direction.last_locked_pnl = number64(
                         find_value(row, "last_locked_pnl_pre_gas"), 0.0);
                     direction.last_conservative_locked_pnl = number64(
@@ -1123,7 +1239,7 @@ public:
         direction.max_edge_per_share = std::max(direction.max_edge_per_share, edge_per_share);
         direction.last_edge_per_share = edge_per_share;
         direction.last_executable_shares = executable_shares_l1;
-        direction.last_executable_shares_l10 = shares;
+        direction.last_executable_shares_deep = shares;
         direction.last_locked_pnl = sweep.gross_locked_pnl;
         direction.last_conservative_locked_pnl = sweep.conservative_locked_pnl;
         direction.last_detect_wall_ms = receive_wall_ms;
@@ -1146,6 +1262,7 @@ public:
         event.conservative_edge_per_share = sweep.conservative_edge_per_share();
         event.marginal_edge_per_share = sweep.marginal_edge_per_share;
         event.executable_shares_l1 = executable_shares_l1;
+        event.executable_shares_l10 = direction.last_executable_shares_l10;
         event.gross_locked_pnl = sweep.gross_locked_pnl;
         event.conservative_locked_pnl = sweep.conservative_locked_pnl;
         event.yes_vwap = sweep.yes_vwap();
@@ -1184,7 +1301,8 @@ public:
                 {"marginal_edge_per_share", queued.marginal_edge_per_share},
                 {"reserve_per_share", pure_arb_reserve_per_share_},
                 {"executable_shares_l1", queued.executable_shares_l1},
-                {"executable_shares_l10", micro_shares(queued.shares_microunits)},
+                {"executable_shares_l10", queued.executable_shares_l10},
+                {"executable_shares_local_deep", micro_shares(queued.shares_microunits)},
                 {"paper_locked_pnl_pre_gas", queued.gross_locked_pnl},
                 {"conservative_locked_pnl_after_reserve", queued.conservative_locked_pnl},
                 {"yes_price", queued.yes_vwap},
@@ -1193,7 +1311,7 @@ public:
                 {"no_vwap", queued.no_vwap},
                 {"yes_levels_used", queued.yes_levels_used},
                 {"no_levels_used", queued.no_levels_used},
-                {"sizing_depth", "L10_VWAP_POSITIVE_MARGINAL_EDGE"},
+                {"sizing_depth", "LOCAL_DEEP_BOOK_POSITIVE_MARGINAL_EDGE"},
                 {"fee_rate", market.fee_rate},
                 {"fee_exponent", market.fee_exponent},
                 {"artificial_delay_ms", 0},
@@ -1370,23 +1488,89 @@ public:
 
         if (buy_sweep.shares_microunits > 0) {
             ++pure_arb_funnel_.buy_fresh_decision;
-            if (!market.buy.active) {
-                record_pure_arb_cycle(
-                    token->market_handle, market, market.buy, 1, buy_sweep,
-                    micro_shares(buy_qty_l1), row.receive_wall_ms,
-                    row.receive_monotonic_ns, decision_ns);
-            }
         } else {
             market.buy.active = false;
         }
 
         if (sell_sweep.shares_microunits > 0) {
             ++pure_arb_funnel_.sell_fresh_decision;
+        } else {
+            market.sell.active = false;
+        }
+    }
+
+    void evaluate_pure_arb_deep(const PureArbDeepEvidence& row) {
+        if (!pure_arb_paper_ || row.market_handle == 0
+            || row.market_handle >= pure_arb_markets_.size()) return;
+        if (row.connection_epoch != connection_epoch_.load(std::memory_order_relaxed)) {
+            ++pure_arb_deep_snapshot_rejections_;
+            return;
+        }
+        auto& market = pure_arb_markets_[row.market_handle];
+        if (!(market.start_wall_ms <= row.receive_wall_ms
+              && row.receive_wall_ms < market.end_wall_ms)
+            || market.fee_verified == 0
+            || row.yes.valid == 0 || row.no.valid == 0
+            || row.yes.lineage_continuous == 0 || row.no.lineage_continuous == 0
+            || row.yes.bid_truncated != 0 || row.yes.ask_truncated != 0
+            || row.no.bid_truncated != 0 || row.no.ask_truncated != 0) {
+            ++pure_arb_deep_snapshot_rejections_;
+            return;
+        }
+        const auto skew_ns = row.yes.receive_monotonic_ns >= row.no.receive_monotonic_ns
+            ? row.yes.receive_monotonic_ns - row.no.receive_monotonic_ns
+            : row.no.receive_monotonic_ns - row.yes.receive_monotonic_ns;
+        if (skew_ns > pure_arb_max_leg_skew_ms_ * 1'000'000LL) {
+            ++pure_arb_deep_snapshot_rejections_;
+            return;
+        }
+
+        const auto prefund_microunits = static_cast<std::int64_t>(std::llround(
+            std::max(0.0, market.prefunded_complete_set_shares_remaining)
+            * kMicrounitsPerShare));
+        const auto buy_sweep = sweep_pure_arb(row.yes, row.no, market, true);
+        const auto sell_sweep = sweep_pure_arb(
+            row.yes, row.no, market, false, prefund_microunits);
+        ++pure_arb_deep_evaluations_;
+
+        const auto decision_ns = monotonic_ns();
+        const auto receive_to_decision = std::max<std::int64_t>(
+            0, decision_ns - row.trigger_receive_monotonic_ns);
+        if (receive_to_decision > pure_arb_receive_to_decision_limit_ns_) {
+            ++pure_arb_funnel_.stale_decision_rejections;
+            market.buy.active = false;
+            market.sell.active = false;
+            return;
+        }
+
+        const double buy_l1 = row.yes.ask_level_count > 0 && row.no.ask_level_count > 0
+            ? micro_shares(std::min(
+                row.yes.ask_levels[0].quantity_microunits,
+                row.no.ask_levels[0].quantity_microunits))
+            : 0.0;
+        const double sell_l1 = row.yes.bid_level_count > 0 && row.no.bid_level_count > 0
+            ? micro_shares(std::min(
+                row.yes.bid_levels[0].quantity_microunits,
+                row.no.bid_levels[0].quantity_microunits))
+            : 0.0;
+
+        if (buy_sweep.shares_microunits > 0) {
+            if (!market.buy.active) {
+                record_pure_arb_cycle(
+                    row.market_handle, market, market.buy, 1, buy_sweep,
+                    buy_l1, row.receive_wall_ms,
+                    row.trigger_receive_monotonic_ns, decision_ns);
+            }
+        } else {
+            market.buy.active = false;
+        }
+
+        if (sell_sweep.shares_microunits > 0) {
             if (!market.sell.active) {
                 record_pure_arb_cycle(
-                    token->market_handle, market, market.sell, 2, sell_sweep,
-                    micro_shares(sell_qty_l1), row.receive_wall_ms,
-                    row.receive_monotonic_ns, decision_ns);
+                    row.market_handle, market, market.sell, 2, sell_sweep,
+                    sell_l1, row.receive_wall_ms,
+                    row.trigger_receive_monotonic_ns, decision_ns);
                 market.prefunded_complete_set_shares_remaining = std::max(
                     0.0,
                     market.prefunded_complete_set_shares_remaining - sell_sweep.shares());
@@ -1437,6 +1621,7 @@ public:
                     {"max_edge_per_share", market.buy.max_edge_per_share},
                     {"last_executable_shares_l1", market.buy.last_executable_shares},
                     {"last_executable_shares_l10", market.buy.last_executable_shares_l10},
+                    {"last_executable_shares_deep", market.buy.last_executable_shares_deep},
                     {"last_locked_pnl_pre_gas", market.buy.last_locked_pnl},
                     {"last_conservative_locked_pnl_after_reserve", market.buy.last_conservative_locked_pnl},
                     {"last_detect_wall_ms", market.buy.last_detect_wall_ms}}},
@@ -1449,6 +1634,7 @@ public:
                     {"max_edge_per_share", market.sell.max_edge_per_share},
                     {"last_executable_shares_l1", market.sell.last_executable_shares},
                     {"last_executable_shares_l10", market.sell.last_executable_shares_l10},
+                    {"last_executable_shares_deep", market.sell.last_executable_shares_deep},
                     {"last_locked_pnl_pre_gas", market.sell.last_locked_pnl},
                     {"last_conservative_locked_pnl_after_reserve", market.sell.last_conservative_locked_pnl},
                     {"last_detect_wall_ms", market.sell.last_detect_wall_ms}}},
@@ -1493,6 +1679,11 @@ public:
             {"cycles_total", pure_arb_total_cycles_},
             {"paper_locked_pnl_pre_gas_total", pure_arb_total_pnl_},
             {"conservative_locked_pnl_after_reserve_total", pure_arb_conservative_total_pnl_},
+            {"sizing_depth_authority", "LOCAL_DEEP_BOOK_POSITIVE_MARGINAL_EDGE"},
+            {"deep_candidates_total", pure_arb_deep_candidates_},
+            {"deep_evaluations_total", pure_arb_deep_evaluations_},
+            {"deep_queue_drops_total", pure_arb_deep_queue_drops_},
+            {"deep_snapshot_rejections_total", pure_arb_deep_snapshot_rejections_},
             {"reserve_per_share", pure_arb_reserve_per_share_},
             {"maximum_leg_skew_ms", pure_arb_max_leg_skew_ms_},
             {"maximum_receive_to_decision_ns", pure_arb_receive_to_decision_limit_ns_},
@@ -1597,6 +1788,10 @@ public:
             evaluate_pure_arb(row);
             write_book(row);
             wrote = true;
+        }
+        PureArbDeepEvidence deep{};
+        while (pure_arb_deep_queue_->try_pop(deep)) {
+            evaluate_pure_arb_deep(deep);
         }
         const auto now_wall_ms = wall_ms();
         if (wrote && !state_only_ && now_wall_ms - last_evidence_flush_ms_ >= 25) {
@@ -1987,6 +2182,15 @@ private:
         pure_arb_event_queue_ =
             std::make_unique<pm::v7::SpscRing<PureArbQueuedEvent, kPureArbOutputCapacity>>();
     std::uint64_t pure_arb_event_queue_drops_ = 0;
+    std::unique_ptr<pm::v7::SpscRing<PureArbDeepEvidence, kPureArbDeepCapacity>>
+        pure_arb_deep_queue_ =
+            std::make_unique<pm::v7::SpscRing<PureArbDeepEvidence, kPureArbDeepCapacity>>();
+    std::uint64_t pure_arb_deep_candidates_ = 0;
+    std::uint64_t pure_arb_deep_queue_drops_ = 0;
+    std::uint64_t pure_arb_deep_snapshot_rejections_ = 0;
+    std::uint64_t pure_arb_deep_evaluations_ = 0;
+    std::vector<PureArbPairBinding> pure_arb_pair_by_handle_;
+    std::vector<std::uint8_t> pure_arb_deep_trigger_active_;
     std::vector<pm::v7::BookHotSnapshot> pure_arb_latest_books_;
     std::vector<std::uint64_t> pure_arb_book_epochs_;
     std::vector<std::int64_t> pure_arb_book_receive_wall_ms_;

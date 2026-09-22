@@ -29,6 +29,8 @@ const char* to_string(OrderState state) noexcept {
         case OrderState::Unknown: return "UNKNOWN";
         case OrderState::Reconciling: return "RECONCILING";
         case OrderState::Lost: return "LOST";
+        // Exchange-native taker hold: non-cancelable until DelayElapsed.
+        case OrderState::PendingDelay: return "PENDING_DELAY";
     }
     return "UNKNOWN";
 }
@@ -71,6 +73,13 @@ OmsLatencySnapshot oms_latency_snapshot(const OmsOrderRecord& record) noexcept {
         OmsLatencyLeg::QueueToWire, out.queue_to_wire_ns);
     leg(record.wire_ns, record.ack_ns,
         OmsLatencyLeg::WireToAck, out.wire_to_ack_ns);
+
+    leg(record.submission_ns, record.delay_start_ns,
+        OmsLatencyLeg::QueueToDelay, out.queue_to_delay_ns);
+    leg(record.delay_start_ns, record.delay_release_ns,
+        OmsLatencyLeg::DelayDuration, out.delay_duration_ns);
+    leg(record.delay_release_ns, record.wire_ns,
+        OmsLatencyLeg::DelayToWire, out.delay_to_wire_ns);
 
     // End-to-end causal metrics are stricter than pairwise legs. Do not report
     // trigger->wire/ACK if an intermediate timestamp is missing or reversed;
@@ -154,6 +163,32 @@ OmsTransitionResult OmsOrder::apply(const OmsEvent& event) noexcept {
             }
             break;
 
+        case OmsEventType::BeginDelay:
+            if (record_.state == OrderState::SendPending && event.timestamp_ns > 0) {
+                record_.state = OrderState::PendingDelay;
+                record_.delay_start_ns = event.timestamp_ns;
+                mark_event(event);
+                return result(true, false, false, false);
+            }
+            if (record_.state == OrderState::PendingDelay) {
+                return result(false, true, false, false);
+            }
+            return result(false, false, false, true);
+
+        case OmsEventType::DelayElapsed:
+            if (record_.state == OrderState::PendingDelay
+                && event.timestamp_ns >= record_.delay_start_ns && event.timestamp_ns > 0) {
+                record_.state = OrderState::SendPending;
+                record_.delay_release_ns = event.timestamp_ns;
+                mark_event(event);
+                return result(true, false, false, false);
+            }
+            if (record_.state == OrderState::SendPending
+                && record_.delay_release_ns > 0) {
+                return result(false, true, false, false);
+            }
+            return result(false, false, false, true);
+
         case OmsEventType::WireSend:
             if (record_.state == OrderState::SendPending) {
                 record_.state = OrderState::AckPending;
@@ -219,6 +254,12 @@ OmsTransitionResult OmsOrder::apply(const OmsEvent& event) noexcept {
             break;
 
         case OmsEventType::RequestCancel:
+            if (record_.state == OrderState::PendingDelay) {
+                // Venue taker delay is explicitly non-cancelable. Preserve the
+                // authoritative pending-delay state while rejecting the local
+                // cancel attempt as a lifecycle invariant violation.
+                return result(false, false, false, true);
+            }
             if (record_.state == OrderState::AckPending || record_.state == OrderState::Live
                 || record_.state == OrderState::Partial) {
                 record_.state = OrderState::CancelRequested;

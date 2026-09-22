@@ -39,6 +39,25 @@ def load(path: Path) -> dict[str, Any]:
     return value if isinstance(value,dict) else {}
 
 
+def market_terms(root: Path | None, market_id: str) -> dict[str, Any]:
+    if root is None or not market_id:
+        return {}
+    value=load(root/(market_id+".json"))
+    if (
+        value.get("schema")!="polymarket_v7_market_execution_terms_v1"
+        or value.get("market_id")!=market_id
+        or value.get("state")!="VERIFIED_SNAPSHOT"
+        or value.get("paper_only") is not True
+    ):
+        return {}
+    try:
+        delay_ns=int(value.get("mandatory_taker_delay_ns"))
+    except (TypeError,ValueError):
+        return {}
+    if delay_ns<0 or delay_ns>5_000_000_000:
+        return {}
+    return {**value,"mandatory_taker_delay_ns":delay_ns}
+
 def fee_per_share(price: float, rate: float, exponent: float) -> float:
     if not (math.isfinite(price) and 0<price<1 and math.isfinite(rate)
             and 0<=rate<=1 and math.isfinite(exponent) and exponent>=0):
@@ -121,7 +140,11 @@ class Tail:
 class Shadow:
     def __init__(self,args:argparse.Namespace)->None:
         self.args=args
-        self.book=BookTimeline(args.book_tape,args.model_sha,retention_ms=max(args.delay_arms_ms)+5000)
+        maximum_delay=max(
+            max(args.delay_arms_ms),
+            5000 + max(args.transport_delay_arms_ms, default=0),
+        )
+        self.book=BookTimeline(args.book_tape,args.model_sha,retention_ms=maximum_delay+5000)
         self.tail=Tail(args.candidates,args.model_sha)
         self.pending:list[dict[str,Any]]=[]
         self.rows:list[dict[str,Any]]=[]
@@ -157,14 +180,25 @@ class Shadow:
             if detected<=0 or not mid or kind not in {"BUY_COMPLETE_SET","SELL_COMPLETE_SET"}:
                 continue
             base=f"{mid}:{kind}:{detected}"
-            for delay in self.args.delay_arms_ms:
+            sources={delay:{"FIXED_COUNTERFACTUAL"} for delay in self.args.delay_arms_ms}
+            terms=market_terms(self.args.market_terms_root,mid)
+            if terms:
+                venue_ms=int(terms["mandatory_taker_delay_ns"])//1_000_000
+                for transport in self.args.transport_delay_arms_ms:
+                    sources.setdefault(venue_ms+transport,set()).add(
+                        f"VENUE_DELAY_{venue_ms}MS_PLUS_TRANSPORT_{transport}MS")
+            for delay,labels in sorted(sources.items()):
                 eid=f"{base}:{delay}"
-                if eid in self.seen: continue
+                if eid in self.seen:
+                    continue
                 self.pending.append({
                     "evaluation_id":eid,
                     "candidate":row,
                     "delay_ms":delay,
                     "target_ms":detected+delay,
+                    "delay_sources":sorted(labels),
+                    "market_terms_verified":bool(terms),
+                    "mandatory_taker_delay_ns":terms.get("mandatory_taker_delay_ns") if terms else None,
                 })
                 self.seen.add(eid)
 
@@ -181,6 +215,9 @@ class Shadow:
             "asset":str(c.get("asset") or ""),"horizon":str(c.get("horizon") or ""),
             "kind":kind,"detected_wall_ms":int(c.get("receive_wall_ms") or 0),
             "arrival_delay_ms":delay,"arrival_wall_ms":target_ms,
+            "delay_sources":item.get("delay_sources") or [],
+            "market_terms_verified":item.get("market_terms_verified") is True,
+            "mandatory_taker_delay_ns":item.get("mandatory_taker_delay_ns"),
             "detected_edge_per_share":c.get("edge_per_share"),
             "detected_conservative_edge_per_share":c.get("conservative_edge_per_share"),
             "detected_executable_shares":float(c.get("executable_shares_l10") or c.get("executable_shares_l1") or 0.0),
@@ -290,6 +327,8 @@ class Shadow:
             "state":"COLLECTING","timestamp_ms":time.time_ns()//1_000_000,
             "pending":len(self.pending),"evaluated":len(self.rows),
             "delay_arms_ms":self.args.delay_arms_ms,
+            "transport_delay_arms_ms":self.args.transport_delay_arms_ms,
+            "market_terms_root":str(self.args.market_terms_root) if self.args.market_terms_root else None,
             "reserve_per_share":self.args.reserve_per_share,
             "reserve_curve":reserve_curve,"by_delay":delays,
         })
@@ -308,7 +347,9 @@ def main()->int:
     ap.add_argument("--model-sha",required=True)
     ap.add_argument("--output",type=Path,required=True)
     ap.add_argument("--status",type=Path,required=True)
-    ap.add_argument("--delay-arms-ms",default="1,2,5,10,25,50")
+    ap.add_argument("--delay-arms-ms",default="1,2,5,10,25,50,100,200,250,275,300,400,500,750,1000")
+    ap.add_argument("--transport-delay-arms-ms",default="1,2,5,10")
+    ap.add_argument("--market-terms-root",type=Path)
     ap.add_argument("--reserve-per-share",type=float,default=.0005)
     ap.add_argument("--reserve-arms",default="0,0.0001,0.00025,0.0005,0.001,0.0025,0.005")
     ap.add_argument("--minimum-fill-shares",type=float,default=1.0)
@@ -317,6 +358,7 @@ def main()->int:
     ap.add_argument("--interval-ms",type=int,default=5)
     args=ap.parse_args()
     args.delay_arms_ms=sorted({int(x) for x in args.delay_arms_ms.split(",") if int(x)>=0})
+    args.transport_delay_arms_ms=sorted({int(x) for x in args.transport_delay_arms_ms.split(",") if int(x)>=0})
     args.reserve_arms=sorted({float(x) for x in args.reserve_arms.split(",") if float(x)>=0})
     if len(args.model_sha)!=40 or not args.delay_arms_ms or not args.reserve_arms:
         raise SystemExit("invalid arguments")

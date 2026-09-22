@@ -85,12 +85,23 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
     }
     for (auto& pending : pending_) {
         if (pending.command.client_order_id != 0) continue;
+        OmsEvent delay{};
+        delay.type = OmsEventType::BeginDelay;
+        delay.timestamp_ns = now_monotonic_ns;
+        const auto transition = endpoint_.apply_owned(command.client_order_id, delay);
+        if (!transition.applied || transition.invariant_violation
+            || transition.reconciliation_required
+            || transition.state != OrderState::PendingDelay) {
+            out.reason = NativePaperReason::LifecycleFailure;
+            out.final_state = OrderState::Unknown;
+            return out;
+        }
         pending.command = command;
         pending.deadline_ns = now_monotonic_ns + taker_delay_ns_;
         pending.invalidated = book.valid == 0 || book.lineage_continuous == 0;
         out.accepted = 1;
         out.pending_arrival = 1;
-        out.final_state = OrderState::SendPending;
+        out.final_state = OrderState::PendingDelay;
         out.reason = NativePaperReason::PendingArrival;
         return out;
     }
@@ -141,6 +152,21 @@ NativePaperArrivalBatch NativePaperExecutionAdapter::advance_arrivals(
             || pending.deadline_ns >= receive_watermark_ns) continue;
         auto& record = out.records[out.count++];
         record.command = pending.command;
+        OmsEvent elapsed{};
+        elapsed.type = OmsEventType::DelayElapsed;
+        elapsed.timestamp_ns = pending.deadline_ns;
+        const auto delay_transition = endpoint_.apply_owned(
+            pending.command.client_order_id, elapsed);
+        if (!delay_transition.applied || delay_transition.invariant_violation
+            || delay_transition.reconciliation_required
+            || delay_transition.state != OrderState::SendPending) {
+            record.result.client_order_id = pending.command.client_order_id;
+            record.result.reason = NativePaperReason::LifecycleFailure;
+            record.result.final_state = OrderState::Unknown;
+            out.invalid = 1;
+            pending = PendingArrival{};
+            continue;
+        }
         const bool unavailable = pending.invalidated || previous_book.valid == 0
             || previous_book.lineage_continuous == 0 || previous_book.receive_monotonic_ns <= 0
             || previous_book.receive_monotonic_ns > pending.deadline_ns
