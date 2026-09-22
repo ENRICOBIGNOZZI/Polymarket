@@ -34,6 +34,24 @@ struct NativeSettlementAuthorityResult {
     std::uint8_t capital_released_on_failure = 0;
 };
 
+enum class NativeSettlementPairReason : std::uint8_t {
+    Accepted = 1,
+    InvalidPair = 2,
+    FirstLegRejected = 3,
+    SecondLegRejectedRolledBack = 4,
+    RollbackFailed = 5,
+};
+
+struct NativeSettlementPairResult {
+    NativeSettlementAuthorityResult yes{};
+    NativeSettlementAuthorityResult no{};
+    NativeLifecycleResult rollback{};
+    NativeSettlementPairReason reason = NativeSettlementPairReason::InvalidPair;
+    std::int64_t risk_admitted_monotonic_ns = 0;
+    std::uint8_t accepted = 0;
+    std::uint8_t rollback_complete = 0;
+};
+
 struct NativeInventorySnapshot {
     std::uint64_t market_handle = 0;
     std::uint64_t instrument_handle = 0;
@@ -71,6 +89,16 @@ public:
 
     [[nodiscard]] NativeSettlementAuthorityResult submit(
         const ExecutionPlan& plan,
+        std::int64_t minimum_order_microunits,
+        std::int64_t now_monotonic_ns) noexcept;
+
+    // Complete-set pair admission is all-or-none before any transport call.
+    // Both legs must be dedicated PureArbFok plans with identical market,
+    // side and quantity. If the second leg cannot be admitted, the first leg
+    // is rejected and all capital/inventory reservations are rolled back.
+    [[nodiscard]] NativeSettlementPairResult submit_pair(
+        const ExecutionPlan& yes_plan,
+        const ExecutionPlan& no_plan,
         std::int64_t minimum_order_microunits,
         std::int64_t now_monotonic_ns) noexcept;
 
