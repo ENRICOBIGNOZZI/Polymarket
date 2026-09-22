@@ -1421,6 +1421,8 @@ public:
         const double no_ask = e4_price(no.best_ask_e4);
         const double yes_bid = e4_price(yes.best_bid_e4);
         const double no_bid = e4_price(no.best_bid_e4);
+        const auto buy_qty_l1 = std::min(yes.best_ask_microunits, no.best_ask_microunits);
+        const auto sell_qty_l1 = std::min(yes.best_bid_microunits, no.best_bid_microunits);
         const double buy_shares_l1 = micro_shares(buy_qty_l1);
         const double sell_shares_l1 = micro_shares(sell_qty_l1);
         const double buy_fee = buy_shares_l1 > 0.0
@@ -1448,8 +1450,6 @@ public:
         const double sell_raw_edge = yes_bid + no_bid - 1.0;
         const double buy_edge = buy_raw_edge - buy_fee;
         const double sell_edge = sell_raw_edge - sell_fee;
-        const auto buy_qty_l1 = std::min(yes.best_ask_microunits, no.best_ask_microunits);
-        const auto sell_qty_l1 = std::min(yes.best_bid_microunits, no.best_bid_microunits);
         market.buy.last_edge_per_share = buy_edge;
         market.sell.last_edge_per_share = sell_edge;
         market.buy.last_executable_shares = micro_shares(buy_qty_l1);
