@@ -173,6 +173,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
     std::array<std::uint64_t, 32> decision_reason_counts{};
     std::uint64_t decision_observations = 0;
     std::uint64_t accepted_decision_observations = 0;
+    std::uint64_t pure_arb_shadow_observations = 0;
+    std::uint64_t pure_arb_shadow_buy_cycles = 0;
+    std::uint64_t pure_arb_shadow_sell_cycles = 0;
     NativeSignalFunnel signal_funnel;
     const std::string capture_id = std::to_string(monotonic_now_ns());
 
@@ -410,6 +413,11 @@ struct NativeRuntimeEvidenceWriter::Impl {
             const auto index = static_cast<std::size_t>(event.reason);
             if (index < decision_reason_counts.size()) ++decision_reason_counts[index];
         }
+        if (event.kind == 7) {
+            ++pure_arb_shadow_observations;
+            if (event.pure_arb_kind == 1) ++pure_arb_shadow_buy_cycles;
+            else if (event.pure_arb_kind == 2) ++pure_arb_shadow_sell_cycles;
+        }
         if (!observations_file.is_open()) {
             const auto directory = fs::path(config.run_root) / "research/native_observations" / config.run_id;
             fs::create_directories(directory);
@@ -504,6 +512,24 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"trade_side", event.trade_side}, {"trade_e4", event.trade_e4}, {"trade_quantity", event.trade_quantity},
             {"fee_rate", config.taker_fee_rate}, {"fee_exponent", config.taker_fee_exponent},
             {"proposed_quantity", event.proposed_quantity}, {"proposed_price_tick", event.proposed_price_tick},
+            {"pure_arb_shadow", event.kind == 7 ? json::value(json::object{
+                {"execution_authority", false},
+                {"kind", event.pure_arb_kind == 1 ? "BUY_COMPLETE_SET"
+                    : event.pure_arb_kind == 2 ? "SELL_COMPLETE_SET" : "UNKNOWN"},
+                {"shares_microunits", event.pure_arb_shares_microunits},
+                {"reserve_per_share", event.pure_arb_reserve_per_share},
+                {"gross_edge_per_share", event.pure_arb_gross_edge_per_share},
+                {"conservative_edge_per_share", event.pure_arb_conservative_edge_per_share},
+                {"marginal_edge_per_share", event.pure_arb_marginal_edge_per_share},
+                {"gross_locked_pnl", event.pure_arb_gross_locked_pnl},
+                {"conservative_locked_pnl", event.pure_arb_conservative_locked_pnl},
+                {"yes_vwap", event.pure_arb_yes_vwap},
+                {"no_vwap", event.pure_arb_no_vwap},
+                {"yes_levels_used", event.pure_arb_yes_levels_used},
+                {"no_levels_used", event.pure_arb_no_levels_used},
+                {"decision_compute_ns", event.pure_arb_decision_compute_ns},
+                {"receive_to_decision_ns", event.pure_arb_receive_to_decision_ns}
+            }) : json::value(nullptr)},
             {"ev_uncertainty", event.kind == 4 ? json::value(event.ev_uncertainty) : json::value(nullptr)},
             {"probability_forecast", event.probability.valid ? json::value(event.probability.up) : json::value(nullptr)},
             {"probability_up_lower", event.probability.valid ? json::value(event.probability.lower) : json::value(nullptr)},
@@ -584,6 +610,9 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"accepted_decision_observations", accepted_decision_observations},
             {"rejected_decision_observations",
                 decision_observations - accepted_decision_observations},
+            {"pure_arb_shadow_observations", pure_arb_shadow_observations},
+            {"pure_arb_shadow_buy_cycles", pure_arb_shadow_buy_cycles},
+            {"pure_arb_shadow_sell_cycles", pure_arb_shadow_sell_cycles},
             {"decision_reason_counts", std::move(reason_counts)},
             {"timestamp_ms", to_ms(wall_now_ns())},
         };
