@@ -106,6 +106,7 @@ struct Options {
     std::string event_id;
     std::string fee_source;
     std::string pm_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+    std::int64_t market_start_wall_ns = 0;
     std::int64_t close_wall_ns = 0;
     std::int32_t tick_size_e4 = 100;
     std::int64_t min_order_microunits = 5'000'000;
@@ -169,6 +170,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--event-id") out.event_id = next();
         else if (arg == "--fee-source") out.fee_source = next();
         else if (arg == "--pm-ws-url") out.pm_ws_url = next();
+        else if (arg == "--market-start-wall-ns") out.market_start_wall_ns = bounded_integer<std::int64_t>(next(), 1, std::numeric_limits<std::int64_t>::max());
         else if (arg == "--close-wall-ns") out.close_wall_ns = bounded_integer<std::int64_t>(next(), 1, std::numeric_limits<std::int64_t>::max());
         else if (arg == "--tick-size-e4") out.tick_size_e4 = bounded_integer<std::int32_t>(next(), 1, 5000);
         else if (arg == "--min-order-microunits") out.min_order_microunits = bounded_integer<std::int64_t>(next(), 1, 1'000'000'000);
