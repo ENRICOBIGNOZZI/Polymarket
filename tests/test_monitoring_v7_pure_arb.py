@@ -21,6 +21,14 @@ def test_canonical_exporter_emits_pure_arb_metrics() -> None:
         "real_capital_at_risk": False,
         "cycles_total": 3,
         "paper_locked_pnl_pre_gas_total": 1.25,
+        "conservative_locked_pnl_after_reserve_total": 1.10,
+        "reserve_per_share": 0.0005,
+        "maximum_leg_skew_ms": 100,
+        "maximum_receive_to_decision_ns": 50_000_000,
+        "active_contexts": 30,
+        "subscribed_contexts": 42,
+        "preloaded_contexts": 12,
+        "subscribed_fee_ready_contexts": 42,
         "evaluations": 100,
         "fee_blocked_evaluations": 2,
         "fee_ready_contexts": 30,
@@ -28,26 +36,37 @@ def test_canonical_exporter_emits_pure_arb_metrics() -> None:
         "max_decision_compute_ns": 9000,
         "last_receive_to_decision_ns": 18000,
         "max_receive_to_decision_ns": 42000,
+        "latency_window_samples": 100,
+        "receive_to_decision_ns": {"p50":18000,"p90":25000,"p99":40000,"p99_9":41000,"max":42000},
+        "decision_compute_ns": {"p50":1000,"p90":1500,"p99":8000,"p99_9":8500,"max":9000},
+        "funnel": {"book_updates":150,"book_valid":120,"buy_raw_positive":4,"buy_after_reserve_positive":2},
         "contexts": [{
             "asset": "BTC",
             "horizon": "M5",
+            "active_window": True,
             "buy_complete_set": {
                 "active": True,
                 "cycles": 2,
                 "paper_locked_pnl_pre_gas": 1.0,
+                "conservative_locked_pnl_after_reserve": 0.9,
                 "last_edge_per_share": 0.002,
                 "max_edge_per_share": 0.003,
                 "last_executable_shares_l1": 12.0,
+                "last_executable_shares_l10": 20.0,
                 "last_locked_pnl_pre_gas": 0.024,
+                "last_conservative_locked_pnl_after_reserve": 0.018,
             },
             "sell_complete_set": {
                 "active": False,
                 "cycles": 1,
                 "paper_locked_pnl_pre_gas": 0.25,
+                "conservative_locked_pnl_after_reserve": 0.2,
                 "last_edge_per_share": -0.001,
                 "max_edge_per_share": 0.001,
                 "last_executable_shares_l1": 5.0,
+                "last_executable_shares_l10": 8.0,
                 "last_locked_pnl_pre_gas": 0.005,
+                "last_conservative_locked_pnl_after_reserve": 0.003,
             },
         }],
     }
@@ -59,6 +78,10 @@ def test_canonical_exporter_emits_pure_arb_metrics() -> None:
     assert 'horizon="M5"' in rendered
     assert 'kind="BUY_COMPLETE_SET"' in rendered
     assert "polymarket_pure_arb_context_last_edge_per_share" in rendered
+    assert "polymarket_pure_arb_context_last_executable_shares_l10" in rendered
+    assert 'stage="buy_after_reserve_positive"' in rendered
+    assert 'kind="receive_to_decision"' in rendered
+    assert "polymarket_pure_arb_preloaded_contexts 12" in rendered
 
 
 def test_unsafe_status_never_exports_context_economics() -> None:
@@ -79,6 +102,49 @@ def test_unsafe_status_never_exports_context_economics() -> None:
     assert "polymarket_pure_arb_context_cycles_total" not in rendered
 
 
+def test_frequency_expansion_shadow_metrics_are_fail_closed() -> None:
+    settlement = {
+        "schema": "polymarket_v7_settlement_source_arb_status_v2",
+        "paper_only": True, "authenticated_execution": False,
+        "real_order_submission": False, "real_capital_at_risk": False,
+        "state": "COLLECTING", "cycles": 6, "paper_locked_arbitrages": 2,
+        "locked_pnl": 0.4, "pending_outcomes": 1, "cached_markets": 12,
+        "states": {"PAPER_LOCKED_ARBITRAGE": 2, "NO_TRADE_EDGE": 4},
+        "by_kind": {
+            "BUY_WINNER": {"cycles": 3, "paper_locked_arbitrages": 1, "locked_pnl": 0.3},
+            "SELL_LOSER": {"cycles": 3, "paper_locked_arbitrages": 1, "locked_pnl": 0.1},
+        },
+    }
+    maker = {
+        "schema": "polymarket_v7_two_sided_complete_set_shadow_status_v2",
+        "paper_only": True, "authenticated_execution": False,
+        "real_order_submission": False, "real_capital_at_risk": False,
+        "state": "COLLECTING", "cycles": 10, "active_cycles": 3,
+        "paired_fill_probability_direct": 0.2,
+        "both_any_probability_direct": 0.4,
+        "one_leg_probability_direct": 0.3,
+        "total_shadow_pnl": 1.5, "mean_total_shadow_pnl": 0.15,
+        "total_legging_loss": 0.4, "mean_legging_loss": 0.04,
+        "states": {"BOTH_FULL": 2, "YES_ONLY": 2},
+        "by_context": {"BTC:M5": {"BOTH_FULL": 2, "YES_ONLY": 1}},
+    }
+    rendered = "\n".join(
+        exporter._render_settlement_source_arb_metrics(settlement)
+        + exporter._render_complete_set_maker_metrics(maker)
+    )
+    assert "polymarket_settlement_source_arb_up 1" in rendered
+    assert 'kind="BUY_WINNER"' in rendered
+    assert "polymarket_complete_set_maker_shadow_up 1" in rendered
+    assert "polymarket_complete_set_maker_paired_fill_probability 0.2" in rendered
+    assert 'state="BOTH_FULL"' in rendered
+
+    maker["paper_only"] = False
+    unsafe = "\n".join(exporter._render_complete_set_maker_metrics(maker))
+    assert "polymarket_complete_set_maker_shadow_up 0" in unsafe
+    assert "polymarket_complete_set_maker_state_total" not in unsafe
+
+
 if __name__ == "__main__":
     test_canonical_exporter_emits_pure_arb_metrics()
     test_unsafe_status_never_exports_context_economics()
+    test_frequency_expansion_shadow_metrics_are_fail_closed()
