@@ -123,9 +123,11 @@ public:
         if(http_status==429){
             ++state_.venue_429s;
             if(retry_after_seconds>0 && now_ns>0){
-                state_.blocked_until_monotonic_ns=std::max(
-                    state_.blocked_until_monotonic_ns,
-                    now_ns+static_cast<std::int64_t>(retry_after_seconds)*1'000'000'000LL);
+                const auto delay_ns = static_cast<std::int64_t>(retry_after_seconds)
+                    * static_cast<std::int64_t>(1'000'000'000);
+                const std::int64_t candidate = now_ns + delay_ns;
+                state_.blocked_until_monotonic_ns=std::max<std::int64_t>(
+                    state_.blocked_until_monotonic_ns,candidate);
             }
         }
     }
