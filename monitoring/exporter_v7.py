@@ -300,10 +300,21 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
         _metric("polymarket_pure_arb_cycles_total", status.get("cycles_total")),
         _metric("polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total",
                 status.get("paper_locked_pnl_pre_gas_total")),
+        _metric("polymarket_pure_arb_conservative_locked_pnl_after_reserve_usd_total",
+                status.get("conservative_locked_pnl_after_reserve_total")),
+        _metric("polymarket_pure_arb_reserve_per_share", status.get("reserve_per_share")),
+        _metric("polymarket_pure_arb_maximum_leg_skew_ms", status.get("maximum_leg_skew_ms")),
+        _metric("polymarket_pure_arb_maximum_receive_to_decision_ns",
+                status.get("maximum_receive_to_decision_ns")),
         _metric("polymarket_pure_arb_evaluations_total", status.get("evaluations")),
         _metric("polymarket_pure_arb_fee_blocked_evaluations_total",
                 status.get("fee_blocked_evaluations")),
         _metric("polymarket_pure_arb_fee_ready_contexts", status.get("fee_ready_contexts")),
+        _metric("polymarket_pure_arb_active_contexts", status.get("active_contexts")),
+        _metric("polymarket_pure_arb_subscribed_contexts", status.get("subscribed_contexts")),
+        _metric("polymarket_pure_arb_preloaded_contexts", status.get("preloaded_contexts")),
+        _metric("polymarket_pure_arb_subscribed_fee_ready_contexts",
+                status.get("subscribed_fee_ready_contexts")),
         _metric("polymarket_pure_arb_last_decision_compute_ns",
                 status.get("last_decision_compute_ns")),
         _metric("polymarket_pure_arb_max_decision_compute_ns",
@@ -315,11 +326,28 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
     ]
     if not safe:
         return lines
+    funnel = status.get("funnel") if isinstance(status.get("funnel"), dict) else {}
+    for stage, value in sorted(funnel.items()):
+        lines.append(_metric("polymarket_pure_arb_funnel_total", value, {"stage": stage}))
+    for kind, field in (
+        ("receive_to_decision", "receive_to_decision_ns"),
+        ("decision_compute", "decision_compute_ns"),
+    ):
+        values = status.get(field) if isinstance(status.get(field), dict) else {}
+        for percentile in ("p50", "p90", "p99", "p99_9", "max"):
+            lines.append(_metric(
+                "polymarket_pure_arb_latency_ns", values.get(percentile),
+                {"kind": kind, "percentile": percentile}))
+    lines.append(_metric("polymarket_pure_arb_latency_window_samples",
+                         status.get("latency_window_samples")))
     for row in status.get("contexts") or []:
         if not isinstance(row, dict):
             continue
         asset = _prom_label(row.get("asset"))
         horizon = _prom_label(row.get("horizon"))
+        context_labels = {"asset": asset, "horizon": horizon}
+        lines.append(_metric("polymarket_pure_arb_context_window_active",
+                             row.get("active_window") is True, context_labels))
         for field, kind in (
             ("buy_complete_set", "BUY_COMPLETE_SET"),
             ("sell_complete_set", "SELL_COMPLETE_SET"),
@@ -335,16 +363,143 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
                         value.get("cycles"), labels),
                 _metric("polymarket_pure_arb_context_paper_locked_pnl_pre_gas_usd_total",
                         value.get("paper_locked_pnl_pre_gas"), labels),
+                _metric("polymarket_pure_arb_context_conservative_locked_pnl_after_reserve_usd_total",
+                        value.get("conservative_locked_pnl_after_reserve"), labels),
                 _metric("polymarket_pure_arb_context_last_edge_per_share",
                         value.get("last_edge_per_share"), labels),
                 _metric("polymarket_pure_arb_context_max_edge_per_share",
                         value.get("max_edge_per_share"), labels),
                 _metric("polymarket_pure_arb_context_last_executable_shares_l1",
                         value.get("last_executable_shares_l1"), labels),
+                _metric("polymarket_pure_arb_context_last_executable_shares_l10",
+                        value.get("last_executable_shares_l10"), labels),
                 _metric("polymarket_pure_arb_context_last_locked_pnl_pre_gas_usd",
                         value.get("last_locked_pnl_pre_gas"), labels),
+                _metric("polymarket_pure_arb_context_last_conservative_locked_pnl_after_reserve_usd",
+                        value.get("last_conservative_locked_pnl_after_reserve"), labels),
             ])
     return lines
+
+
+
+def _render_settlement_source_arb_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_settlement_source_arb_status_v2"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+    )
+    lines = [
+        _metric("polymarket_settlement_source_arb_up", safe and status.get("state") == "COLLECTING"),
+        _metric("polymarket_settlement_source_arb_cycles_total", status.get("cycles")),
+        _metric("polymarket_settlement_source_arb_locked_total", status.get("paper_locked_arbitrages")),
+        _metric("polymarket_settlement_source_arb_locked_pnl_usd_total", status.get("locked_pnl")),
+        _metric("polymarket_settlement_source_arb_pending_outcomes", status.get("pending_outcomes")),
+        _metric("polymarket_settlement_source_arb_cached_markets", status.get("cached_markets")),
+    ]
+    if not safe:
+        return lines
+    for kind, row in sorted((status.get("by_kind") or {}).items()):
+        if not isinstance(row, dict):
+            continue
+        labels = {"kind": _prom_label(kind)}
+        lines.extend([
+            _metric("polymarket_settlement_source_arb_kind_cycles_total", row.get("cycles"), labels),
+            _metric("polymarket_settlement_source_arb_kind_locked_total",
+                    row.get("paper_locked_arbitrages"), labels),
+            _metric("polymarket_settlement_source_arb_kind_locked_pnl_usd_total",
+                    row.get("locked_pnl"), labels),
+        ])
+    for state, count in sorted((status.get("states") or {}).items()):
+        lines.append(_metric("polymarket_settlement_source_arb_state_total", count,
+                             {"state": _prom_label(state)}))
+    return lines
+
+
+def _render_complete_set_maker_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_two_sided_complete_set_shadow_status_v2"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+    )
+    lines = [
+        _metric("polymarket_complete_set_maker_shadow_up",
+                safe and status.get("state") == "COLLECTING"),
+        _metric("polymarket_complete_set_maker_cycles_total", status.get("cycles")),
+        _metric("polymarket_complete_set_maker_active_cycles", status.get("active_cycles")),
+        _metric("polymarket_complete_set_maker_paired_fill_probability",
+                status.get("paired_fill_probability_direct")),
+        _metric("polymarket_complete_set_maker_both_any_probability",
+                status.get("both_any_probability_direct")),
+        _metric("polymarket_complete_set_maker_one_leg_probability",
+                status.get("one_leg_probability_direct")),
+        _metric("polymarket_complete_set_maker_total_shadow_pnl_usd",
+                status.get("sum_total_shadow_pnl")),
+        _metric("polymarket_complete_set_maker_mean_shadow_pnl_usd",
+                status.get("mean_total_shadow_pnl")),
+        _metric("polymarket_complete_set_maker_total_legging_loss_usd",
+                status.get("total_legging_loss")),
+        _metric("polymarket_complete_set_maker_mean_legging_loss_usd",
+                status.get("mean_legging_loss")),
+        _metric("polymarket_complete_set_maker_reserve_per_share",
+                status.get("reserve_per_share")),
+        _metric("polymarket_complete_set_maker_depth_fraction",
+                status.get("depth_fraction")),
+        _metric("polymarket_complete_set_maker_queue_ahead_multiplier",
+                status.get("queue_ahead_multiplier")),
+    ]
+    if not safe:
+        return lines
+    for state, count in sorted((status.get("states") or {}).items()):
+        lines.append(_metric("polymarket_complete_set_maker_state_total", count,
+                             {"state": _prom_label(state)}))
+    for stage, count in sorted((status.get("funnel") or {}).items()):
+        lines.append(_metric("polymarket_complete_set_maker_funnel_total", count,
+                             {"stage": _prom_label(stage)}))
+    for reason, count in sorted((status.get("cancels") or {}).items()):
+        lines.append(_metric("polymarket_complete_set_maker_cancel_total", count,
+                             {"reason": _prom_label(reason)}))
+    for context, row in sorted((status.get("by_context") or {}).items()):
+        if not isinstance(row, dict):
+            continue
+        asset, _, horizon = str(context).partition(":")
+        labels = {"asset": _prom_label(asset), "horizon": _prom_label(horizon)}
+        for field, metric in (
+            ("cycles", "cycles_total"),
+            ("paired_full", "paired_full_total"),
+            ("one_leg", "one_leg_total"),
+            ("paired_fill_probability_direct", "paired_fill_probability"),
+            ("mean_total_shadow_pnl", "mean_shadow_pnl_usd"),
+        ):
+            lines.append(_metric(
+                "polymarket_complete_set_maker_context_" + metric,
+                row.get(field), labels))
+    return lines
+
+
+def _render_cross_market_exact_arb_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_cross_market_exact_arb_status_v1"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+    )
+    return [
+        _metric("polymarket_cross_market_exact_arb_up",
+                safe and status.get("state") == "COLLECTING"),
+        _metric("polymarket_cross_market_exact_arb_identity_groups",
+                status.get("identity_groups")),
+        _metric("polymarket_cross_market_exact_arb_pairs_checked_total",
+                status.get("pairs_checked")),
+        _metric("polymarket_cross_market_exact_arb_opportunities",
+                status.get("opportunities_count")),
+        _metric("polymarket_cross_market_exact_arb_locked_pnl_capacity_usd",
+                status.get("locked_pnl_capacity")),
+    ]
 
 
 def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, multi_crypto_shadow_run_root: Path | None = None, include_profit_experiment_report: bool = True) -> dict[str, Any]:
@@ -492,6 +647,12 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         multi_crypto_shadow_run_root, now_ns=now * 1_000_000_000,
     )
     snapshot["pure_arb"] = _json(run_root / "research/repricing_book/pure_arb_status.json")
+    snapshot["settlement_source_arb"] = _json(
+        run_root / "research/repricing_book/settlement_source_arb_status.json")
+    snapshot["complete_set_maker_shadow"] = _json(
+        run_root / "research/repricing_book/two_sided_complete_set_status.json")
+    snapshot["cross_market_exact_arb"] = _json(
+        run_root / "research/repricing_book/cross_market_exact_arb_status.json")
     return snapshot
 
 
@@ -594,6 +755,10 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if universe.get("book_selection_state") != "READY" or _integer(universe.get("book_selection_contexts")) != 30 or _integer(universe.get("book_selection_tokens")) != 60:
         reasons.append("crypto_book_data_coverage_incomplete")
     book_data = snapshot.get("book_data") or {}
+    expected_subscribed_markets = max(
+        30, _integer(universe.get("book_selection_subscribed_markets"), 30))
+    expected_subscribed_tokens = max(
+        60, _integer(universe.get("book_selection_subscribed_tokens"), 60))
     if (
         book_data.get("schema") != "polymarket_v7_maker_fillability_ws_status_v1"
         or book_data.get("model_sha") != snapshot.get("sha")
@@ -601,10 +766,10 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
         or book_data.get("authenticated_execution") is not False
         or book_data.get("real_order_submission") is not False
         or book_data.get("state") != "running"
-        or _integer(book_data.get("subscribed_markets")) != 30
-        or _integer(book_data.get("subscribed_tokens")) != 60
-        or _integer(book_data.get("observed_markets")) != 30
-        or _integer(book_data.get("observed_tokens")) != 60
+        or _integer(book_data.get("subscribed_markets")) != expected_subscribed_markets
+        or _integer(book_data.get("subscribed_tokens")) != expected_subscribed_tokens
+        or _integer(book_data.get("observed_markets")) != expected_subscribed_markets
+        or _integer(book_data.get("observed_tokens")) != expected_subscribed_tokens
         or book_data.get("subscription_coverage_complete") is not True
         or book_data.get("evidence_complete") is not True
         or _integer(book_data.get("dropped_events")) != 0
@@ -861,6 +1026,9 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     lines.extend(render_multi_crypto_prometheus(snapshot.get("multi_crypto_performance") or {}))
     lines.extend(render_shadow_prometheus(snapshot.get("multi_crypto_shadow") or {}))
     lines.extend(_render_pure_arb_metrics(snapshot.get("pure_arb") or {}))
+    lines.extend(_render_settlement_source_arb_metrics(snapshot.get("settlement_source_arb") or {}))
+    lines.extend(_render_complete_set_maker_metrics(snapshot.get("complete_set_maker_shadow") or {}))
+    lines.extend(_render_cross_market_exact_arb_metrics(snapshot.get("cross_market_exact_arb") or {}))
     retention=operations.get('retention') or {}
     storage=retention.get('hft_storage') or {}
     population=retention.get('hft_opportunity_preservation') or {}

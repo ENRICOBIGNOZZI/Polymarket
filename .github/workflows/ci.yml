@@ -230,6 +230,7 @@ jobs:
           python3 -m json.tool config/v7_professional_market_maker.json >/dev/null
           python3 -m json.tool config/v7_strategy_registry.json >/dev/null
           python3 -m json.tool config/v7_latency_slo.json >/dev/null
+          python3 -m json.tool config/v7_exact_arb_relations.json >/dev/null
           python3 -m json.tool artifacts/github_main_ruleset.json >/dev/null
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
@@ -240,6 +241,7 @@ jobs:
           python3 scripts/v7_authority_contract.py
           python3 tests/test_v7_repository_shape.py
           python3 tests/test_v7_collection_plane.py
+          python3 tests/test_v7_pure_arb_frequency.py
       - name: Fast-path no C++ build
         if: needs.classify.outputs.cpp_required != 'true'
         run: echo "cpp_build_fast_path=skipped_no_cpp_change"
@@ -342,7 +344,7 @@ jobs:
           test "$(cat build/london-runtime/deploy/london/runtime_sha)" = "$VALIDATION_SHA"
           test ! -e build/london-runtime/research
           test ! -e build/london-runtime/tests
-          ! find build/london-runtime -type f | grep -Eq 'v7_(external_rich_train|external_residual_train|maker_durable_learning|pm_repricing_shadow|two_sided_complete_set_shadow|generate_economic_artifacts|profit_attribution|profit_report|economic_decision_report|lossless_data_compaction|permanent_evidence)\.py'
+          ! find build/london-runtime -type f | grep -Eq 'v7_(external_rich_train|external_residual_train|maker_durable_learning|pm_repricing_shadow|generate_economic_artifacts|profit_attribution|profit_report|economic_decision_report|lossless_data_compaction|permanent_evidence)\.py'
           python3 - <<'PY'
           from pathlib import Path
           import py_compile

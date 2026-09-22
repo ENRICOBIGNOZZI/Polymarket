@@ -312,19 +312,23 @@ v7_register_child "$!"
 # Grafana reads only zero-authority pure-arb status emitted by this observer; it never controls execution.
 # Pure complete-set PAPER arbitrage is evaluated inside this same observer
 # on every drained WS book event: no second feed, no ML, no artificial hold/delay.
-# Continuous receive-time PM book evidence for every currently traded
-# crypto asset×horizon context. The universe collector atomically maintains the
-# exact 30-market / 60-token zero-authority selection and this observer reloads
-# at rollover. Model fitting and retrospective shadows remain off London.
-v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA"   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only   --output-dir "$RUN_ROOT/research/repricing_book"   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" --pure-arb-paper   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
+# The universe keeps 30 active contexts and may preload future M5/M15 books.
+# Future books are warm data only: the arb evaluator still requires start<=now<end.
+v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
+  --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  --selection "$RUN_ROOT/universe/book_selection.json" --selection-only \
+  --output-dir "$RUN_ROOT/research/repricing_book" \
+  --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" --pure-arb-paper \
+  --pure-arb-reserve-per-share 0.0005 --pure-arb-max-leg-skew-ms 100 \
+  --pure-arb-max-receive-to-decision-ms 50 \
+  --pure-arb-prefunded-complete-set-shares 1000 \
+  >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 # Zero-authority PM book evidence is diagnostically important but reconstructible.
 # It must not stop the native execution owner if it rolls or exits during market refresh.
 v7_register_optional_child "$!"
 
-
-
-# PM repricing and two-sided complete-set shadows are reconstructible from the
-# causal tapes above, so those computations run only on the research worker.
+# Retrospective model fitting remains off London. These live shadows only
+# collect causally replayable PAPER evidence.
 
 CONFIG_HASH="$(v7_blob_hash "$CONFIG")"
 POLICY_HASH="$(v7_blob_hash "$MAKER_POLICY")"
@@ -472,6 +476,83 @@ if [[ "$universe_ready" != 1 ]]; then
   echo "adaptive V7 universe did not complete exhaustive discovery" >&2
   exit 77
 fi
+
+# Pure-arbitrage frequency expansion stays zero-authority PAPER. These workers
+# consume the canonical causal PM tape and verified settlement metadata only;
+# they cannot submit orders, allocate capital, or promote themselves.
+PURE_ARB_DIR="$RUN_ROOT/research/repricing_book"
+mkdir -p "$PURE_ARB_DIR"
+
+v7_exec_class COLLECTOR python3 scripts/v7_multi_crypto_oracle_hub.py \
+  --output "$PURE_ARB_DIR/oracle_hub_status.json" --model-sha "$SHA" \
+  --settlement-registry "$CRYPTO_SETTLEMENT_MARKET_REGISTRY" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  >> "$PURE_ARB_DIR/oracle_hub.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_settlement_source_arb_shadow.py \
+  --oracle-status "$PURE_ARB_DIR/oracle_hub_status.json" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/settlement_source_arb_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/settlement_source_arb_status.json" \
+  --target-shares 1000 --minimum-fill-shares 1 \
+  --redemption-reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
+  --paper-arrival-delay-ms 50 --maximum-book-age-ms 100 --interval-ms 5 \
+  >> "$PURE_ARB_DIR/settlement_source_arb.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_two_sided_complete_set_shadow.py \
+  --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --trade-tape "$PURE_ARB_DIR/fillability_ws.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/two_sided_complete_set_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/two_sided_complete_set_status.json" \
+  --minimum-quote-shares 1 --maximum-quote-shares 20 --depth-fraction 0.25 \
+  --queue-ahead-multiplier 1.25 --reserve-per-share 0.0005 \
+  --minimum-locked-edge-per-share 0.0005 --maximum-leg-skew-ms 100 \
+  --ttl-arms-ms 250,500,1000 --quote-refresh-ms 25 --interval-ms 5 \
+  >> "$PURE_ARB_DIR/two_sided_complete_set.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_cross_market_exact_arb_shadow.py \
+  --universe "$RUN_ROOT/universe/current.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/cross_market_exact_arb_status.json" \
+  --reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
+  --minimum-shares 1 --maximum-shares 1000 \
+  --timeout-seconds 2 --interval-seconds 1 \
+  >> "$PURE_ARB_DIR/cross_market_exact_arb.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_arrival_survival_shadow.py \
+  --candidates "$PURE_ARB_DIR/pure_arb_trades.jsonl" \
+  --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/pure_arb_arrival_survival_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/pure_arb_arrival_survival_status.json" \
+  --delay-arms-ms 1,2,5,10,25,50 \
+  --reserve-per-share 0.0005 \
+  --reserve-arms 0,0.0001,0.00025,0.0005,0.001,0.0025,0.005 \
+  --minimum-fill-shares 1 --maximum-leg-skew-ms 100 \
+  --maximum-book-age-ms 100 --interval-ms 5 \
+  >> "$PURE_ARB_DIR/pure_arb_arrival_survival.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_deep_sizing_shadow.py \
+  --candidates "$PURE_ARB_DIR/pure_arb_trades.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/pure_arb_deep_sizing_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/pure_arb_deep_sizing_status.json" \
+  --reserve-per-share 0.0005 --maximum-shares 10000 \
+  --prefunded-complete-set-shares 1000 \
+  --timeout-seconds 2 --interval-seconds 0.25 \
+  >> "$PURE_ARB_DIR/pure_arb_deep_sizing.log" 2>&1 &
+v7_register_optional_child "$!"
 read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS MAKER_ROTATION_MIN_FILL MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
 import json,sys
 value=json.load(open(sys.argv[1]))
@@ -565,7 +646,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 9
+v7_assert_registered_child_count 15
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
