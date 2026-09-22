@@ -24,12 +24,16 @@ int main() {
             stamp.wall_ms = 1'700'000'000'000 + offset;
             stamp.monotonic_ns = 1'000'000'000 + offset * 1'000'000;
             observer.on_frame(payload, stamp);
-            observer.drain();
+            observer.drain(true);
         };
         send(snapshot(1'700'000'000'000), 0);
         send(snapshot(1'700'000'001'100), 1100);
-        send(R"({"event_type":"last_trade_price","asset_id":"yes","timestamp":1700000002200,"side":"SELL","price":"0.48","size":"2"})", 2200);
-        observer.write_flow_snapshot(1'700'000'002'200);
+        // Make the one-second feature warm-up explicit.  The final SELL print
+        // remains the evidence row under test; the warm-up BUY does not alter
+        // the sell-flow assertions below.
+        send(R"({"event_type":"last_trade_price","asset_id":"yes","timestamp":1700000002200,"side":"BUY","price":"0.52","size":"1"})", 2200);
+        send(R"({"event_type":"last_trade_price","asset_id":"yes","timestamp":1700000003300,"side":"SELL","price":"0.48","size":"2"})", 3300);
+        observer.write_flow_snapshot(1'700'000'003'300);
         auto read_last = [&](const fs::path& path) {
             std::ifstream stream(path); std::string line, last;
             while (std::getline(stream, line)) last = line;
@@ -44,7 +48,7 @@ int main() {
         const auto& print = row.at("public_trade").as_object();
         assert(print.at("aggressor_side").as_string() == "SELL");
         assert(print.at("size").as_double() == 2.0);
-        assert(print.at("exchange_event_ns").as_int64() == 1'700'000'002'200'000'000LL);
+        assert(print.at("exchange_event_ns").as_int64() == 1'700'000'003'300'000'000LL);
         const auto& features = row.at("placement_features").as_object();
         assert(std::abs(features.at("spread_ticks").as_double() - 4.0) < 1e-12);
         assert(std::abs(features.at("imbalance").as_double() + 1.0/3.0) < 1e-12);
@@ -60,7 +64,7 @@ int main() {
         assert(std::abs(flow_row.at("sell_shares_120s").as_double() - 2.0) < 1e-12);
         // A token-local crossed delta invalidates only that token. It never
         // requests a process-global reload and a fresh full snapshot heals it.
-        send(R"({"event_type":"price_change","timestamp":1700000002250,"price_changes":[{"asset_id":"yes","side":"SELL","price":"0.47","size":"1"}]})", 2250);
+        send(R"({"event_type":"price_change","timestamp":1700000003350,"price_changes":[{"asset_id":"yes","side":"SELL","price":"0.47","size":"1"}]})", 3350);
         assert(observer.lineage_recovery_requested());
         assert(!observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 1);
@@ -68,7 +72,7 @@ int main() {
         assert(!reset.at("features_valid").as_bool());
         assert(reset.at("public_trade").is_null());
         assert(reset.at("connection_epoch").as_int64() == 1);
-        send(snapshot(1'700'000'002'260), 2260);
+        send(snapshot(1'700'000'003'360), 3360);
         assert(!observer.lineage_recovery_requested());
         assert(!observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 1);
@@ -77,23 +81,23 @@ int main() {
         // while disconnected, so the outer loop must rebuild cold-start books.
         observer.on_reconnect();
         observer.write_status();
-        observer.write_flow_snapshot(1'700'000'002'300);
+        observer.write_flow_snapshot(1'700'000'003'400);
         const auto reset_flow = json::parse(read_file(directory / "fillability_flow_snapshot.json")).as_object();
         assert(u64(reset_flow.at("connection_epoch")) == 2);
         assert(u64(reset_flow.at("rows").as_array().front().as_object().at("sell_prints_120s")) == 0);
         assert(observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 2);
-        send(snapshot(1'700'000'002'300), 2300);
+        send(snapshot(1'700'000'003'400), 3400);
         assert(!observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 2);
         // Self-healing a token cannot clear a latched global bootstrap request.
-        send("{invalid-json", 2700);
+        send("{invalid-json", 3800);
         assert(observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 3);
-        send(snapshot(1'700'000'002'800), 2800);
+        send(snapshot(1'700'000'003'900), 3900);
         assert(observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
         observer.stop();

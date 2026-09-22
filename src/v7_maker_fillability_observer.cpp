@@ -277,6 +277,7 @@ struct SelectedToken {
     std::string horizon;
     double fee_rate = 0.0;
     double fee_exponent = 1.0;
+    double minimum_order_shares = 0.0;
     std::uint8_t fee_verified = 0;
 };
 
@@ -413,11 +414,21 @@ fair_observation_pairs(const Options& options) {
                 const std::int32_t yes_tick = tick_e4(yes_tick_value);
                 const std::int32_t no_tick = tick_e4(no_tick_value);
                 if (yes_tick <= 0 || no_tick <= 0) continue;
+                const double yes_min_order = yes->second.min_order_size;
+                const double no_min_order = no->second.min_order_size;
+                if (!std::isfinite(yes_min_order) || yes_min_order <= 0.0
+                    || !std::isfinite(no_min_order) || no_min_order <= 0.0) {
+                    continue;
+                }
                 const auto market = ++market_handle;
-                output.push_back({market_id, event_id, pair.second.first, market, market,
-                                  ++instrument_handle, yes_tick, 1, 0, 0});
-                output.push_back({market_id, event_id, pair.second.second, market, market,
-                                  ++instrument_handle, no_tick, 0, 0, 0});
+                SelectedToken yes_token{market_id, event_id, pair.second.first, market, market,
+                                        ++instrument_handle, yes_tick, 1, 0, 0};
+                yes_token.minimum_order_shares = yes_min_order;
+                output.push_back(std::move(yes_token));
+                SelectedToken no_token{market_id, event_id, pair.second.second, market, market,
+                                       ++instrument_handle, no_tick, 0, 0, 0};
+                no_token.minimum_order_shares = no_min_order;
+                output.push_back(std::move(no_token));
             }
             if (!output.empty()) return output;
         } catch (const std::exception& error) {
@@ -598,6 +609,7 @@ struct PureArbMarketState {
     std::uint64_t no_handle = 0;
     double fee_rate = 0.0;
     double fee_exponent = 1.0;
+    double minimum_order_shares = 0.0;
     std::uint8_t fee_verified = 0;
     std::int64_t start_wall_ms = 0;
     std::int64_t end_wall_ms = 0;
@@ -683,6 +695,8 @@ struct PureArbFunnelState {
     std::uint64_t sell_fresh_decision = 0;
     std::uint64_t buy_cycles_recorded = 0;
     std::uint64_t sell_cycles_recorded = 0;
+    std::uint64_t buy_below_min_order_rejections = 0;
+    std::uint64_t sell_below_min_order_rejections = 0;
     std::uint64_t stale_decision_rejections = 0;
     std::array<std::uint64_t, kPureArbReserveArms.size()> buy_reserve_positive{};
     std::array<std::uint64_t, kPureArbReserveArms.size()> sell_reserve_positive{};
@@ -769,6 +783,8 @@ public:
             market.horizon = token.horizon;
             market.fee_rate = token.fee_rate;
             market.fee_exponent = token.fee_exponent;
+            market.minimum_order_shares = std::max(
+                market.minimum_order_shares, token.minimum_order_shares);
             market.fee_verified = token.fee_verified;
             market.start_wall_ms = token.start_wall_ms;
             market.end_wall_ms = token.end_wall_ms;
@@ -1258,11 +1274,14 @@ public:
             auto& market = pure_arb_markets_[token.market_handle];
             const bool new_market = !market.market_id.empty()
                 && market.market_id != token.market_id;
+            if (new_market) market.minimum_order_shares = 0.0;
             market.market_id = token.market_id;
             market.asset = token.asset;
             market.horizon = token.horizon;
             market.fee_rate = token.fee_rate;
             market.fee_exponent = token.fee_exponent;
+            market.minimum_order_shares = std::max(
+                market.minimum_order_shares, token.minimum_order_shares);
             market.fee_verified = token.fee_verified;
             market.start_wall_ms = token.start_wall_ms;
             market.end_wall_ms = token.end_wall_ms;
@@ -1382,6 +1401,7 @@ public:
                 {"sizing_depth", "LOCAL_DEEP_BOOK_POSITIVE_MARGINAL_EDGE"},
                 {"fee_rate", market.fee_rate},
                 {"fee_exponent", market.fee_exponent},
+                {"minimum_order_shares", market.minimum_order_shares},
                 {"fee_rounding", "MATCHED_QUANTITY_5DP_MIN_0.00001_USDC"},
                 {"artificial_delay_ms", 0},
                 {"paired_fok_simulation", true},
@@ -1692,7 +1712,8 @@ public:
                 row.no.bid_levels[0].quantity_microunits))
             : 0.0;
 
-        if (buy_sweep.shares_microunits > 0) {
+        if (buy_sweep.shares_microunits > 0
+            && buy_sweep.shares() + 1e-12 >= market.minimum_order_shares) {
             if (!market.buy.active) {
                 record_pure_arb_cycle(
                     row.market_handle, market, market.buy, 1, buy_sweep,
@@ -1700,10 +1721,15 @@ public:
                     row.trigger_receive_monotonic_ns, decision_ns);
             }
         } else {
+            if (buy_sweep.shares_microunits > 0
+                && buy_sweep.shares() + 1e-12 < market.minimum_order_shares) {
+                ++pure_arb_funnel_.buy_below_min_order_rejections;
+            }
             market.buy.active = false;
         }
 
-        if (sell_sweep.shares_microunits > 0) {
+        if (sell_sweep.shares_microunits > 0
+            && sell_sweep.shares() + 1e-12 >= market.minimum_order_shares) {
             if (!market.sell.active) {
                 record_pure_arb_cycle(
                     row.market_handle, market, market.sell, 2, sell_sweep,
@@ -1714,6 +1740,10 @@ public:
                     market.prefunded_complete_set_shares_remaining - sell_sweep.shares());
             }
         } else {
+            if (sell_sweep.shares_microunits > 0
+                && sell_sweep.shares() + 1e-12 < market.minimum_order_shares) {
+                ++pure_arb_funnel_.sell_below_min_order_rejections;
+            }
             market.sell.active = false;
         }
     }
@@ -1748,6 +1778,7 @@ public:
                 {"horizon", market.horizon},
                 {"market_id", market.market_id},
                 {"fee_verified", market.fee_verified != 0},
+                {"minimum_order_shares", market.minimum_order_shares},
                 {"prefunded_complete_set_shares_remaining",
                     market.prefunded_complete_set_shares_remaining},
                 {"buy_complete_set", json::object{
@@ -1847,6 +1878,10 @@ public:
                 {"sell_fresh_decision", pure_arb_funnel_.sell_fresh_decision},
                 {"buy_cycles_recorded", pure_arb_funnel_.buy_cycles_recorded},
                 {"sell_cycles_recorded", pure_arb_funnel_.sell_cycles_recorded},
+                {"buy_below_min_order_rejections",
+                    pure_arb_funnel_.buy_below_min_order_rejections},
+                {"sell_below_min_order_rejections",
+                    pure_arb_funnel_.sell_below_min_order_rejections},
                 {"stale_decision_rejections", pure_arb_funnel_.stale_decision_rejections}}},
             {"latency_window_samples", static_cast<std::uint64_t>(pure_arb_receive_latency_.size())},
             {"receive_to_enqueue_ns", json::object{
@@ -1917,7 +1952,7 @@ public:
         write_status(true);
     }
 
-    void drain() {
+    void drain(bool force_flush = false) {
         TradeEvidence row;
         bool wrote = false;
         while (queue_->try_pop(row)) {
@@ -1935,7 +1970,8 @@ public:
             if (deep.evaluate_candidate != 0) evaluate_pure_arb_deep(deep);
         }
         const auto now_wall_ms = wall_ms();
-        if (wrote && !state_only_ && now_wall_ms - last_evidence_flush_ms_ >= 25) {
+        if (wrote && !state_only_
+            && (force_flush || now_wall_ms - last_evidence_flush_ms_ >= 25)) {
             output_.flush();
             book_output_.flush();
             if (!output_ || !book_output_) {

@@ -39,6 +39,23 @@ def test_bounded_jsonl_tail_never_scans_full_history():
         assert len(tiny)<100
 
 
+def test_order_size_precision_and_market_minimum_are_exchange_faithful():
+    assert execution.quantize_order_shares(5.019)==5.01
+    assert execution.quantize_order_shares(5.009)==5.0
+    assert execution.quantize_order_shares(0.009)==0.0
+    observer=(ROOT/"src/v7_maker_fillability_observer.cpp").read_text()
+    api=(ROOT/"src/api.cpp").read_text()
+    assert 'o.find("min_order_size")' in api
+    assert "minimum_order_shares" in observer
+    assert "yes->second.min_order_size" in observer
+    assert "no->second.min_order_size" in observer
+    semantics=json.loads((ROOT/"config/v7_exchange_semantics.json").read_text())
+    constraints=semantics["order_constraints"]
+    assert constraints["share_precision_decimals"]==2
+    assert constraints["share_rounding"]=="FLOOR"
+    assert constraints["unknown_minimum_order_size_policy"]=="NON_EXECUTABLE"
+
+
 def test_fee_precision_matches_venue_contract():
     # Below 1e-5 USDC the venue charges zero.
     assert econ.rounded_fee_usdc(0.001,0.5,0.02,1.0)==0.0
