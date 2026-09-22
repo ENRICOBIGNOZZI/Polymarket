@@ -97,7 +97,8 @@ jobs:
             # A cutover-readiness contract is therefore the wrong gate here.
             # Validate exact code identity and benchmark-only safety instead.
             test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-            test -x ops/v7_london_latency_lab.sh
+            test -f ops/v7_london_latency_lab.sh
+            bash -n ops/v7_london_latency_lab.sh
             python3 -m py_compile \
               ops/v7_london_ssm_benchmark.py \
               ops/v7_london_ssm_bootstrap.py \
