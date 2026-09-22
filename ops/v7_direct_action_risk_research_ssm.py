@@ -2,6 +2,10 @@
 """Read-only London SSM runner for nested Direct Action empirical risk."""
 from __future__ import annotations
 
+import os
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
+
 import io
 import json
 from pathlib import Path
