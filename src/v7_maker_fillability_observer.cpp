@@ -573,6 +573,8 @@ struct PureArbMarketState {
     std::uint8_t fee_verified = 0;
     std::int64_t start_wall_ms = 0;
     std::int64_t end_wall_ms = 0;
+    // PAPER inventory reservoir: consumed by SELL_COMPLETE_SET and replenished
+    // only when this market handle rolls to a new contract.
     double prefunded_complete_set_shares_remaining = 0.0;
     PureArbDirectionState buy{};
     PureArbDirectionState sell{};
