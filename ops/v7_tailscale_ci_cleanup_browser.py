@@ -104,17 +104,23 @@ def login(page, email: str, password: str) -> None:
                 raise RuntimeError("tailscale_signin_button_missing")
             sign.click()
 
-    page.wait_for_timeout(1200)
+    page.wait_for_timeout(500)
     if "accounts.google.com" in page.url:
-        email_box = first_visible(page.locator('input[name="identifier"], input[type="email"]'))
-        if email_box is not None:
-            email_box.fill(email)
-            nxt = first_visible(page.locator("#identifierNext"))
-            if nxt is None:
-                nxt = first_visible(page.get_by_role("button", name=re.compile(r"Next", re.I)))
-            if nxt is None:
-                raise RuntimeError("google_email_next_missing")
-            nxt.click()
+        email_locator = page.locator('input[name="identifier"], input[type="email"]')
+        try:
+            email_locator.first.wait_for(state="visible", timeout=20000)
+        except Exception:
+            raise RuntimeError("google_email_field_missing")
+        email_box = first_visible(email_locator)
+        if email_box is None:
+            raise RuntimeError("google_email_field_missing")
+        email_box.fill(email)
+        nxt = first_visible(page.locator("#identifierNext"))
+        if nxt is None:
+            nxt = first_visible(page.get_by_role("button", name=re.compile(r"Next", re.I)))
+        if nxt is None:
+            raise RuntimeError("google_email_next_missing")
+        nxt.click()
         password_box = page.locator('input[name="Passwd"]')
         try:
             password_box.wait_for(state="visible", timeout=20000)
