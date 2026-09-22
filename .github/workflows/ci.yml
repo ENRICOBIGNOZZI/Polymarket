@@ -62,13 +62,7 @@ jobs:
             force_full=true
           fi
 
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base_sha="${{ github.event.pull_request.base.sha }}"
-            [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
-            git fetch --no-tags --depth=1 origin "$base_sha"
-            git cat-file -e "$base_sha^{commit}"
-            changed="$(git diff --name-only "$base_sha" HEAD)"
-          elif git rev-parse HEAD^1 >/dev/null 2>&1; then
+          if git rev-parse HEAD^1 >/dev/null 2>&1; then
             changed="$(git diff --name-only HEAD^1 HEAD)"
           else
             changed="$(git ls-tree -r --name-only HEAD)"
@@ -364,3 +358,143 @@ jobs:
               py_compile.compile(str(path),doraise=True)
           print('london_runtime_python_files',sum(1 for _ in root.rglob('*.py')))
           PY
+
+
+  pure-arb-sota:
+    name: pure-arb-sota-${{ matrix.build_type }}
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release, Debug]
+    env:
+      VALIDATION_SHA: ${{ github.event.pull_request.head.sha }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+      - name: Verify exact SOTA revision
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+      - name: Install SOTA build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache ninja-build build-essential cmake pkg-config \
+            libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev \
+            python3 python3-pytest python3-numpy
+      - name: Pure-arb semantic and runtime contracts
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/v7_pure_arb_economics.py \
+            scripts/v7_pure_arb_exchange_execution_shadow.py \
+            scripts/v7_pure_arb_capital_allocator.py \
+            scripts/v7_pure_arb_deep_sizing_shadow.py \
+            scripts/v7_pure_arb_venue_mode.py \
+            scripts/v7_complete_set_merge_shadow.py \
+            scripts/v7_fee_reward_registry.py \
+            scripts/v7_causal_book.py
+          python3 tests/test_v7_pure_arb_sota.py
+          python3 tests/test_v7_pure_arb_frequency.py
+          python3 tests/test_v7_pure_arb_exchange_native.py
+          python3 tests/test_v7_process_manifest.py
+          python3 -m pytest \
+            tests/test_v7_fee_reward_registry.py \
+            tests/test_v7_hotpath_architecture_contract.py \
+            tests/test_v7_hotpath_data_plane.py \
+            tests/test_v7_runtime_research_boundary.py -q
+          python3 tests/test_v7_canonical_economics_health_loop.py
+          bash -n scripts/paper_v7_execution_loop.sh
+      - name: Restore SOTA compiler cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .ccache
+          key: v7-pure-arb-sota-${{ matrix.build_type }}-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'include/**', 'src/**') }}
+          restore-keys: |
+            v7-pure-arb-sota-${{ matrix.build_type }}-${{ runner.os }}-
+      - name: Build pure-arb affected C++ surface
+        run: |
+          set -euo pipefail
+          ccache --max-size=1G
+          cmake -S . -B build-pure-arb-${{ matrix.build_type }} -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DPython3_EXECUTABLE=/usr/bin/python3 \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build-pure-arb-${{ matrix.build_type }} --parallel "$(nproc)" --target \
+            polymarket_v7_maker_fillability_observer \
+            polymarket_v7_crypto_settlement_engine \
+            pm_v7_market_state_tests \
+            pm_v7_market_ws_tests \
+            pm_v7_oms_tests \
+            pm_v7_native_runtime_evidence_tests \
+            pm_v7_execution_mode_tests \
+            pm_v7_native_paper_execution_tests \
+            pm_v7_execution_admission_tests \
+            pm_v7_native_settlement_authority_tests \
+            pm_v7_paper_queue_tests \
+            pm_v7_native_clob_order_lane_driver
+          ctest --test-dir build-pure-arb-${{ matrix.build_type }} --output-on-failure \
+            -R 'pm_v7_(market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests)'
+          ccache --show-stats
+
+  pure-arb-sota-sanitizer:
+    name: pure-arb-sota-sanitizer
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VALIDATION_SHA: ${{ github.event.pull_request.head.sha }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+      - name: Verify exact SOTA revision
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$VALIDATION_SHA"
+      - name: Install sanitizer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache ninja-build build-essential cmake pkg-config \
+            libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev \
+            python3 python3-pytest python3-numpy
+      - name: Restore sanitizer cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .ccache
+          key: v7-pure-arb-sota-asan-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'include/**', 'src/**') }}
+          restore-keys: |
+            v7-pure-arb-sota-asan-${{ runner.os }}-
+      - name: ASan UBSan pure-arb gate
+        run: |
+          set -euo pipefail
+          ccache --max-size=1G
+          cmake -S . -B build-pure-arb-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DPython3_EXECUTABLE=/usr/bin/python3 \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-pure-arb-asan --parallel "$(nproc)" --target \
+            polymarket_v7_maker_fillability_observer \
+            pm_v7_market_state_tests \
+            pm_v7_market_ws_tests \
+            pm_v7_oms_tests \
+            pm_v7_native_runtime_evidence_tests \
+            pm_v7_execution_mode_tests \
+            pm_v7_native_paper_execution_tests \
+            pm_v7_execution_admission_tests \
+            pm_v7_native_settlement_authority_tests \
+            pm_v7_paper_queue_tests
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ctest --test-dir build-pure-arb-asan --output-on-failure \
+            -R 'pm_v7_(market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests)'
+          ccache --show-stats
