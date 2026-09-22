@@ -1,0 +1,58 @@
+name: V7 research SSM queue audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-research-ssm-queue-audit.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: research-ssm-queue-audit
+          aws-region: eu-west-2
+      - name: Audit SSM command queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance="$(python3 -c 'import json;print(json.load(open("deploy/v7-research-ssm-queue-audit.json"))["instance_id"])')"
+          aws ssm list-commands --instance-id "$instance" --max-results 50 --output json > /tmp/commands.json
+          python3 - <<'PY'
+          import json
+          j=json.load(open('/tmp/commands.json'))
+          out=[]
+          for c in j.get('Commands',[]):
+              params=c.get('Parameters') or {}
+              text='\n'.join(str(x) for v in params.values() for x in (v if isinstance(v,list) else [v]))
+              if any(k in text for k in (
+                  'polymarket-native-alpha-2h',
+                  'native_2h_alpha',
+                  'polymarket-multi-alpha-2h',
+                  'multi_alpha_2h',
+              )):
+                  out.append({
+                      'command_id':c.get('CommandId'),
+                      'status':c.get('Status'),
+                      'requested':str(c.get('RequestedDateTime')),
+                      'document':c.get('DocumentName'),
+                      'research_kind':(
+                          'native-alpha' if 'native' in text else 'multi-alpha'
+                      ),
+                      'parameter_preview':text[:500],
+                  })
+          print(json.dumps(out,indent=2,sort_keys=True))
+          PY
