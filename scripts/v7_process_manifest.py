@@ -25,8 +25,10 @@ def launcher_logs(text: str) -> list[str]:
     previous = 0
     logs: list[str] = []
     aliases: dict[str, str] = {}
+    alias_pattern = re.compile(
+        r"^([A-Z][A-Z0-9_]*)=\"(?:\\$RUN_ROOT|\\$\\{RUN_ROOT\\})(?:/([^\"]*))?\"$")
     for line in lines:
-        match = re.match(r'^([A-Z][A-Z0-9_]*)="\\$RUN_ROOT(?:/([^"]*))?"$', line.strip())
+        match = alias_pattern.match(line.strip())
         if match:
             aliases[match.group(1)] = (match.group(2) or "").strip("/")
     for index, line in enumerate(lines):
@@ -37,8 +39,9 @@ def launcher_logs(text: str) -> list[str]:
         normalized = segment
         for alias_name, prefix in aliases.items():
             replacement = f"$RUN_ROOT/{prefix}" if prefix else "$RUN_ROOT"
-            normalized = normalized.replace(f"${alias_name}", replacement)
-        found = re.findall(r"\$RUN_ROOT/([A-Za-z0-9_./${}-]+\.log)", normalized)
+            normalized = normalized.replace("$" + alias_name, replacement)
+            normalized = normalized.replace("${" + alias_name + "}", replacement)
+        found = re.findall(r"\\$RUN_ROOT/([A-Za-z0-9_./${}-]+\\.log)", normalized)
         if not found:
             raise ProcessManifestError(f"launcher_child_log_missing:{index + 1}")
         logs.append(found[-1])
