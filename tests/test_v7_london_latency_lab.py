@@ -80,7 +80,7 @@ def test_host_tuning_lab_is_reversible_and_default_off():
         "ena_interrupt_moderation_zero",
         "irq_feed_affinity",
         "socket_busy_poll_50",
-        "decision_affinity",
+        "process_affinity",
         "combined_runtime_tuning",
     ):
         assert profile in host
@@ -91,7 +91,7 @@ def test_host_tuning_lab_is_reversible_and_default_off():
     assert '"persistent_tuning": False' in host
     assert "isolcpus=" in host
     assert "taskset" in host
-    assert "pin_decision" in host
+    assert "pin_process" in host
     assert "socket_busy_poll_us = 0" in tls_header
     assert "int socket_busy_poll_us = 0" in probe
     assert "kMaxBusyPollUs" in socket_header
