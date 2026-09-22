@@ -14,6 +14,8 @@ import v7_market_execution_terms as terms
 import v7_pure_arb_capital_allocator as allocator
 import v7_pure_arb_exchange_execution_shadow as execution
 import v7_pure_arb_venue_mode as venue
+import v7_polymarket_status_source as public_status
+import v7_pure_arb_maker_policy as maker_policy
 
 SHA="a"*40
 
@@ -220,16 +222,91 @@ def test_verified_maker_reward_is_ancillary_and_unverified_is_zero():
 
 
 
+def test_public_status_observer_is_fail_closed_and_detects_modes():
+    normal=(
+        "All systems operational "
+        "Predictions Trading API (CLOB) - Operational "
+        "Clob Websocket - Operational Recent notices historical post-only"
+    )
+    assert public_status.classify(normal)==(
+        "NORMAL","PUBLIC_STATUS_EXPLICIT_OPERATIONAL")
+    assert public_status.classify(
+        "Scheduled maintenance Post-only Predictions Trading API (CLOB)") == (
+            "POST_ONLY","PUBLIC_STATUS_POST_ONLY")
+    assert public_status.classify("Predictions Trading API (CLOB) degraded performance")[0]=="DEGRADED"
+    assert public_status.classify("unrecognized page")[0]=="DEGRADED"
+
+
+def test_maker_policy_requires_mature_state_positive_arm_budget_and_venue():
+    maker={
+        "schema":"polymarket_v7_two_sided_complete_set_shadow_status_v2",
+        "model_sha":SHA,"paper_only":True,"authenticated_execution":False,
+        "real_order_submission":False,"research_mature":True,
+        "policy_matrix":{
+            "ttl=250|queue=1.250|cancel_relief=0.000":{
+                "deployment_candidate":True,"ttl_ms":250,
+                "queue_ahead_multiplier":1.25,"cancel_relief_fraction":0.0,
+                "conservative_mean_total_shadow_pnl_lower_90":0.02,
+            }
+        },
+        "by_state":{
+            "BTC:M5|tte=LTE_30S|flow=HEAVY|vol=FAST":{
+                "mature":True,"deployment_candidate":True,
+            }
+        },
+        "active_states":[{
+            "market_id":"m1","cycle_id":"c1",
+            "state_bucket":"BTC:M5|tte=LTE_30S|flow=HEAVY|vol=FAST",
+            "yes_price":0.45,"no_price":0.50,"target_shares":10,
+            "locked_edge_per_share":0.05,"expires_ms":10_000,
+        }],
+    }
+    capital={
+        "schema":"polymarket_v7_pure_arb_capital_allocator_v1",
+        "model_sha":SHA,"paper_only":True,"authenticated_execution":False,
+        "real_order_submission":False,
+        "recommended_market_budget_pusd":{"MAKER_COMPLETE_SET|m1":5.0},
+    }
+    venue_status={
+        "schema":"polymarket_v7_pure_arb_venue_mode_v1",
+        "model_sha":SHA,"paper_only":True,"authenticated_execution":False,
+        "real_order_submission":False,
+        "observed_policy":{"new_maker":True},
+        "simulation_policy":{"new_maker":True},
+    }
+    out=maker_policy.build(maker,capital,venue_status,model_sha=SHA,now_ms=1_000)
+    assert out["paper_admitted_count"]==1
+    assert out["observed_admitted_count"]==1
+    row=out["recommendations"][0]
+    assert 0 < row["recommended_shares"] <= 10
+    assert row["state_mature_positive"] is True
+    venue_status["observed_policy"]={"new_maker":False}
+    blocked=maker_policy.build(maker,capital,venue_status,model_sha=SHA,now_ms=1_000)
+    assert blocked["observed_admitted_count"]==0
+    assert blocked["paper_admitted_count"]==1
+
+
+def test_maker_shadow_is_state_conditioned():
+    source=(ROOT/"scripts/v7_two_sided_complete_set_shadow.py").read_text()
+    for token in (
+        "tte_bucket","flow_regime","vol_regime","state_bucket",
+        "by_state","maturity_min_cycles_per_state",
+    ):
+        assert token in source
+
+
 def test_runtime_remains_zero_authority():
     loop=(ROOT/"scripts/paper_v7_execution_loop.sh").read_text()
     for worker in (
+        "v7_polymarket_status_source.py",
         "v7_pure_arb_venue_mode.py",
         "v7_pure_arb_exchange_execution_shadow.py",
         "v7_fee_reward_registry.py",
         "v7_pure_arb_capital_allocator.py",
+        "v7_pure_arb_maker_policy.py",
     ):
         assert loop.count(worker)==1
-    assert "v7_assert_registered_child_count 19" in loop
+    assert "v7_assert_registered_child_count 20" in loop
     assert '--fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json"' in loop
     assert '"authenticated_execution":false' in loop.replace(" ", "")
     assert '"real_order_submission":false' in loop.replace(" ", "")
