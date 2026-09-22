@@ -426,7 +426,8 @@ def _render_complete_set_maker_metrics(status: dict[str, Any]) -> list[str]:
         and status.get("real_capital_at_risk") is False
     )
     lines = [
-        _metric("polymarket_complete_set_maker_shadow_up", safe and status.get("state") == "COLLECTING"),
+        _metric("polymarket_complete_set_maker_shadow_up",
+                safe and status.get("state") == "COLLECTING"),
         _metric("polymarket_complete_set_maker_cycles_total", status.get("cycles")),
         _metric("polymarket_complete_set_maker_active_cycles", status.get("active_cycles")),
         _metric("polymarket_complete_set_maker_paired_fill_probability",
@@ -436,28 +437,46 @@ def _render_complete_set_maker_metrics(status: dict[str, Any]) -> list[str]:
         _metric("polymarket_complete_set_maker_one_leg_probability",
                 status.get("one_leg_probability_direct")),
         _metric("polymarket_complete_set_maker_total_shadow_pnl_usd",
-                status.get("total_shadow_pnl")),
+                status.get("sum_total_shadow_pnl")),
         _metric("polymarket_complete_set_maker_mean_shadow_pnl_usd",
                 status.get("mean_total_shadow_pnl")),
         _metric("polymarket_complete_set_maker_total_legging_loss_usd",
                 status.get("total_legging_loss")),
         _metric("polymarket_complete_set_maker_mean_legging_loss_usd",
                 status.get("mean_legging_loss")),
+        _metric("polymarket_complete_set_maker_reserve_per_share",
+                status.get("reserve_per_share")),
+        _metric("polymarket_complete_set_maker_depth_fraction",
+                status.get("depth_fraction")),
+        _metric("polymarket_complete_set_maker_queue_ahead_multiplier",
+                status.get("queue_ahead_multiplier")),
     ]
     if not safe:
         return lines
     for state, count in sorted((status.get("states") or {}).items()):
         lines.append(_metric("polymarket_complete_set_maker_state_total", count,
                              {"state": _prom_label(state)}))
-    for context, states in sorted((status.get("by_context") or {}).items()):
-        if not isinstance(states, dict):
+    for stage, count in sorted((status.get("funnel") or {}).items()):
+        lines.append(_metric("polymarket_complete_set_maker_funnel_total", count,
+                             {"stage": _prom_label(stage)}))
+    for reason, count in sorted((status.get("cancels") or {}).items()):
+        lines.append(_metric("polymarket_complete_set_maker_cancel_total", count,
+                             {"reason": _prom_label(reason)}))
+    for context, row in sorted((status.get("by_context") or {}).items()):
+        if not isinstance(row, dict):
             continue
         asset, _, horizon = str(context).partition(":")
-        for state, count in sorted(states.items()):
-            lines.append(_metric("polymarket_complete_set_maker_context_state_total", count, {
-                "asset": _prom_label(asset), "horizon": _prom_label(horizon),
-                "state": _prom_label(state),
-            }))
+        labels = {"asset": _prom_label(asset), "horizon": _prom_label(horizon)}
+        for field, metric in (
+            ("cycles", "cycles_total"),
+            ("paired_full", "paired_full_total"),
+            ("one_leg", "one_leg_total"),
+            ("paired_fill_probability_direct", "paired_fill_probability"),
+            ("mean_total_shadow_pnl", "mean_shadow_pnl_usd"),
+        ):
+            lines.append(_metric(
+                "polymarket_complete_set_maker_context_" + metric,
+                row.get(field), labels))
     return lines
 
 
