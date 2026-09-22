@@ -712,7 +712,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 20
+v7_assert_registered_child_count 21
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
