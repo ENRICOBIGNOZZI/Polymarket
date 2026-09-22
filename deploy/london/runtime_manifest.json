@@ -41,6 +41,7 @@
     "scripts/v7_ledger_spool.py",
     "scripts/v7_legacy_native_claims.py",
     "scripts/v7_legacy_native_reconciler.py",
+    "scripts/v7_maker_queue_calibration.py",
     "scripts/v7_model_runtime_approval.py",
     "scripts/v7_multi_asset_external_collector.py",
     "scripts/v7_multi_crypto_oracle_hub.py",
@@ -134,5 +135,5 @@
     "scripts/v7_collection_plane.sh",
     "scripts/v7_process_runtime.sh"
   ],
-  "version": 5
+  "version": 6
 }
