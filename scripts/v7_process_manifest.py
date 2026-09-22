@@ -29,6 +29,10 @@ def launcher_logs(text: str) -> list[str]:
             continue
         segment = "\n".join(lines[previous:index + 1])
         previous = index + 1
+        # PURE_ARB_DIR is an explicit alias for RUN_ROOT/research/repricing_book
+        # in the canonical launcher. Normalize it before extracting child logs.
+        segment = segment.replace(
+            "$PURE_ARB_DIR/", "$RUN_ROOT/research/repricing_book/")
         found = re.findall(r"\$RUN_ROOT/([A-Za-z0-9_./${}-]+\.log)", segment)
         if not found:
             raise ProcessManifestError(f"launcher_child_log_missing:{index + 1}")
