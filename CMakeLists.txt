@@ -183,6 +183,13 @@ add_executable(polymarket_v7_native_clob_full_prewire_bench src/v7_native_clob_f
 target_link_libraries(polymarket_v7_native_clob_full_prewire_bench PRIVATE pm_v7_clob_native)
 target_compile_options(polymarket_v7_native_clob_full_prewire_bench PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_pure_arb_pair_sign_bench
+  src/v7_pure_arb_pair_sign_bench.cpp)
+target_link_libraries(polymarket_v7_pure_arb_pair_sign_bench PRIVATE
+  pm_v7_clob_native pm_json Threads::Threads)
+target_compile_options(polymarket_v7_pure_arb_pair_sign_bench PRIVATE
+  -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_pure_arb_handoff_bench src/v7_pure_arb_handoff_bench.cpp)
 target_link_libraries(polymarket_v7_pure_arb_handoff_bench PRIVATE pm_v7_common Threads::Threads)
 target_compile_options(polymarket_v7_pure_arb_handoff_bench PRIVATE -Wall -Wextra -Wpedantic)
