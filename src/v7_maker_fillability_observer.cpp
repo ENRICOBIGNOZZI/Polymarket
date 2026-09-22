@@ -51,8 +51,9 @@ constexpr std::array<double, 7> kPureArbReserveArms{
 // Sparse event-time deep evidence around each new positive-arbitrage episode.
 // It preserves causal full-depth arrival/unwind reconstruction without writing
 // a 1024-level book on every WebSocket mutation.
-constexpr std::array<std::int64_t, 16> kPureArbDeepEvidenceArmsMs{
-    0, 1, 2, 5, 10, 25, 50, 100, 200, 250, 275, 300, 400, 500, 750, 1000
+constexpr std::array<std::int64_t, 23> kPureArbDeepEvidenceArmsMs{
+    0, 1, 2, 5, 10, 25, 50, 100, 200, 250, 275, 300, 400, 500, 750, 1000,
+    1250, 1500, 2000, 3000, 4000, 5000, 5500
 };
 
 std::atomic<bool> g_stop{false};
