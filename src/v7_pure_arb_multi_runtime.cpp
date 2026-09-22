@@ -75,7 +75,7 @@ bool bool_at(const json::object& o, std::string_view key) {
     return value->as_bool();
 }
 json::object load(std::string_view path) {
-    std::ifstream input(std::string(path));
+    std::ifstream input{std::string(path)};
     if(!input) throw std::invalid_argument("config unavailable");
     std::string bytes((std::istreambuf_iterator<char>(input)),
                       std::istreambuf_iterator<char>());
