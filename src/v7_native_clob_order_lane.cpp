@@ -98,6 +98,28 @@ template <typename T, std::size_t N>
     return out;
 }
 
+
+[[nodiscard]] NativeClobSubmitResult reject_after_response(
+    NativeSettlementOmsEndpoint& owner, std::uint64_t client_order_id,
+    NativeClobSubmitReason reason, int http_status, int retry_after_seconds,
+    std::int64_t wire_ns, std::int64_t response_ns) noexcept {
+    NativeClobSubmitResult out;
+    out.reason = reason;
+    out.client_order_id = client_order_id;
+    out.http_status = http_status;
+    out.retry_after_seconds = retry_after_seconds;
+    out.wire_monotonic_ns = wire_ns;
+    out.response_complete_monotonic_ns = response_ns;
+    OmsEvent event{};
+    // 425/429/503 are authoritative HTTP responses: the request did not become
+    // a live order. Mark Reject, never TransportUnknown, and never retry here.
+    event.type = OmsEventType::Reject;
+    event.timestamp_ns = response_ns > 0 ? response_ns : now_ns();
+    const auto transition = owner.apply_owned(client_order_id, event);
+    out.final_state = transition.state;
+    return out;
+}
+
 } // namespace
 
 struct NativeClobOrderLane::Impl final {
@@ -346,7 +368,34 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                write.completed_monotonic_ns);
     }
     out.http_status = impl_->response_parser.status_code();
+    out.retry_after_seconds = impl_->response_parser.retry_after_seconds();
     out.response_complete_monotonic_ns = response_complete_ns;
+
+    // Venue restrictions are explicit rejects, not ambiguous network failures.
+    // The caller may back off/re-evaluate policy, but this lane never performs
+    // an automatic retry of the same signed taker order.
+    if (out.http_status == 425) {
+        return reject_after_response(
+            oms_owner, command.client_order_id,
+            NativeClobSubmitReason::MatchingEngineRestart,
+            out.http_status, out.retry_after_seconds,
+            write.completed_monotonic_ns, response_complete_ns);
+    }
+    if (out.http_status == 503) {
+        return reject_after_response(
+            oms_owner, command.client_order_id,
+            NativeClobSubmitReason::RestrictedTradingMode,
+            out.http_status, out.retry_after_seconds,
+            write.completed_monotonic_ns, response_complete_ns);
+    }
+    if (out.http_status == 429) {
+        return reject_after_response(
+            oms_owner, command.client_order_id,
+            NativeClobSubmitReason::RateLimited,
+            out.http_status, out.retry_after_seconds,
+            write.completed_monotonic_ns, response_complete_ns);
+    }
+
     const auto bridge_result = account_bridge.on_post_order_ack(
         command.client_order_id, impl_->response_parser.body(),
         response_complete_ns, routed_scratch);
