@@ -304,12 +304,31 @@ int main(int argc, char** argv) {
         Samples serial, parallel;
         reserve(serial, options.samples);
         reserve(parallel, options.samples);
+        std::uint64_t reconnects = 0;
+        std::uint64_t reconnect_failures = 0;
+        const auto reconnect_if_needed = [&]() noexcept {
+            if (transport.ready()) return true;
+            ++reconnects;
+            const auto reconnected = transport.connect(options.ca_file);
+            if (!reconnected.ready || !transport.ready()) {
+                ++reconnect_failures;
+                return false;
+            }
+            return true;
+        };
+
         for (std::size_t i = 0; i < options.samples; ++i) {
+            (void)reconnect_if_needed();
             const auto first = transport.submit_batch(frame);
+            (void)reconnect_if_needed();
             const auto second = transport.submit_batch(frame);
             record_serial(serial, first, second);
+
+            (void)reconnect_if_needed();
             const auto pair = transport.submit_parallel(frame, frame);
             record_parallel(parallel, pair);
+            (void)reconnect_if_needed();
+
             if (options.interval_ms > 0) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(options.interval_ms));
@@ -325,6 +344,8 @@ int main(int argc, char** argv) {
             {"endpoint", options.host + options.target},
             {"samples", options.samples},
             {"interval_ms", options.interval_ms},
+            {"transport_reconnects", reconnects},
+            {"transport_reconnect_failures", reconnect_failures},
             {"scope", "PUBLIC_GET_TIME_TRANSPORT_ONLY_NOT_MATCHING_ENGINE"},
             {"connect", json::object{
                 {"yes_dns_ns", connected.yes.dns_ns},
