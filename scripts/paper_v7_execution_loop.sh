@@ -604,6 +604,20 @@ v7_exec_class COLLECTOR python3 scripts/v7_fee_reward_registry.py \
   >> "$PURE_ARB_DIR/fee_reward_registry.log" 2>&1 &
 v7_register_optional_child "$!"
 
+# Complete-set merge is modeled as a separate zero-authority operation.
+# No signing or submission occurs here.  Capital is released early only when
+# a fresh independently verified merge-latency/cost receipt exists.
+v7_exec_class COLLECTOR python3 scripts/v7_complete_set_merge_shadow.py \
+  --cycles "$PURE_ARB_DIR/exchange_execution_cycles.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --evidence "$RUN_ROOT/control/verified_complete_set_merge_evidence.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/complete_set_merge_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/complete_set_merge_status.json" \
+  --interval-ms 100 \
+  >> "$PURE_ARB_DIR/complete_set_merge.log" 2>&1 &
+v7_register_optional_child "$!"
+
 v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_capital_allocator.py \
   --policy "$ROOT/config/v7_pure_arb_capital_policy.json" \
   --taker-cycles "$PURE_ARB_DIR/exchange_execution_cycles.jsonl" \
@@ -718,7 +732,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 21
+v7_assert_registered_child_count 22
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
