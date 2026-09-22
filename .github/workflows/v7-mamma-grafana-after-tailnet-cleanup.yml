@@ -1,0 +1,77 @@
+name: V7 mamma Grafana after tailnet cleanup
+
+on:
+  workflow_run:
+    workflows: ["V7 tailnet encrypted CI quota cleanup"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+
+      - name: Join tailnet after quota cleanup
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-mamma-final-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -T 5 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+
+      - name: Recover mamma Grafana and verify pure arb
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -P "$SERVER_PORT"             ops/v7_mamma_grafana_recover.sh             "$SERVER_USER@$SERVER_HOST:/tmp/v7_mamma_grafana_recover.sh"
+          ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes             -o ConnectTimeout=10 -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          chmod 700 /tmp/v7_mamma_grafana_recover.sh
+          /tmp/v7_mamma_grafana_recover.sh
+          rm -f /tmp/v7_mamma_grafana_recover.sh
+
+          metric="$(curl -fsS --get             --data-urlencode 'query=polymarket_pure_arb_up'             http://100.102.9.16:19091/api/v1/query)"
+          python3 - "$metric" <<'PY'
+          import json,sys
+          v=json.loads(sys.argv[1])
+          rows=v.get('data',{}).get('result',[])
+          assert rows and any(float(r['value'][1])==1.0 for r in rows), v
+          print('PURE_ARB_METRIC_UP=1')
+          PY
+
+          search="$(curl -fsS 'http://127.0.0.1:3000/api/search?folderUIDs=afyms0c1xjabkf')"
+          python3 - "$search" <<'PY'
+          import json,sys
+          rows=json.loads(sys.argv[1])
+          match=[x for x in rows if x.get('uid')=='polymarket-v7-pure-arb']
+          assert match, rows
+          print('PURE_ARB_IN_POLYMARKET_LONDON=1')
+          print('PURE_ARB_URL='+str(match[0].get('url') or ''))
+          PY
+
+          code="$(curl -k -sS -o /tmp/route -w '%{http_code}'             https://mamma-portfolio.tail1bae85.ts.net/d/polymarket-v7-pure-arb/polymarket-v7-crypto-pure-arbitrage-paper || true)"
+          case "$code" in 200|302) ;; *) echo "unexpected_route_http=$code" >&2; exit 1;; esac
+          echo "MAMMA_GRAFANA_FINAL_OK=1"
+          REMOTE
