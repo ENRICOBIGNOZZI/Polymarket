@@ -3,6 +3,7 @@
 #include "pm/v7_spsc.hpp"
 
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -61,6 +62,8 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+static_assert(std::endian::native == std::endian::little,
+              "native latency tape format is explicitly little-endian");
 static_assert(std::is_trivially_copyable_v<NativeLatencyEvent>);
 static_assert(std::is_standard_layout_v<NativeLatencyEvent>);
 static_assert(sizeof(NativeLatencyEvent) == 48);
