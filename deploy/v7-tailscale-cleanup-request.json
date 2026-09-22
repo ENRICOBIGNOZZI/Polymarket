@@ -1,0 +1,13 @@
+{
+  "schema": "polymarket_v7_tailscale_cleanup_request_v1",
+  "version": 1,
+  "expected_main_sha": "fed14521e3091f544531016eba3d51098aacd4a5",
+  "client_id": "TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL",
+  "audience": "api.tailscale.com/TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL",
+  "maximum_deletions": 1200,
+  "preserve_ips": [
+    "100.102.9.16",
+    "100.104.183.109",
+    "100.65.195.111"
+  ]
+}
