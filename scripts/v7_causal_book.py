@@ -101,6 +101,13 @@ class BookTimeline:
             if start_exclusive_ms < row["receive_wall_ms"] <= end_inclusive_ms
         ]
 
+    def after_state(self, market, token, state_version_exclusive, end_inclusive_ms):
+        return [
+            row for row in self.history.get((market, token), ())
+            if int(row.get("state_version") or 0) > state_version_exclusive
+            and row["receive_wall_ms"] <= end_inclusive_ms
+        ]
+
     def asof(self, market, token, timestamp_ms):
         for row in reversed(self.history.get((market, token), ())):
             if row["receive_wall_ms"] <= timestamp_ms:
