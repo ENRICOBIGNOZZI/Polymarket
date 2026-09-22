@@ -15,6 +15,7 @@ import argparse,json,math,time,urllib.parse,urllib.request
 from pathlib import Path
 from typing import Any
 from v7_pure_arb_economics import raw_fee_per_share
+from v7_clob_public_batch import bbo as parse_bbo, fetch_books
 
 SCHEMA="polymarket_v7_combo_rfq_shadow_v1"
 
@@ -46,11 +47,23 @@ def book(base:str,token:str,timeout:float)->dict[str,float]|None:
     b=max(bids);a=min(asks)
     return {"bid":b[0],"bid_q":b[1],"ask":a[0],"ask_q":a[1]}
 
+_FEE_CACHE:dict[str,tuple[float,float]]={}
+
 def fee_rate(base:str,token:str,timeout:float)->float|None:
+    now=time.monotonic()
+    cached=_FEE_CACHE.get(token)
+    if cached is not None and now-cached[1] <= 600.0:return cached[0]
     v=get_json(base.rstrip("/")+"/fee-rate?"+urllib.parse.urlencode({"token_id":token}),timeout)
     try:bps=int(v["base_fee"]) if v else -1
     except Exception:return None
-    return bps/10_000.0 if 0<=bps<=10_000 else None
+    if not 0<=bps<=10_000:return None
+    rate=bps/10_000.0
+    _FEE_CACHE[token]=(rate,now)
+    return rate
+
+def batch_bbos(base:str,tokens:list[str],timeout:float)->dict[str,dict[str,float]|None]:
+    raw=fetch_books(base,tokens,timeout,chunk_size=50,user_agent="polymarket-v7-rfq-shadow")
+    return {token:parse_bbo(raw.get(token)) for token in dict.fromkeys(tokens)}
 
 def taker_cost(price:float,shares:float,rate:float)->float:
     fee=raw_fee_per_share(price,rate,1.0)
@@ -69,12 +82,18 @@ def evaluate(req:dict[str,Any],catalog:dict[str,Any],args:argparse.Namespace)->d
         base["state"]="INVALID_REQUEST";return base
     if deadline<=now:base["state"]="SUBMISSION_WINDOW_CLOSED";return base
     index=catalog.get("position_index") if isinstance(catalog.get("position_index"),dict) else {}
-    resolved=[]
+    metas=[]
+    tokens=[]
     for pid in legs:
         meta=index.get(pid)
         if not isinstance(meta,dict):base["state"]="UNKNOWN_LEG";return base
         comp=str(meta.get("complement_position_id") or "")
-        b=book(args.clob_url,pid,args.timeout_seconds);cb=book(args.clob_url,comp,args.timeout_seconds)
+        if not comp:base["state"]="UNKNOWN_COMPLEMENT";return base
+        metas.append((pid,comp));tokens.extend((pid,comp))
+    books=batch_bbos(args.clob_url,tokens,args.timeout_seconds)
+    resolved=[]
+    for pid,comp in metas:
+        b=books.get(pid);cb=books.get(comp)
         r=fee_rate(args.clob_url,pid,args.timeout_seconds);cr=fee_rate(args.clob_url,comp,args.timeout_seconds)
         if b is None or cb is None or r is None or cr is None:
             base["state"]="CENSORED_HEDGE_DATA";return base
