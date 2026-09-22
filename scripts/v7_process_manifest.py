@@ -25,12 +25,21 @@ def launcher_logs(text: str) -> list[str]:
     previous = 0
     logs: list[str] = []
     aliases: dict[str, str] = {}
-    alias_pattern = re.compile(
-        r"^([A-Z][A-Z0-9_]*)=\"(?:\\$RUN_ROOT|\\$\\{RUN_ROOT\\})(?:/([^\"]*))?\"$")
+    assignment = re.compile(r'^([A-Z][A-Z0-9_]*)="([^"]*)"$')
     for line in lines:
-        match = alias_pattern.match(line.strip())
-        if match:
-            aliases[match.group(1)] = (match.group(2) or "").strip("/")
+        match = assignment.match(line.strip())
+        if not match:
+            continue
+        name, value = match.groups()
+        for root_form in ("$RUN_ROOT", "${RUN_ROOT}"):
+            if value == root_form:
+                aliases[name] = ""
+                break
+            prefix = root_form + "/"
+            if value.startswith(prefix):
+                aliases[name] = value[len(prefix):].strip("/")
+                break
+    root_prefix = "$RUN_ROOT/"
     for index, line in enumerate(lines):
         if ('pids+=("$!")' not in line and 'v7_register_child "$!"' not in line and 'v7_register_optional_child "$!"' not in line):
             continue
@@ -39,9 +48,9 @@ def launcher_logs(text: str) -> list[str]:
         normalized = segment
         for alias_name, prefix in aliases.items():
             replacement = f"$RUN_ROOT/{prefix}" if prefix else "$RUN_ROOT"
-            normalized = normalized.replace("$" + alias_name, replacement)
             normalized = normalized.replace("${" + alias_name + "}", replacement)
-        found = re.findall(r"\\$RUN_ROOT/([A-Za-z0-9_./${}-]+\\.log)", normalized)
+            normalized = normalized.replace("$" + alias_name, replacement)
+        found = re.findall(re.escape(root_prefix) + r"([A-Za-z0-9_./${}-]+\.log)", normalized)
         if not found:
             raise ProcessManifestError(f"launcher_child_log_missing:{index + 1}")
         logs.append(found[-1])
