@@ -1,0 +1,39 @@
+name: V7 export deploy SSH public key
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/v7-export-server-ssh-public-key.yml
+      - deploy/v7-tailnet-key-request.json
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Derive public key only
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/deploy-key"
+          ssh-keygen -y -f "$RUNNER_TEMP/deploy-key" > "$RUNNER_TEMP/server-ssh.pub"
+          rm -f "$RUNNER_TEMP/deploy-key"
+          test -s "$RUNNER_TEMP/server-ssh.pub"
+          key_type="$(awk '{print $1}' "$RUNNER_TEMP/server-ssh.pub")"
+          test "$key_type" = ssh-ed25519
+          echo "public_key_type=$key_type"
+      - name: Upload public key
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-server-ssh-public-key
+          path: ${{ runner.temp }}/server-ssh.pub
+          retention-days: 1
