@@ -16,7 +16,7 @@ def test_runtime_and_research_process_manifests_are_disjoint():
     rids={p['id'] for p in runtime['processes']}; qids={p['id'] for p in research['processes']}
     assert not (rids&qids)
     assert runtime['expected_process_count']==31 and runtime['expected_launcher_child_count']==30
-    assert all(p.get('london_deployed') is True and p.get('runtime_class') in {'HOT_PATH','COLLECTOR','CONTROL'} for p in runtime['processes'])
+    assert all(p.get('london_deployed') is True and p.get('runtime_class') in {'HOT_PATH','COLLECTOR','CONTROL','LATENCY_OBSERVER'} for p in runtime['processes'])
     pure=[p for p in runtime['processes'] if str(p.get('id','')).startswith('pure_arb_') or p.get('id')=='venue_mode_source']
     assert len(pure)==13
     for p in pure:
