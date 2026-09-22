@@ -1,0 +1,83 @@
+name: V7 repricing horizon histogram
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-repricing-horizon-histogram.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  histogram:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: repricing-horizon-histogram
+          aws-region: eu-west-2
+      - name: Count native repricing horizons
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance="$(python3 -c 'import json;print(json.load(open("deploy/v7-repricing-horizon-histogram.json"))["instance_id"])')"
+          cat >/tmp/h.py <<'PY'
+          import gzip,json
+          from pathlib import Path
+          from collections import Counter,defaultdict
+          roots=[]
+          for hft in list(Path('/mnt/polymarket-data').glob('*/research/hft_permanent'))+list(Path('/home').glob('*/polymarket-runs/*/research/hft_permanent')):
+              files=[p for folder in ('compact','compact_closed') for p in (hft/folder).glob('*.jsonl*') if p.is_file() and not p.is_symlink()]
+              if files: roots.append((sum(p.stat().st_size for p in files),hft,files))
+          _,hft,files=max(roots)
+          total=Counter(); by_asset=defaultdict(Counter); pair_valid=Counter()
+          for p in sorted(files):
+              opener=gzip.open if str(p).endswith('.gz') else open
+              with opener(p,'rt',encoding='utf-8') as f:
+                  for line in f:
+                      if '"kind":6' not in line and '"kind": 6' not in line:
+                          continue
+                      try:r=json.loads(line)
+                      except:continue
+                      if r.get('kind')!=6:continue
+                      h=r.get('repricing_horizon_ms')
+                      if not isinstance(h,int):continue
+                      total[h]+=1
+                      by_asset[str(r.get('asset') or 'UNKNOWN')][h]+=1
+                      pair_valid[(h,bool(r.get('repricing_pair_valid')),bool(r.get('book_valid')))] += 1
+          out={
+              'root':str(hft.parent.parent),
+              'horizon_counts':dict(sorted(total.items())),
+              'min_horizon_ms':min(total) if total else None,
+              'max_horizon_ms':max(total) if total else None,
+              'distinct_horizons':len(total),
+              'by_asset':{a:dict(sorted(c.items())) for a,c in sorted(by_asset.items())},
+              'validity':[
+                  {'horizon_ms':h,'repricing_pair_valid':pv,'book_valid':bv,'count':n}
+                  for (h,pv,bv),n in sorted(pair_valid.items())
+              ],
+          }
+          print('HORIZON_HISTOGRAM='+json.dumps(out,separators=(',',':'),sort_keys=True))
+          PY
+          b64="$(base64 -w0 /tmp/h.py)"
+          params="$(python3 - "$b64" <<'PY'
+          import json,shlex,sys
+          print(json.dumps({'commands':[f"printf %s {shlex.quote(sys.argv[1])} | base64 -d | nice -n 18 python3"]}))
+          PY
+          )"
+          cmd="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --timeout-seconds 1500 --parameters "$params" --query 'Command.CommandId' --output text)"
+          for i in $(seq 1 180); do
+            status="$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query Status --output text 2>/dev/null || true)"
+            case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
+            sleep 5
+          done
+          aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query '{Status:Status,Stdout:StandardOutputContent,Stderr:StandardErrorContent}' --output json
