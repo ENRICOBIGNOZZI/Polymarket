@@ -68,46 +68,48 @@ def _catalog():
         },
     }
 
-def test_combo_rfq_exact_hedge_bounds(monkeypatch):
+def test_combo_rfq_exact_hedge_bounds():
     books={
         "A_Y":{"bid":0.39,"bid_q":10.0,"ask":0.40,"ask_q":10.0},
         "A_N":{"bid":0.19,"bid_q":10.0,"ask":0.20,"ask_q":10.0},
         "B_Y":{"bid":0.29,"bid_q":10.0,"ask":0.30,"ask_q":10.0},
         "B_N":{"bid":0.24,"bid_q":10.0,"ask":0.25,"ask_q":10.0},
     }
-    monkeypatch.setattr(
-        rfq,"batch_bbos",
-        lambda base,tokens,timeout:{token:books[token] for token in tokens})
+    original_batch=rfq.batch_bbos
+    rfq.batch_bbos=lambda base,tokens,timeout:{token:books[token] for token in tokens}
     args=SimpleNamespace(clob_url="x",timeout_seconds=1.0,reserve_per_share=0.001)
-    common={"rfq_id":"r","leg_position_ids":["A_Y","B_Y"],
-            "submission_deadline":10_000,"receive_wall_ms":9_700}
+    try:
+        common={"rfq_id":"r","leg_position_ids":["A_Y","B_Y"],
+                "submission_deadline":10_000,"receive_wall_ms":9_700}
 
-    buy=rfq.evaluate({
-        **common,"direction":"BUY","side":"YES",
-        "requested_size":{"unit":"notional","value_e6":"1000000"},
-    },_catalog(),args)
-    assert buy["state"]=="PRICED_EXACT_BOUND"
-    assert math.isclose(buy["reference_quote_bound"],0.30)
-    assert math.isclose(buy["actionable_bound"],0.301)
-    assert buy["quote_budget_ms"]==300
-    assert buy["sizing_semantics"]=="BUY_NOTIONAL_FLOOR_AT_QUOTE_PRICE"
-    assert 3.32 < buy["quote_size_shares"] < 3.33
+        buy=rfq.evaluate({
+            **common,"direction":"BUY","side":"YES",
+            "requested_size":{"unit":"notional","value_e6":"1000000"},
+        },_catalog(),args)
+        assert buy["state"]=="PRICED_EXACT_BOUND"
+        assert math.isclose(buy["reference_quote_bound"],0.30)
+        assert math.isclose(buy["actionable_bound"],0.301)
+        assert buy["quote_budget_ms"]==300
+        assert buy["sizing_semantics"]=="BUY_NOTIONAL_FLOOR_AT_QUOTE_PRICE"
+        assert 3.32 < buy["quote_size_shares"] < 3.33
 
-    sell=rfq.evaluate({
-        **common,"rfq_id":"s","direction":"SELL","side":"YES",
-        "requested_size":{"unit":"shares","value_e6":"2000000"},
-    },_catalog(),args)
-    assert sell["state"]=="PRICED_EXACT_BOUND"
-    assert math.isclose(sell["reference_quote_bound"],0.55)
-    assert math.isclose(sell["actionable_bound"],0.549)
-    assert sell["quote_size_shares"]==2.0
-    assert sell["sizing_semantics"]=="SELL_EXACT_SHARES"
+        sell=rfq.evaluate({
+            **common,"rfq_id":"s","direction":"SELL","side":"YES",
+            "requested_size":{"unit":"shares","value_e6":"2000000"},
+        },_catalog(),args)
+        assert sell["state"]=="PRICED_EXACT_BOUND"
+        assert math.isclose(sell["reference_quote_bound"],0.55)
+        assert math.isclose(sell["actionable_bound"],0.549)
+        assert sell["quote_size_shares"]==2.0
+        assert sell["sizing_semantics"]=="SELL_EXACT_SHARES"
 
-    unsupported=rfq.evaluate({
-        **common,"rfq_id":"x","direction":"BUY","side":"NO",
-        "requested_size":{"unit":"notional","value_e6":"1000000"},
-    },_catalog(),args)
-    assert unsupported["state"]=="INVALID_OR_UNSUPPORTED_REQUEST"
+        unsupported=rfq.evaluate({
+            **common,"rfq_id":"x","direction":"BUY","side":"NO",
+            "requested_size":{"unit":"notional","value_e6":"1000000"},
+        },_catalog(),args)
+        assert unsupported["state"]=="INVALID_OR_UNSUPPORTED_REQUEST"
+    finally:
+        rfq.batch_bbos=original_batch
 
 
 def test_collateral_return_is_never_credited_without_verified_capture():
@@ -223,3 +225,10 @@ def test_native_prewire_benchmark_matches_production_prepared_path():
     assert "sign_prepared_poly1271_hex" in source
     assert "production_prepared_path" in source
     assert "sign_poly1271_hex(hasher" not in source
+
+
+if __name__=="__main__":
+    tests=[value for name,value in sorted(globals().items())
+           if name.startswith("test_") and callable(value)]
+    for test in tests:test()
+    print(f"pure_arb_ultra_sota_tests={len(tests)}")
