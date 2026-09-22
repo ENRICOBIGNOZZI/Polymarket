@@ -31,6 +31,7 @@ from v7_pure_arb_economics import (
     parse_levels,
     raw_fee_per_share,
     sweep_fee_usdc,
+    tail_jsonl,
     weighted_volume,
 )
 
@@ -203,14 +204,18 @@ def leg_arrival_times(
 
 
 class Tail:
-    def __init__(self,path:Path,sha:str):
+    def __init__(self,path:Path,sha:str,*,start_at_end:bool=False):
         self.path,self.sha,self.handle=path,sha,None
+        self.start_at_end_pending=bool(start_at_end)
     def poll(self)->list[dict[str,Any]]:
         out=[]
         for _ in range(2):
             if self.handle is None:
                 try:self.handle=self.path.open("rb")
                 except OSError:return out
+                if self.start_at_end_pending:
+                    self.handle.seek(0,os.SEEK_END)
+                    self.start_at_end_pending=False
             while True:
                 pos=self.handle.tell();raw=self.handle.readline()
                 if not raw or not raw.endswith(b"\n"):
@@ -422,14 +427,24 @@ def unwind_cashflow(original_side:str,sweep:dict[str,Any],fee_rate:float,fee_exp
 class Shadow:
     def __init__(self,args:argparse.Namespace):
         self.args=args
-        self.tail=Tail(args.candidates,args.model_sha)
+        resumed=False
+        try:resumed=args.output.exists() and args.output.stat().st_size>0
+        except OSError:resumed=False
+        # On restart, old scenarios are already durable in output. Follow new
+        # candidates only; replaying the entire candidate tape would duplicate
+        # historical counterfactuals.
+        self.tail=Tail(args.candidates,args.model_sha,start_at_end=resumed)
         self.book=BookTimeline(
             args.book_tape,args.model_sha,
             retention_ms=max(10_000,max(args.inter_leg_skew_ms)+args.maximum_book_age_ms
                              +args.unwind_delay_ms+5000))
         self.deep=(DeepReplayTimeline(args.deep_book_snapshots,args.model_sha)
                    if args.deep_book_snapshots is not None else None)
-        self.rows=[];self.seen=set();self.pending=[]
+        self.rows=deque(maxlen=args.status_window_scenarios)
+        self.seen=set()
+        self.seen_order=deque()
+        self.pending=[]
+        self.resumed_follow_new_only=resumed
         args.output.parent.mkdir(parents=True,exist_ok=True)
         args.status.parent.mkdir(parents=True,exist_ok=True)
         self.semantics=load(args.exchange_semantics)
@@ -438,12 +453,21 @@ class Shadow:
         self._restore()
 
     def _restore(self):
-        try:
-            for raw in self.args.output.read_text(encoding="utf-8").splitlines():
-                r=json.loads(raw)
-                if r.get("schema")==ROW_SCHEMA and r.get("model_sha")==self.args.model_sha:
-                    self.rows.append(r);self.seen.add(str(r.get("scenario_id") or ""))
-        except (OSError,json.JSONDecodeError):pass
+        for r in tail_jsonl(
+            self.args.output,max_rows=self.args.status_window_scenarios,
+            max_bytes=self.args.status_restore_bytes):
+            if r.get("schema")==ROW_SCHEMA and r.get("model_sha")==self.args.model_sha:
+                self.rows.append(r)
+
+    def _mark_candidate_seen(self,candidate_id:str)->bool:
+        if not candidate_id or candidate_id in self.seen:
+            return False
+        while len(self.seen_order)>=self.args.seen_candidate_limit:
+            old=self.seen_order.popleft()
+            self.seen.discard(old)
+        self.seen.add(candidate_id)
+        self.seen_order.append(candidate_id)
+        return True
 
     def ingest(self):
         selection=selection_map(load(self.args.selection),self.args.model_sha)
@@ -462,6 +486,7 @@ class Shadow:
                 continue
             terms=market_terms(self.args.market_terms_root,mid)
             base_id=f"{mid}:{kind}:{detected}"
+            if not self._mark_candidate_seen(base_id):continue
             for transport in self.args.transport_delay_ms:
                 for execution_mode in self.args.transport_modes:
                     skews=(0,) if execution_mode=="BATCH" else self.args.inter_leg_skew_ms
@@ -469,7 +494,6 @@ class Shadow:
                     for skew in skews:
                         for order in orders:
                             sid=f"{base_id}:{execution_mode}:{transport}:{skew}:{order}"
-                            if sid in self.seen:continue
                             mandatory=(int(terms["mandatory_taker_delay_ns"])//1_000_000) if terms else None
                             total_delay=(mandatory+transport) if mandatory is not None else None
                             self.pending.append({
@@ -488,7 +512,6 @@ class Shadow:
                                 "total_delay_ms":total_delay,
                                 "target_ms":detected+total_delay if total_delay is not None else None,
                             })
-                            self.seen.add(sid)
 
     def evaluate(self,item:dict[str,Any])->dict[str,Any]:
         c=item["candidate"];m=item["market"];mid=str(c.get("market_id"))
@@ -505,7 +528,9 @@ class Shadow:
             "authenticated_execution":False,"real_order_submission":False,
             "real_capital_at_risk":False,
             "execution_authority":"ZERO_AUTHORITY_EXCHANGE_EXECUTION_SHADOW",
-            "scenario_id":item["scenario_id"],"market_id":mid,
+            "scenario_id":item["scenario_id"],
+            "candidate_id":f"{mid}:{kind}:{int(c.get('receive_wall_ms') or 0)}",
+            "market_id":mid,
             "asset":str(c.get("asset") or ""),"horizon":str(c.get("horizon") or ""),
             "kind":kind,"execution_mode":mode,
             "observed_taker_allowed":item.get("observed_taker_allowed") is True,
@@ -761,6 +786,11 @@ class Shadow:
             "unknown_terms_policy":"FAIL_CLOSED",
             "counterfactual_semantics":"OBSERVED_AND_PAPER_SIMULATION_EXECUTABILITY_RECORDED_SEPARATELY",
             "counterfactual_only_scenarios":sum(r.get("counterfactual_only") is True for r in self.rows),
+            "status_window_scenarios":self.args.status_window_scenarios,
+            "status_window_size":len(self.rows),
+            "seen_candidate_limit":self.args.seen_candidate_limit,
+            "seen_candidate_count":len(self.seen),
+            "restart_policy":"FOLLOW_NEW_CANDIDATES_ONLY" if self.resumed_follow_new_only else "INITIAL_TAPE_DRAIN",
         })
 
     def run(self):
@@ -798,6 +828,9 @@ def main()->int:
     ap.add_argument("--minimum-shares",type=float,default=1.0)
     ap.add_argument("--maximum-shares",type=float,default=1000.0)
     ap.add_argument("--interval-ms",type=int,default=5)
+    ap.add_argument("--status-window-scenarios",type=int,default=50_000)
+    ap.add_argument("--status-restore-bytes",type=int,default=67_108_864)
+    ap.add_argument("--seen-candidate-limit",type=int,default=100_000)
     args=ap.parse_args()
     args.transport_delay_ms=parse_ints(args.transport_delay_ms)
     args.inter_leg_skew_ms=parse_ints(args.inter_leg_skew_ms)
@@ -808,7 +841,10 @@ def main()->int:
            and args.transport_modes and set(args.transport_modes)<= {"SEQUENTIAL","PARALLEL","BATCH"}
            and 0<=args.unwind_delay_ms<=5000 and 1<=args.maximum_book_age_ms<=5000
            and 0<=args.maximum_leg_skew_ms<=5000 and 0<=args.reserve_per_share<1
-           and 0<args.minimum_shares<=args.maximum_shares and 1<=args.interval_ms<=1000):
+           and 0<args.minimum_shares<=args.maximum_shares and 1<=args.interval_ms<=1000
+           and 100<=args.status_window_scenarios<=1_000_000
+           and 1_048_576<=args.status_restore_bytes<=1_073_741_824
+           and 1_000<=args.seen_candidate_limit<=1_000_000):
         raise SystemExit("invalid arguments")
     Shadow(args).run();return 0
 
