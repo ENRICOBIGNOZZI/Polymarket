@@ -290,21 +290,29 @@ def main() -> int:
     maximum = int(value["maximum_deletions"])
     if not 1 <= maximum <= 100:
         p.error("maximum_deletions")
+    print('stage=protected_runs_begin', flush=True)
     protected = protected_run_ids(a.repository, a.github_token)
+    print(f'stage=protected_runs_ok count={len(protected)}', flush=True)
 
+    print('stage=playwright_import_begin', flush=True)
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:
         raise SystemExit(f"playwright_import_failed:{type(exc).__name__}")
+    print('stage=playwright_import_ok', flush=True)
     chrome = a.chrome or shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
     if not chrome:
         raise SystemExit("chrome_not_found")
 
+    print('stage=chrome_resolved', flush=True)
     removed: list[str] = []
     candidates: list[str] = []
     with sync_playwright() as pw:
+        print('stage=playwright_started', flush=True)
         if a.cdp_url:
+            print('stage=cdp_connect_begin', flush=True)
             browser = pw.chromium.connect_over_cdp(a.cdp_url)
+            print('stage=cdp_connect_ok', flush=True)
             context = browser.contexts[0] if browser.contexts else browser.new_context()
             pages = context.pages
             page = pages[0] if pages else context.new_page()
@@ -315,8 +323,11 @@ def main() -> int:
             )
             context = browser.new_context()
             page = context.new_page()
+        print('stage=login_begin', flush=True)
         login(page, value["email"], value["password"])
+        print('stage=login_ok', flush=True)
         candidates = candidate_names(page)
+        print(f'stage=candidates count={len(candidates)}', flush=True)
         for name in candidates:
             match = GH_NAME_RE.fullmatch(name)
             if match is not None and int(match.group(2)) in protected:
