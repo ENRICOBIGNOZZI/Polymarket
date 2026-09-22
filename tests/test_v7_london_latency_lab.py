@@ -69,6 +69,19 @@ def test_three_az_bootstrap_repairs_only_disabled_benchmark_checkout():
     assert "PM_V7_CI_REPOSITORY=ENRICOBIGNOZZI/Polymarket" in bootstrap
 
 
+def test_three_az_bootstrap_repairs_checkout_ownership_only_when_runtime_stopped():
+    bootstrap = (ROOT / "ops/v7_london_ssm_bootstrap.py").read_text()
+    stop = bootstrap.index("! systemctl is-active --quiet polymarket-v7-paper.service")
+    realpath = bootstrap.index('realpath "$APP"')
+    chown = bootstrap.index('chown -R {service_user}:"$SERVICE_GROUP" "$APP"')
+    fetch = bootstrap.index('git -C "$APP" fetch --no-tags origin main')
+    assert stop < realpath < chown < fetch
+    assert '[[ ! -L "$APP" ]]' in bootstrap
+    assert '"/home/{service_user}/polymarket"' in bootstrap
+    assert 'chown -R {service_user}:"$SERVICE_GROUP" "$RUN"' not in bootstrap
+    assert 'chown -R {service_user}:"$SERVICE_GROUP" "$BENCH"' not in bootstrap
+
+
 def test_london_bootstrap_dependencies_retrigger_latency_lab():
     bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
     workflow = (ROOT / ".github/workflows/v7-london-aws-provision.yml").read_text()
