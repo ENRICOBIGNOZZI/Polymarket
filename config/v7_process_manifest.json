@@ -607,6 +607,32 @@
       "authority_overrides": {}
     },
     {
+      "id": "multi_az_fencing_supervisor",
+      "executable": "scripts/v7_multi_az_fencing_supervisor.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}",
+        "--server-id",
+        "${SERVER_ID}"
+      ],
+      "profile": "core",
+      "inputs": [
+        "config/v7_multi_az_fencing.json"
+      ],
+      "outputs": [
+        "control/fencing_receipt.json",
+        "control/fencing_supervisor_status.json",
+        "fencing_supervisor.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "fencing_supervisor.log",
+      "london_deployed": true,
+      "runtime_class": "CONTROL",
+      "authority_overrides": {}
+    },
+    {
       "id": "pure_arb_exact_relation_discovery",
       "executable": "scripts/v7_exact_relation_discovery.py",
       "arguments": [
