@@ -200,7 +200,7 @@ def maker_observations(path:Path|None,policy:dict[str,Any],
     minimum=float(policy["minimum_lock_seconds"])
     reward_rates=reward_rates or {}
     out=[]
-    for r in rows(path):
+    for r in rows(path,policy):
         if r.get("schema")!="polymarket_v7_two_sided_complete_set_cycle_v2":continue
         scenarios={
             (round(float(x.get("multiplier") or 0.0),6),
@@ -234,7 +234,7 @@ def maker_observations(path:Path|None,policy:dict[str,Any],
 def postfix_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]:
     lag=max(float(policy["minimum_lock_seconds"]),float(policy["post_fix_redemption_lag_seconds"]))
     out=[]
-    for r in rows(path):
+    for r in rows(path,policy):
         if r.get("schema")!="polymarket_v7_settlement_source_arb_cycle_v2":continue
         if r.get("state")!="PAPER_LOCKED_ARBITRAGE" or not isinstance(r.get("locked_pnl"),(int,float)):continue
         q=float(r.get("filled_shares") or 0)
