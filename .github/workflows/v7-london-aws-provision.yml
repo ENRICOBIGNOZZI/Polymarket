@@ -104,6 +104,33 @@ jobs:
           assert {z['zone_id'] for z in p['zones']} == {'euw2-az1','euw2-az2','euw2-az3'}
           PY
 
+      - name: Wait for latency target exact-SHA release gates
+        if: env.PHASE == 'latency-lab'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1200))
+          while true; do
+            set +e
+            python3 scripts/v7_exact_sha_ci_gate.py \
+              --repository "$GITHUB_REPOSITORY" --sha "$EXPECTED_SHA" \
+              --required-check ci-v7-Release \
+              --required-check ci-v7-Debug \
+              --required-check sanitizer-v7 \
+              --required-check security-audit-v7 \
+              --required-check london-runtime-boundary-v7 \
+              --required-check monitoring-v7 \
+              --required-check single-writer-v7 \
+              --output "$RUNNER_TEMP/latency-ci-$EXPECTED_SHA.json"
+            rc=$?
+            set -e
+            [[ "$rc" == 0 ]] && break
+            (( SECONDS < deadline )) || exit "$rc"
+            sleep 5
+          done
+
       - name: Configure permanent AWS OIDC credentials for latency lab
         if: env.PHASE == 'latency-lab'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
@@ -111,6 +138,7 @@ jobs:
           role-to-assume: ${{ env.ROLE_ARN }}
           role-session-name: polymarket-v7-london-latency
           aws-region: eu-west-2
+          unset-current-credentials: true
 
       - name: Verify three-AZ stack access for latency lab
         if: env.PHASE == 'latency-lab'
