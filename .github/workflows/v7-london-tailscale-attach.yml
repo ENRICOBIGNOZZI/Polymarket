@@ -1,0 +1,130 @@
+name: V7 attach stable London Tailscale monitoring
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-london-tailscale-attach-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-london-tailscale-stable
+  cancel-in-progress: false
+
+jobs:
+  attach:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate monitoring-only request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - deploy/v7-london-tailscale-attach-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v=={
+            "schema":"polymarket_v7_london_tailscale_attach_v1",
+            "hostname":"polymarket-london-paper",
+            "prometheus_local_port":9090,
+            "tailnet_port":19091,
+            "paper_only":True,
+            "authenticated_execution":False,
+            "real_order_submission":False,
+            "monitoring_only":True
+          }
+          PY
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: v7-london-tailscale-stable
+          aws-region: eu-west-2
+
+      - name: Attach London once and expose Prometheus privately
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          set -euo pipefail
+          test -n "${TS_AUTHKEY:-}"
+          echo "::add-mask::$TS_AUTHKEY"
+
+          script="$(cat <<'SH'
+          set -euo pipefail
+          KEY='__TSKEY__'
+
+          echo '=== LOCAL PROMETHEUS ==='
+          curl -fsS --max-time 5 http://127.0.0.1:9090/-/ready
+          curl -fsS --max-time 5 --get --data-urlencode 'query=up'             http://127.0.0.1:9090/api/v1/query >/tmp/v7-prom-local.json
+
+          state="$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("BackendState") or ""))' || true)"
+          if [[ "$state" != Running ]]; then
+            sudo tailscale up               --reset               --auth-key="$KEY"               --hostname=polymarket-london-paper               --accept-dns=true
+          fi
+
+          ip="$(tailscale ip -4 | head -1)"
+          test -n "$ip"
+
+          sudo tailscale serve reset || true
+          sudo tailscale serve --yes --bg --tcp=19091 tcp://127.0.0.1:9090
+
+          echo '=== TAILSCALE IDENTITY ==='
+          tailscale status --json | python3 - <<'PY'
+          import json,sys
+          v=json.load(sys.stdin); s=v.get('Self') or {}
+          print('HOSTNAME='+str(s.get('HostName') or ''))
+          print('DNSNAME='+str(s.get('DNSName') or ''))
+          print('TAILSCALE_IPS='+','.join(s.get('TailscaleIPs') or []))
+          print('ONLINE='+str(bool(s.get('Online'))).lower())
+          PY
+
+          echo '=== SERVE ==='
+          tailscale serve status
+
+          echo '=== TAILNET PROMETHEUS ==='
+          curl -fsS --max-time 8 "http://$ip:19091/-/healthy"
+          result="$(curl -fsS --max-time 8 --get             --data-urlencode 'query=polymarket_pure_arb_up'             "http://$ip:19091/api/v1/query")"
+          printf '%s\n' "$result"
+          python3 - "$result" <<'PY'
+          import json,sys
+          v=json.loads(sys.argv[1])
+          assert v.get('status')=='success', v
+          print('TAILNET_PROMETHEUS_QUERY_OK=1')
+          rows=v.get('data',{}).get('result',[])
+          vals=[str((x.get('value') or [None,None])[1]) for x in rows]
+          print('PURE_ARB_VALUES='+','.join(vals))
+          PY
+          SH
+          )"
+          script="${script/__TSKEY__/$TS_AUTHKEY}"
+          encoded="$(printf '%s' "$script" | base64 -w0)"
+          wrapped="printf '%s' '$encoded' | base64 -d | bash"
+          params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["180"]},separators=(",",":")))' "$wrapped")"
+
+          cid="$(aws ssm send-command             --instance-ids "$INSTANCE_ID"             --document-name AWS-RunShellScript             --parameters "$params"             --comment 'Polymarket V7 stable London Tailscale monitoring attach'             --region "$AWS_REGION"             --query 'Command.CommandId' --output text)"
+
+          for _ in $(seq 1 90); do
+            status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID"               --region "$AWS_REGION" --query Status --output text 2>/dev/null || true)"
+            if [[ "$status" == Success ]]; then
+              aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID"                 --region "$AWS_REGION" --query StandardOutputContent --output text
+              exit 0
+            fi
+            case "$status" in
+              Failed|Cancelled|TimedOut)
+                aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID"                   --region "$AWS_REGION" --query StandardErrorContent --output text >&2 || true
+                exit 1;;
+            esac
+            sleep 2
+          done
+          exit 1
