@@ -1952,7 +1952,7 @@ public:
         write_status(true);
     }
 
-    void drain() {
+    void drain(bool force_flush = false) {
         TradeEvidence row;
         bool wrote = false;
         while (queue_->try_pop(row)) {
@@ -1970,7 +1970,8 @@ public:
             if (deep.evaluate_candidate != 0) evaluate_pure_arb_deep(deep);
         }
         const auto now_wall_ms = wall_ms();
-        if (wrote && !state_only_ && now_wall_ms - last_evidence_flush_ms_ >= 25) {
+        if (wrote && !state_only_
+            && (force_flush || now_wall_ms - last_evidence_flush_ms_ >= 25)) {
             output_.flush();
             book_output_.flush();
             if (!output_ || !book_output_) {
