@@ -53,6 +53,12 @@ def valid_common(v:dict[str,Any],schema:str,sha:str)->bool:
     )
 
 
+def fresh(v:dict[str,Any],now_ms:int,maximum_age_ms:int)->bool:
+    try:ts=int(v.get("timestamp_ms") or 0)
+    except (TypeError,ValueError,OverflowError):return False
+    return 0<=now_ms-ts<=maximum_age_ms
+
+
 def best_arm(maker:dict[str,Any])->dict[str,Any]|None:
     rows=[]
     for key,row in (maker.get("policy_matrix") or {}).items():
@@ -92,10 +98,14 @@ def market_budget(capital:dict[str,Any],market_id:str)->float:
 
 
 def build(maker:dict[str,Any],capital:dict[str,Any],venue:dict[str,Any], *,
-          model_sha:str,now_ms:int)->dict[str,Any]:
-    maker_ok=valid_common(maker,MAKER_SCHEMA,model_sha)
-    capital_ok=valid_common(capital,CAPITAL_SCHEMA,model_sha)
-    venue_ok=valid_common(venue,VENUE_SCHEMA,model_sha)
+          model_sha:str,now_ms:int,maximum_age_ms:int=5000)->dict[str,Any]:
+    maker_ok=(valid_common(maker,MAKER_SCHEMA,model_sha)
+              and maker.get("research_mature") is True
+              and fresh(maker,now_ms,maximum_age_ms))
+    capital_ok=(valid_common(capital,CAPITAL_SCHEMA,model_sha)
+                and fresh(capital,now_ms,maximum_age_ms))
+    venue_ok=(valid_common(venue,VENUE_SCHEMA,model_sha)
+              and fresh(venue,now_ms,maximum_age_ms))
     arm=best_arm(maker) if maker_ok else None
 
     observed_policy=(venue.get("observed_policy") or {}) if venue_ok else {}
@@ -183,15 +193,18 @@ def main()->int:
     ap.add_argument("--venue-mode",type=Path,required=True)
     ap.add_argument("--output",type=Path,required=True)
     ap.add_argument("--model-sha",required=True)
+    ap.add_argument("--maximum-age-ms",type=int,default=5000)
     ap.add_argument("--interval-ms",type=int,default=1000)
     args=ap.parse_args()
     if len(args.model_sha)!=40 or any(c not in "0123456789abcdef" for c in args.model_sha):
         raise SystemExit("invalid sha")
-    if not 100<=args.interval_ms<=60_000:raise SystemExit("invalid interval")
+    if not(100<=args.interval_ms<=60_000 and 100<=args.maximum_age_ms<=600_000):
+        raise SystemExit("invalid timing")
     while True:
         atomic_json(args.output,build(
             load(args.maker_status),load(args.capital_status),load(args.venue_mode),
-            model_sha=args.model_sha,now_ms=time.time_ns()//1_000_000))
+            model_sha=args.model_sha,now_ms=time.time_ns()//1_000_000,
+            maximum_age_ms=args.maximum_age_ms))
         time.sleep(args.interval_ms/1000.0)
 
 
