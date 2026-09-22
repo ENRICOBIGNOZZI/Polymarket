@@ -326,46 +326,6 @@ v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
 # It must not stop the native execution owner if it rolls or exits during market refresh.
 v7_register_optional_child "$!"
 
-# Deterministic frequency expansion. These are PAPER/research workers only.
-# They cannot submit orders, allocate capital, promote models or alter the
-# canonical CRYPTO_SETTLEMENT_ENGINE decision owner.
-mkdir -p "$RUN_ROOT/research/pure_arb"
-
-v7_exec_class COLLECTOR python3 scripts/v7_multi_crypto_oracle_hub.py \
-  --output "$RUN_ROOT/research/pure_arb/oracle_hub_status.json" \
-  --model-sha "$SHA" \
-  --settlement-registry "$CRYPTO_SETTLEMENT_MARKET_REGISTRY" \
-  --selection "$RUN_ROOT/universe/book_selection.json" \
-  >> "$RUN_ROOT/research/pure_arb/oracle_hub.log" 2>&1 &
-v7_register_optional_child "$!"
-
-v7_exec_class COLLECTOR python3 scripts/v7_settlement_source_arb_shadow.py \
-  --oracle-status "$RUN_ROOT/research/pure_arb/oracle_hub_status.json" \
-  --selection "$RUN_ROOT/universe/book_selection.json" \
-  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
-  --model-sha "$SHA" \
-  --output "$RUN_ROOT/research/pure_arb/settlement_source_cycles.jsonl" \
-  --status "$RUN_ROOT/research/pure_arb/settlement_source_status.json" \
-  --target-shares 1000 --minimum-fill-shares 1 \
-  --redemption-reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
-  --paper-arrival-delay-ms 50 --maximum-book-age-ms 100 --interval-ms 5 \
-  >> "$RUN_ROOT/research/pure_arb/settlement_source.log" 2>&1 &
-v7_register_optional_child "$!"
-
-v7_exec_class COLLECTOR python3 scripts/v7_two_sided_complete_set_shadow.py \
-  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
-  --trade-tape "$RUN_ROOT/research/repricing_book/fillability_ws.jsonl" \
-  --selection "$RUN_ROOT/universe/book_selection.json" \
-  --model-sha "$SHA" \
-  --output "$RUN_ROOT/research/pure_arb/two_sided_maker_cycles.jsonl" \
-  --status "$RUN_ROOT/research/pure_arb/two_sided_maker_status.json" \
-  --minimum-quote-shares 1 --maximum-quote-shares 5 --depth-fraction 0.25 \
-  --queue-ahead-multiplier 1.25 --reserve-per-share 0.0005 \
-  --minimum-locked-edge-per-share 0.0005 --maximum-leg-skew-ms 100 \
-  --ttl-arms-ms 250,500,1000 --quote-refresh-ms 25 --interval-ms 5 \
-  >> "$RUN_ROOT/research/pure_arb/two_sided_maker.log" 2>&1 &
-v7_register_optional_child "$!"
-
 # Retrospective model fitting remains off London. These live shadows only
 # collect causally replayable PAPER evidence.
 
@@ -536,7 +496,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_settlement_source_arb_shadow.py \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/settlement_source_arb_cycles.jsonl" \
   --status "$PURE_ARB_DIR/settlement_source_arb_status.json" \
-  --target-shares 5 --minimum-fill-shares 1 \
+  --target-shares 1000 --minimum-fill-shares 1 \
   --redemption-reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
   --paper-arrival-delay-ms 50 --maximum-book-age-ms 100 --interval-ms 5 \
   >> "$PURE_ARB_DIR/settlement_source_arb.log" 2>&1 &
@@ -549,10 +509,10 @@ v7_exec_class COLLECTOR python3 scripts/v7_two_sided_complete_set_shadow.py \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/two_sided_complete_set_cycles.jsonl" \
   --status "$PURE_ARB_DIR/two_sided_complete_set_status.json" \
-  --ttl-arms-ms 250,500,1000 --quote-depth-fraction 0.25 \
-  --min-quote-shares 1 --max-quote-shares 20 --queue-ahead-multiplier 1.25 \
-  --reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
-  --maximum-leg-skew-ms 100 --interval-ms 10 \
+  --minimum-quote-shares 1 --maximum-quote-shares 20 --depth-fraction 0.25 \
+  --queue-ahead-multiplier 1.25 --reserve-per-share 0.0005 \
+  --minimum-locked-edge-per-share 0.0005 --maximum-leg-skew-ms 100 \
+  --ttl-arms-ms 250,500,1000 --quote-refresh-ms 25 --interval-ms 5 \
   >> "$PURE_ARB_DIR/two_sided_complete_set.log" 2>&1 &
 v7_register_optional_child "$!"
 read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS MAKER_ROTATION_MIN_FILL MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
@@ -648,7 +608,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 9
+v7_assert_registered_child_count 12
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
