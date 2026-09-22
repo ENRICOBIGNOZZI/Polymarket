@@ -33,8 +33,19 @@ RUN_ID="$(cat /proc/sys/kernel/random/uuid)"
 [[ "$RUN_ID" =~ ^[0-9a-f-]{{36}}$ ]]
 LOG="$BENCH/bootstrap.$SHA.$RUN_ID.log"
 mkdir -p "$BENCH"
-[[ -d "$APP/.git" ]]
+[[ -d "$APP/.git" && ! -L "$APP" && ! -L "$APP/.git" ]]
+[[ "$(realpath "$APP")" == "/home/{service_user}/polymarket" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
+SERVICE_GROUP="$(id -gn {service_user})"
+bad_git_owner_count="$(find "$APP/.git" -xdev ! -user {service_user} -printf . | wc -c)"
+if (( bad_git_owner_count > 0 )); then
+  echo "benchmark_git_ownership_repairs=$bad_git_owner_count"
+  chown -R {service_user}:"$SERVICE_GROUP" "$APP/.git"
+fi
+find "$APP/.git" -xdev ! -user {service_user} -print -quit | grep -q . && {
+  echo "benchmark .git ownership repair failed" >&2
+  exit 77
+}
 dirty_before="$(sudo -u {service_user} git -C "$APP" status --porcelain)"
 if [[ -n "$dirty_before" ]]; then
   echo "benchmark_source_checkout_dirty=1"

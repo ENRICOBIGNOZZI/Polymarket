@@ -77,6 +77,19 @@ def test_london_bootstrap_dependencies_retrigger_latency_lab():
     assert "- ops/v7_london_ssm_bootstrap.py" in workflow
 
 
+def test_three_az_bootstrap_repairs_git_metadata_ownership_before_fetch():
+    bootstrap = (ROOT / "ops/v7_london_ssm_bootstrap.py").read_text()
+    stop = bootstrap.index("! systemctl is-active --quiet polymarket-v7-paper.service")
+    owner = bootstrap.index('bad_git_owner_count=')
+    chown = bootstrap.index('chown -R {service_user}:"$SERVICE_GROUP" "$APP/.git"')
+    fetch = bootstrap.index('git -C "$APP" fetch --no-tags origin main')
+    assert stop < owner < chown < fetch
+    assert 'realpath "$APP"' in bootstrap
+    assert '! -L "$APP/.git"' in bootstrap
+    assert 'chown -R {service_user}:"$SERVICE_GROUP" "$APP"' not in bootstrap
+    assert 'chown -R {service_user}:"$SERVICE_GROUP" "$APP/.git"' in bootstrap
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
