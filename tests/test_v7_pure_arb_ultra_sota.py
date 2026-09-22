@@ -256,10 +256,13 @@ def test_pure_arb_math_is_reusable_native_lane():
     cmake=(ROOT/"CMakeLists.txt").read_text()
     assert "namespace pm::v7::pure_arb" in lane
     assert "SweepResult" in lane
+    assert "PureArbExecutionPlan" in lane
+    assert "class PureArbLane" in lane
     assert "sweep_levels" in lane
     assert "BookHotSnapshot" in lane and "BookDeepSnapshot" in lane
     assert '#include "pm/v7_pure_arb_lane.hpp"' in observer
-    assert "pm::v7::pure_arb::sweep" in observer
+    assert "pm::v7::pure_arb::PureArbLane" in observer
+    assert "src/v7_pure_arb_lane.cpp" in cmake
     assert "pm_v7_pure_arb_lane_tests" in cmake
 
 
