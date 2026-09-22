@@ -1,0 +1,71 @@
+name: V7 tailnet encrypted CI quota cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-tailnet-encrypted-cleanup-request.json
+      - .github/workflows/v7-tailnet-encrypted-cleanup.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate request
+        run: |
+          python3 - deploy/v7-tailnet-encrypted-cleanup-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v=={"schema":"polymarket_v7_tailnet_encrypted_cleanup_v1","user_authorized":True}
+          PY
+
+      - name: Decrypt bounded tailnet login
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/deploy-key"
+          python3 scripts/v7_ssh_envelope.py             --private-key "$RUNNER_TEMP/deploy-key"             --input deploy/v7-tailnet-login.envelope.json             --output "$RUNNER_TEMP/tailnet-login.json"
+          rm -f "$RUNNER_TEMP/deploy-key"
+          python3 - "$RUNNER_TEMP/tailnet-login.json" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v.get('schema')=='polymarket_v7_tailnet_login_handoff_v1'
+          assert v.get('purpose')=='TAILNET_CI_QUOTA_RECOVERY'
+          prefixes=v.get('allowed_prefixes')
+          assert isinstance(prefixes,list)
+          assert set(prefixes) <= {'gh-deploy-','gh-health-','gh-freeze-','gh-inventory-','github-runnervm','github-actions'}
+          assert 1 <= int(v.get('maximum_deletions') or 0) <= 100
+          assert isinstance(v.get('email'),str) and '@' in v['email']
+          assert isinstance(v.get('password'),str) and v['password']
+          print('TAILNET_LOGIN_ENVELOPE_VALID=1')
+          PY
+
+      - name: Install Playwright
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check playwright
+          command -v google-chrome >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1
+
+      - name: Remove stale CI nodes only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          chrome="$(command -v google-chrome || command -v chromium)"
+          python3 ops/v7_tailscale_ci_cleanup_browser.py             --credentials "$RUNNER_TEMP/tailnet-login.json"             --repository "$GITHUB_REPOSITORY"             --github-token "$GH_TOKEN"             --chrome "$chrome"
+
+      - name: Destroy plaintext login
+        if: always()
+        run: |
+          set +e
+          shred -u "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key" 2>/dev/null ||             rm -f "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key"
