@@ -44,8 +44,8 @@ jobs:
           assert v.get('purpose')=='TAILNET_CI_QUOTA_RECOVERY'
           prefixes=v.get('allowed_prefixes')
           assert isinstance(prefixes,list)
-          assert set(prefixes) <= {'gh-deploy-','gh-health-','gh-freeze-','gh-inventory-','github-runnervm','github-actions'}
-          assert 1 <= int(v.get('maximum_deletions') or 0) <= 100
+          assert set(prefixes) <= {'gh-deploy-','gh-health-','gh-freeze-','gh-inventory-','gh-mamma-recover-','github-runnervm','github-actions'}
+          assert 1 <= int(v.get('maximum_deletions') or 0) <= 120
           assert isinstance(v.get('email'),str) and '@' in v['email']
           assert isinstance(v.get('password'),str) and v['password']
           print('TAILNET_LOGIN_ENVELOPE_VALID=1')
