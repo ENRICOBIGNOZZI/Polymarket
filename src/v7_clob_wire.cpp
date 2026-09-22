@@ -69,7 +69,11 @@ bool decimal(std::string_view value) noexcept {
 bool valid_order(const PostMarketOrderView& request) noexcept {
     const auto& order = request.order;
     if (!BufferWriter::json_atom(request.owner)) return false;
-    if (request.order_type != MarketOrderType::FAK && request.order_type != MarketOrderType::FOK) return false;
+    const bool immediate = request.order_type == MarketOrderType::FAK
+        || request.order_type == MarketOrderType::FOK;
+    const bool resting = request.order_type == MarketOrderType::GTC;
+    if (!immediate && !resting) return false;
+    if (request.post_only && !resting) return false;
     // Current CLOB direct-market-order contract requires expiration="0".
     if (order.expiration != "0") return false;
     if (order.side != "BUY" && order.side != "SELL") return false;
@@ -187,7 +191,9 @@ std::size_t serialize_post_market_order(const PostMarketOrderView& request,
     if (!valid_order(request)) return 0;
     const auto& order = request.order;
     BufferWriter w(output);
-    w.append("{\"deferExec\":false,\"order\":{\"builder\":"); w.quoted_validated(order.builder);
+    w.append("{\"deferExec\":false,\"postOnly\":");
+    w.append(request.post_only ? "true" : "false");
+    w.append(",\"order\":{\"builder\":"); w.quoted_validated(order.builder);
     w.append(",\"expiration\":"); w.quoted_validated(order.expiration);
     w.append(",\"maker\":"); w.quoted_validated(order.maker);
     w.append(",\"makerAmount\":"); w.quoted_validated(order.maker_amount);
@@ -201,7 +207,9 @@ std::size_t serialize_post_market_order(const PostMarketOrderView& request,
     w.append(",\"timestamp\":"); w.quoted_validated(order.timestamp_ms);
     w.append(",\"tokenId\":"); w.quoted_validated(order.token_id);
     w.append("},\"orderType\":\"");
-    w.append(request.order_type == MarketOrderType::FAK ? "FAK" : "FOK");
+    if (request.order_type == MarketOrderType::FAK) w.append("FAK");
+    else if (request.order_type == MarketOrderType::FOK) w.append("FOK");
+    else w.append("GTC");
     w.append("\",\"owner\":"); w.quoted_validated(request.owner); w.append("}");
     return w.size();
 }
