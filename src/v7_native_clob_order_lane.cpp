@@ -351,6 +351,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                NativeClobSubmitReason::TransportFailure, 0, out.latency);
     }
     out.wire_monotonic_ns = write.completed_monotonic_ns;
+    out.latency.wire_complete_monotonic_ns = write.completed_monotonic_ns;
     OmsEvent wire_event{};
     wire_event.type = OmsEventType::WireSend;
     wire_event.timestamp_ns = write.completed_monotonic_ns;
@@ -402,6 +403,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     out.rate_limit_warning =
         static_cast<std::uint8_t>(impl_->response_parser.rate_limit_warning());
     out.response_complete_monotonic_ns = response_complete_ns;
+    out.latency.http_ack_monotonic_ns = response_complete_ns;
     impl_->rate_limiter.observe(
         clob::RateLane::Order, out.rate_limit_remaining, out.rate_limit_tier,
         out.rate_limit_reset_unix_seconds, out.rate_limit_warning != 0,
