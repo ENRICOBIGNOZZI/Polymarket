@@ -59,7 +59,8 @@ add_library(pm_v7_common
   src/v7_native_settlement_authority.cpp
   src/v7_native_paper_execution.cpp
   src/v7_native_runtime_evidence.cpp
-  src/v7_native_latency_tape.cpp)
+  src/v7_native_latency_tape.cpp
+  src/v7_pure_arb_multi_engine.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json Threads::Threads)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -371,6 +372,13 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_pure_arb_lane_tests PRIVATE pm_v7_common)
   target_compile_options(pm_v7_pure_arb_lane_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_pure_arb_lane_tests COMMAND pm_v7_pure_arb_lane_tests)
+
+  add_executable(pm_v7_pure_arb_multi_engine_tests
+    tests/test_v7_pure_arb_multi_engine.cpp)
+  target_link_libraries(pm_v7_pure_arb_multi_engine_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_pure_arb_multi_engine_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_pure_arb_multi_engine_tests
+    COMMAND pm_v7_pure_arb_multi_engine_tests)
 
   add_test(NAME pm_v7_native_clob_full_prewire_bench_smoke
     COMMAND polymarket_v7_native_clob_full_prewire_bench 64)
