@@ -631,11 +631,17 @@ class Shadow:
         }
         rebate_verified,rebate_fraction,rebate_tier=verified_taker_rebate(
             getattr(self.args,"fee_reward_registry",None),self.args.model_sha,time.time_ns()//1_000_000)
-        base["taker_rebate_verified"]=rebate_verified
-        base["taker_rebate_fraction"]=rebate_fraction if rebate_verified else 0.0
+        base["taker_rebate_tier_verified"]=rebate_verified
+        base["taker_rebate_fraction_reference"]=rebate_fraction if rebate_verified else 0.0
         base["taker_rebate_tier"]=rebate_tier if rebate_verified else None
-        base["verified_ancillary_taker_rebate_pusd"]=(
+        base["taker_rebate_reference_pusd"]=(
             entry_fees*rebate_fraction if rebate_verified else 0.0)
+        # A verified tier is not the same thing as trade-attributed realized
+        # rebate evidence. Keep the reference visible, but do not let it lift
+        # allocator PnL until a realized payout can be independently attributed.
+        base["taker_rebate_allocatable_to_pnl"]=False
+        base["verified_ancillary_taker_rebate_pusd"]=0.0
+        base["taker_rebate_pnl_semantics"]="TIER_VERIFIED_PAYOUT_NOT_TRADE_ATTRIBUTED"
 
         if len(filled)==2:
             redemption=q if buy else -q
