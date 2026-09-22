@@ -56,6 +56,17 @@ def test_latency_lab_does_not_require_cutover_readiness():
     assert "test -x ops/v7_london_latency_lab.sh" not in latency
 
 
+def test_three_az_bootstrap_repairs_only_disabled_benchmark_checkout():
+    bootstrap = (ROOT / "ops/v7_london_ssm_bootstrap.py").read_text()
+    stop = bootstrap.index("! systemctl is-active --quiet polymarket-v7-paper.service")
+    reset = bootstrap.index('git -C "$APP" reset --hard HEAD')
+    clean = bootstrap.index('git -C "$APP" clean -fd')
+    fetch = bootstrap.index('git -C "$APP" fetch --no-tags origin main')
+    assert stop < reset < clean < fetch
+    assert 'git -C "$APP" clean -fdx' not in bootstrap
+    assert "benchmark_source_checkout_dirty=1" in bootstrap
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
