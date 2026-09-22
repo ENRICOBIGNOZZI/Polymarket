@@ -16,6 +16,7 @@ inline constexpr std::int32_t kCanonicalPriceScale = 10'000;
 inline constexpr std::size_t kCanonicalPriceSlots = 10'001;
 inline constexpr std::size_t kOccupancyWords = (kCanonicalPriceSlots + 63) / 64;
 inline constexpr std::size_t kHotDepthLevels = 10;
+inline constexpr std::size_t kDeepDepthLevels = 1024;
 
 struct PriceLevelE4 {
     std::int32_t price_e4 = 0;
@@ -26,6 +27,21 @@ struct DepthSummary {
     std::int64_t l1_microunits = 0;
     std::int64_t l5_microunits = 0;
     std::int64_t l10_microunits = 0;
+};
+
+struct BookDeepSnapshot {
+    std::uint64_t state_version = 0;
+    std::int64_t exchange_event_ns = 0;
+    std::int64_t receive_monotonic_ns = 0;
+    std::int32_t tick_size_e4 = 100;
+    std::array<PriceLevelE4, kDeepDepthLevels> bid_levels{};
+    std::array<PriceLevelE4, kDeepDepthLevels> ask_levels{};
+    std::uint16_t bid_level_count = 0;
+    std::uint16_t ask_level_count = 0;
+    std::uint8_t bid_truncated = 0;
+    std::uint8_t ask_truncated = 0;
+    std::uint8_t lineage_continuous = 0;
+    std::uint8_t valid = 0;
 };
 
 struct BookHotSnapshot {
@@ -72,6 +88,7 @@ public:
     void invalidate_lineage() noexcept;
 
     [[nodiscard]] BookHotSnapshot hot_snapshot() const noexcept;
+    [[nodiscard]] BookDeepSnapshot deep_snapshot() const noexcept;
     [[nodiscard]] std::int64_t quantity_at(Side side, std::int32_t price_e4) const noexcept;
     [[nodiscard]] std::int32_t venue_tick_index(std::int32_t price_e4) const noexcept;
     [[nodiscard]] std::int32_t tick_size_e4() const noexcept { return tick_size_e4_; }
@@ -107,5 +124,6 @@ private:
 
 static_assert(std::is_trivially_copyable_v<PriceLevelE4>);
 static_assert(std::is_trivially_copyable_v<BookHotSnapshot>);
+static_assert(std::is_trivially_copyable_v<BookDeepSnapshot>);
 
 } // namespace pm::v7
