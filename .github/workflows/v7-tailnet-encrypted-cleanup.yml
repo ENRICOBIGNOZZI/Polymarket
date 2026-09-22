@@ -14,7 +14,7 @@ permissions:
 jobs:
   cleanup:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -81,6 +81,7 @@ jobs:
             sleep 0.1
           done
           test "$ready" = 1
+          sed -i 's/timeout_s: int = 420/timeout_s: int = 900/' ops/v7_tailscale_ci_cleanup_browser.py
           python3 ops/v7_tailscale_ci_cleanup_browser.py             --credentials "$RUNNER_TEMP/tailnet-login.json"             --repository "$GITHUB_REPOSITORY"             --github-token "$GH_TOKEN"             --chrome "$chrome"             --cdp-url http://127.0.0.1:9222
 
       - name: Destroy plaintext login
