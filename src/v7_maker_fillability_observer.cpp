@@ -2,6 +2,7 @@
 #include "pm/config.hpp"
 #include "pm/fast_ws.hpp"
 #include "pm/v7_market_ws.hpp"
+#include "pm/v7_pure_arb_lane.hpp"
 #include "pm/v7_maker_lane.hpp"
 #include "pm/v7_spsc.hpp"
 
@@ -622,37 +623,7 @@ struct PureArbMarketState {
     PureArbDirectionState sell{};
 };
 
-struct PureArbSweepResult {
-    std::int64_t shares_microunits = 0;
-    double gross_locked_pnl = 0.0;
-    double conservative_locked_pnl = 0.0;
-    double yes_notional = 0.0;
-    double no_notional = 0.0;
-    double marginal_edge_per_share = 0.0;
-    std::uint16_t yes_levels_used = 0;
-    std::uint16_t no_levels_used = 0;
-
-    [[nodiscard]] double shares() const noexcept {
-        return micro_shares(shares_microunits);
-    }
-    [[nodiscard]] double gross_edge_per_share() const noexcept {
-        const double q = shares();
-        return q > 0.0 ? gross_locked_pnl / q : 0.0;
-    }
-    [[nodiscard]] double conservative_edge_per_share() const noexcept {
-        const double q = shares();
-        return q > 0.0 ? conservative_locked_pnl / q : 0.0;
-    }
-    [[nodiscard]] double yes_vwap() const noexcept {
-        const double q = shares();
-        return q > 0.0 ? yes_notional / q : 0.0;
-    }
-    [[nodiscard]] double no_vwap() const noexcept {
-        const double q = shares();
-        return q > 0.0 ? no_notional / q : 0.0;
-    }
-};
-
+using PureArbSweepResult = pm::v7::pure_arb::SweepResult;
 struct PureArbQueuedEvent {
     std::uint64_t market_handle = 0;
     std::uint8_t kind = 0; // 1=BUY_COMPLETE_SET, 2=SELL_COMPLETE_SET
@@ -1070,117 +1041,17 @@ public:
         }
     }
 
-    [[nodiscard]] static double pure_arb_fee_per_share(
-        double price, double rate, double exponent) noexcept {
-        if (!std::isfinite(price) || price <= 0.0 || price >= 1.0
-            || !std::isfinite(rate) || rate < 0.0 || rate > 1.0
-            || !std::isfinite(exponent) || exponent < 0.0) {
-            return std::numeric_limits<double>::quiet_NaN();
-        }
-        return rate == 0.0 ? 0.0 : rate * std::pow(price * (1.0 - price), exponent);
-    }
-
-    [[nodiscard]] static double pure_arb_fee_usdc(
-        double shares, double price, double rate, double exponent) noexcept {
-        const double per_share = pure_arb_fee_per_share(price, rate, exponent);
-        if (!std::isfinite(shares) || shares <= 0.0 || !std::isfinite(per_share)) {
-            return std::numeric_limits<double>::quiet_NaN();
-        }
-        const double raw = shares * per_share;
-        if (raw < 0.00001 - 1e-15) return 0.0;
-        return std::round(raw * 100000.0) / 100000.0;
-    }
-
-    template <std::size_t N>
-    [[nodiscard]] PureArbSweepResult sweep_pure_arb_levels(
-        const std::array<pm::v7::PriceLevelE4, N>& yes_levels,
-        std::size_t yes_count,
-        const std::array<pm::v7::PriceLevelE4, N>& no_levels,
-        std::size_t no_count,
-        const PureArbMarketState& market,
-        bool buy,
-        std::int64_t maximum_shares_microunits) const noexcept {
-        PureArbSweepResult result{};
-        std::size_t yi = 0, ni = 0;
-        std::int64_t yes_remaining = 0, no_remaining = 0;
-        std::int64_t capacity_remaining = std::max<std::int64_t>(0, maximum_shares_microunits);
-
-        while (yi < yes_count && ni < no_count && capacity_remaining > 0) {
-            if (yes_remaining <= 0) yes_remaining = yes_levels[yi].quantity_microunits;
-            if (no_remaining <= 0) no_remaining = no_levels[ni].quantity_microunits;
-            if (yes_remaining <= 0) { ++yi; continue; }
-            if (no_remaining <= 0) { ++ni; continue; }
-
-            const double yes_price = e4_price(yes_levels[yi].price_e4);
-            const double no_price = e4_price(no_levels[ni].price_e4);
-            const auto quantity = std::min({yes_remaining, no_remaining, capacity_remaining});
-            if (quantity <= 0) break;
-            const double shares = micro_shares(quantity);
-            const double fee_total = pure_arb_fee_usdc(
-                shares, yes_price, market.fee_rate, market.fee_exponent)
-                + pure_arb_fee_usdc(
-                    shares, no_price, market.fee_rate, market.fee_exponent);
-            if (!std::isfinite(fee_total)) break;
-            const double fee = fee_total / shares;
-
-            const double gross_edge = buy
-                ? 1.0 - yes_price - no_price - fee
-                : yes_price + no_price - 1.0 - fee;
-            if (!(gross_edge > pure_arb_reserve_per_share_ + 1e-12)) break;
-            result.shares_microunits += quantity;
-            result.gross_locked_pnl += shares * gross_edge;
-            result.conservative_locked_pnl += shares * (gross_edge - pure_arb_reserve_per_share_);
-            result.yes_notional += shares * yes_price;
-            result.no_notional += shares * no_price;
-            result.marginal_edge_per_share = gross_edge;
-            result.yes_levels_used = static_cast<std::uint16_t>(
-                std::min<std::size_t>(std::numeric_limits<std::uint16_t>::max(),
-                                      std::max<std::size_t>(result.yes_levels_used, yi + 1)));
-            result.no_levels_used = static_cast<std::uint16_t>(
-                std::min<std::size_t>(std::numeric_limits<std::uint16_t>::max(),
-                                      std::max<std::size_t>(result.no_levels_used, ni + 1)));
-
-            yes_remaining -= quantity;
-            no_remaining -= quantity;
-            capacity_remaining -= quantity;
-            if (yes_remaining <= 0) ++yi;
-            if (no_remaining <= 0) ++ni;
-        }
-        return result;
-    }
-
+    template <class BookSnapshot>
     [[nodiscard]] PureArbSweepResult sweep_pure_arb(
-        const pm::v7::BookHotSnapshot& yes,
-        const pm::v7::BookHotSnapshot& no,
+        const BookSnapshot& yes,
+        const BookSnapshot& no,
         const PureArbMarketState& market,
         bool buy,
-        std::int64_t maximum_shares_microunits = std::numeric_limits<std::int64_t>::max()) const noexcept {
-        return buy
-            ? sweep_pure_arb_levels(
-                yes.ask_levels, yes.ask_level_count,
-                no.ask_levels, no.ask_level_count,
-                market, true, maximum_shares_microunits)
-            : sweep_pure_arb_levels(
-                yes.bid_levels, yes.bid_level_count,
-                no.bid_levels, no.bid_level_count,
-                market, false, maximum_shares_microunits);
-    }
-
-    [[nodiscard]] PureArbSweepResult sweep_pure_arb(
-        const pm::v7::BookDeepSnapshot& yes,
-        const pm::v7::BookDeepSnapshot& no,
-        const PureArbMarketState& market,
-        bool buy,
-        std::int64_t maximum_shares_microunits = std::numeric_limits<std::int64_t>::max()) const noexcept {
-        return buy
-            ? sweep_pure_arb_levels(
-                yes.ask_levels, yes.ask_level_count,
-                no.ask_levels, no.ask_level_count,
-                market, true, maximum_shares_microunits)
-            : sweep_pure_arb_levels(
-                yes.bid_levels, yes.bid_level_count,
-                no.bid_levels, no.bid_level_count,
-                market, false, maximum_shares_microunits);
+        std::int64_t maximum_shares_microunits =
+            std::numeric_limits<std::int64_t>::max()) const noexcept {
+        return pm::v7::pure_arb::sweep(
+            yes, no, market.fee_rate, market.fee_exponent,
+            pure_arb_reserve_per_share_, buy, maximum_shares_microunits);
     }
 
     void restore_pure_arb_status() {
@@ -1505,16 +1376,16 @@ public:
         const double buy_shares_l1 = micro_shares(buy_qty_l1);
         const double sell_shares_l1 = micro_shares(sell_qty_l1);
         const double buy_fee = buy_shares_l1 > 0.0
-            ? (pure_arb_fee_usdc(
+            ? (pm::v7::pure_arb::fee_usdc(
                    buy_shares_l1, yes_ask, market.fee_rate, market.fee_exponent)
-               + pure_arb_fee_usdc(
+               + pm::v7::pure_arb::fee_usdc(
                    buy_shares_l1, no_ask, market.fee_rate, market.fee_exponent))
                 / buy_shares_l1
             : std::numeric_limits<double>::quiet_NaN();
         const double sell_fee = sell_shares_l1 > 0.0
-            ? (pure_arb_fee_usdc(
+            ? (pm::v7::pure_arb::fee_usdc(
                    sell_shares_l1, yes_bid, market.fee_rate, market.fee_exponent)
-               + pure_arb_fee_usdc(
+               + pm::v7::pure_arb::fee_usdc(
                    sell_shares_l1, no_bid, market.fee_rate, market.fee_exponent))
                 / sell_shares_l1
             : std::numeric_limits<double>::quiet_NaN();
