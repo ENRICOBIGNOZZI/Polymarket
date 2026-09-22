@@ -165,6 +165,7 @@ PY'''
 
 
 def latency_command(sha: str, zone_id: str, service_user: str, samples: int) -> str:
+    tune_samples = min(samples, 500)
     if not _valid_sha(sha):
         raise ValueError("invalid exact SHA")
     if zone_id not in ZONE_OUTPUTS:
@@ -181,15 +182,28 @@ install -d -o {service_user} -g {service_user} "$OUT"
 sudo -u {service_user} env POLYMARKET_APP_DIR="$APP" \
   bash "$APP/ops/v7_london_latency_lab.sh" \
     --sha "{sha}" --samples "{samples}" --output-dir "$OUT"
-python3 - "$OUT/summary.json" <<'PY'
+python3 "$APP/ops/v7_host_latency_ab.py" \
+  --expected-sha "{sha}" \
+  --probe "$OUT/public-paired-clob-probe" \
+  --samples "{tune_samples}" --interval-ms 20 \
+  --output "$OUT/host-tuning.json"
+python3 - "$OUT/summary.json" "$OUT/host-tuning.json" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1],encoding='utf-8'))
+t=json.load(open(sys.argv[2],encoding='utf-8'))
 assert v['schema']=='polymarket_v7_london_latency_lab_v1'
 assert v['sha']=='{sha}'
 assert v['paper_only'] is True
 assert v['authenticated_execution'] is False
 assert v['real_order_submission'] is False
+assert t['schema']=='polymarket_v7_host_latency_ab_v1'
+assert t['expected_sha']=='{sha}'
+assert t['paper_only'] is True
+assert t['authenticated_execution'] is False
+assert t['real_order_submission'] is False
+assert t['restored_exactly'] is True
 v['physical_zone_id']='{zone_id}'
+v['host_tuning']=t
 print('V7_LATENCY='+json.dumps(v,sort_keys=True,separators=(',',':')))
 PY'''
 
@@ -234,6 +248,19 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
             "pgo_sign_p999_ns": int(row["signing"]["pgo"]["p999"]),
             "ipo_promotion_candidate": bool(row["signing"]["ipo_promotion_candidate"]),
             "pgo_promotion_candidate": bool(row["signing"]["pgo_promotion_candidate"]),
+            "host_tuning": [
+                {
+                    "name": p["profile"]["name"],
+                    "supported": bool(p.get("supported")),
+                    "promotion_candidate": bool(
+                        (p.get("comparison") or {}).get("promotion_candidate", False)),
+                    "p99_improvement_pct": (p.get("comparison") or {}).get(
+                        "p99_improvement_pct"),
+                    "p999_improvement_pct": (p.get("comparison") or {}).get(
+                        "p999_improvement_pct"),
+                }
+                for p in (row.get("host_tuning") or {}).get("profiles", [])
+            ],
         })
     ordered = sorted(measurements, key=lambda x: (
         x["pair_p99_ns"], x["pair_p999_ns"], x["physical_zone_id"]))
