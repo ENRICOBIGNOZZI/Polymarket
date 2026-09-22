@@ -115,6 +115,7 @@ def fok_sweep(
     remaining = quantity
     notional = 0.0
     levels_used = 0
+    fills: list[dict[str, float]] = []
     worst: float | None = None
     side = side.upper()
     for price, available in levels:
@@ -131,6 +132,7 @@ def fok_sweep(
         notional += take * price
         remaining -= take
         levels_used += 1
+        fills.append({"price": price, "shares": take})
         worst = price
         if remaining <= 1e-12:
             return {
@@ -140,11 +142,33 @@ def fok_sweep(
                 "worst_price": worst,
                 "notional": notional,
                 "levels_used": levels_used,
+                "fills": fills,
             }
     return {
         "filled": False, "quantity": 0.0, "vwap": None, "worst_price": worst,
-        "notional": 0.0, "levels_used": levels_used,
+        "notional": 0.0, "levels_used": levels_used, "fills": fills,
     }
+
+
+def sweep_fee_usdc(
+    sweep: dict[str, Any], rate: float, exponent: float = 1.0,
+) -> float:
+    if sweep.get("filled") is not True:
+        return math.nan
+    total = 0.0
+    fills = sweep.get("fills")
+    if not isinstance(fills, list):
+        return math.nan
+    for fill in fills:
+        if not isinstance(fill, dict):
+            return math.nan
+        price = finite(fill.get("price"))
+        shares = finite(fill.get("shares"))
+        fee = rounded_fee_usdc(shares, price, rate, exponent)
+        if not math.isfinite(fee):
+            return math.nan
+        total += fee
+    return total
 
 
 def weighted_volume(
