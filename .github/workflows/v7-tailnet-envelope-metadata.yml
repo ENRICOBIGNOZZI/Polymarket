@@ -1,0 +1,41 @@
+name: V7 tailnet envelope metadata
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-tailnet-envelope-metadata-request.json
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate
+        run: |
+          python3 - deploy/v7-tailnet-envelope-metadata-request.json <<'PY'
+          import json,sys
+          assert json.load(open(sys.argv[1]))=={"schema":"polymarket_v7_tailnet_envelope_metadata_v1","read_only":True}
+          PY
+      - name: Decrypt and show non-secret metadata only
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/key"
+          python3 scripts/v7_ssh_envelope.py             --private-key "$RUNNER_TEMP/key"             --input deploy/v7-tailnet-login.envelope.json             --output "$RUNNER_TEMP/login.json"
+          python3 - "$RUNNER_TEMP/login.json" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          print('SCHEMA='+str(v.get('schema')))
+          print('PURPOSE='+str(v.get('purpose')))
+          print('ALLOWED_PREFIXES='+json.dumps(v.get('allowed_prefixes')))
+          print('MAXIMUM_DELETIONS='+str(v.get('maximum_deletions')))
+          print('EXPECTED_MAIN_SHA='+str(v.get('expected_main_sha')))
+          PY
+          shred -u "$RUNNER_TEMP/login.json" "$RUNNER_TEMP/key" 2>/dev/null || rm -f "$RUNNER_TEMP/login.json" "$RUNNER_TEMP/key"
