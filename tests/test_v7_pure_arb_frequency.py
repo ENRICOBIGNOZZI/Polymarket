@@ -132,7 +132,7 @@ def test_runtime_wires_all_zero_authority_frequency_workers_once():
     for worker in workers:
         assert loop.count(worker)==1,worker
     assert "--pure-arb-prefunded-complete-set-shares 1000" in loop
-    assert "v7_assert_registered_child_count 22" in loop
+    assert "v7_assert_registered_child_count 27" in loop
 
 
 
