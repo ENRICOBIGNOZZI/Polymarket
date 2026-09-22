@@ -250,6 +250,19 @@ def test_native_prewire_benchmark_matches_production_prepared_path():
     assert "sign_poly1271_hex(hasher" not in source
 
 
+def test_pure_arb_math_is_reusable_native_lane():
+    lane=(ROOT/"include/pm/v7_pure_arb_lane.hpp").read_text()
+    observer=(ROOT/"src/v7_maker_fillability_observer.cpp").read_text()
+    cmake=(ROOT/"CMakeLists.txt").read_text()
+    assert "namespace pm::v7::pure_arb" in lane
+    assert "SweepResult" in lane
+    assert "sweep_levels" in lane
+    assert "BookHotSnapshot" in lane and "BookDeepSnapshot" in lane
+    assert '#include "pm/v7_pure_arb_lane.hpp"' in observer
+    assert "pm::v7::pure_arb::sweep" in observer
+    assert "pm_v7_pure_arb_lane_tests" in cmake
+
+
 def test_native_latency_trace_is_stage_complete_without_hot_path_io():
     header=(ROOT/"include/pm/v7_native_clob_order_lane.hpp").read_text()
     source=(ROOT/"src/v7_native_clob_order_lane.cpp").read_text()
