@@ -62,7 +62,26 @@ jobs:
         run: |
           set -euo pipefail
           chrome="$(command -v google-chrome || command -v chromium)"
-          python3 ops/v7_tailscale_ci_cleanup_browser.py             --credentials "$RUNNER_TEMP/tailnet-login.json"             --repository "$GITHUB_REPOSITORY"             --github-token "$GH_TOKEN"             --chrome "$chrome"
+          command -v Xvfb >/dev/null 2>&1
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1440x1000x24 >"$RUNNER_TEMP/xvfb.log" 2>&1 &
+          xvfb_pid=$!
+          profile="$RUNNER_TEMP/v7-tailnet-chrome"
+          mkdir -p "$profile"
+          "$chrome"             --remote-debugging-port=9222             --user-data-dir="$profile"             --no-first-run             --no-default-browser-check             --disable-dev-shm-usage             about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
+          chrome_pid=$!
+          cleanup_browser() { kill "$chrome_pid" "$xvfb_pid" >/dev/null 2>&1 || true; }
+          trap cleanup_browser EXIT
+          ready=0
+          for _ in $(seq 1 80); do
+            if curl -fsS http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          test "$ready" = 1
+          python3 ops/v7_tailscale_ci_cleanup_browser.py             --credentials "$RUNNER_TEMP/tailnet-login.json"             --repository "$GITHUB_REPOSITORY"             --github-token "$GH_TOKEN"             --chrome "$chrome"             --cdp-url http://127.0.0.1:9222
 
       - name: Destroy plaintext login
         if: always()
