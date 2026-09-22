@@ -956,6 +956,7 @@ class Manager:
             "--paper-venue-delay-ns", str(terms["mandatory_taker_delay_ns"] if terms["state"] == "VERIFIED_SNAPSHOT" else -1),
             "--paper-assumed-transport-delay-ns", "250000000",
             "--paper-terms-sha256", terms["snapshot_sha256"],
+            "--market-start-wall-ns", str(int(market["window_start_unix"]) * 1_000_000_000),
             "--close-wall-ns", str(close_wall_ns),
             "--tick-size-e4", str(yes_tick),
             "--min-order-microunits", str(minimum_order),
@@ -976,6 +977,10 @@ class Manager:
             "--pure-arb-native-shadow",
             "--pure-arb-reserve-per-share", "0.0005",
             "--pure-arb-max-leg-skew-ns", "100000000",
+            "--latency-trace-bin",
+            str(self.run_root / "latency" / (
+                f"native_{str(market['asset']).lower()}_{str(market['horizon']).lower()}_"
+                f"{self.args.model_sha[:12]}.bin")),
             "--duration-seconds", "0",
         ]
         command.extend(["--slow-context", str(context_path(self.run_root, str(market["market_id"])))])
