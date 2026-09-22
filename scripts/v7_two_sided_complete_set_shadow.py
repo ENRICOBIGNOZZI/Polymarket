@@ -848,6 +848,8 @@ class Shadow:
                     "horizon": str(c.get("horizon") or ""),
                     "ttl_ms": int(c.get("ttl_ms") or 0),
                     "target_shares": float(c.get("target_shares") or 0.0),
+                    "yes_price": float(c.get("yes_price") or 0.0),
+                    "no_price": float(c.get("no_price") or 0.0),
                     "locked_edge_per_share": float(c.get("locked_edge_per_share") or 0.0),
                     "expires_ms": int(c.get("expires_ms") or 0),
                 }
