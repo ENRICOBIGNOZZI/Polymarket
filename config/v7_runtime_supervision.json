@@ -107,6 +107,41 @@
       "action": "quarantine_taker",
       "critical": false,
       "scope": "affected_market"
+    },
+    "pure_arb_clob_reject": {
+      "action": "unwind_filled_legs_and_quarantine_market",
+      "critical": false,
+      "scope": "affected_market"
+    },
+    "pure_arb_asymmetric_book_stale": {
+      "action": "reject_opportunity_and_resnapshot",
+      "critical": false,
+      "scope": "affected_market"
+    },
+    "market_fee_change": {
+      "action": "cancel_reset_and_rebuild",
+      "critical": false,
+      "scope": "affected_market"
+    },
+    "market_rollover_with_open_order": {
+      "action": "hold_withdrawn_until_reconciled",
+      "critical": false,
+      "scope": "affected_market"
+    },
+    "market_book_reset": {
+      "action": "invalidate_book_and_resnapshot",
+      "critical": false,
+      "scope": "affected_market"
+    },
+    "disk_io_stall": {
+      "action": "withdraw_and_quarantine",
+      "critical": true,
+      "scope": "runtime"
+    },
+    "cpu_stall": {
+      "action": "withdraw_and_quarantine",
+      "critical": true,
+      "scope": "runtime"
     }
   },
   "identity": {
