@@ -174,7 +174,7 @@ def summarize(obs:list[dict[str,Any]],policy:dict[str,Any])->dict[str,Any]:
 
 
 def allocate(stats:dict[str,Any],policy:dict[str,Any])->dict[str,float]:
-    budget=float(policy["paper_budget_usd"])
+    budget=float(policy["paper_budget_pusd"])
     cap=budget*float(policy["maximum_strategy_fraction"])
     weights={k:max(0.0,float(v["conservative_pnl_per_capital_second"]))
              for k,v in stats.items() if v.get("eligible_for_allocation")}
@@ -230,7 +230,7 @@ def main()->int:
             "score_semantics":policy["score"],
             "maker_rebate_policy":policy["maker_rebate_policy"],
             "strategy_statistics":stats,
-            "recommended_paper_budget_usd":allocate(stats,policy),
+            "recommended_paper_budget_pusd":allocate(stats,policy),
             "unallocated_is_cash":True,
             "observations":len(obs),
         }
