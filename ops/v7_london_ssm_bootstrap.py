@@ -49,6 +49,7 @@ sudo -u {service_user} git -C "$APP" show "$SHA:ops/v7_london_bootstrap.sh" > /t
 chmod 755 /tmp/v7_london_bootstrap.$SHA.sh
 if ! env POLYMARKET_EXPECTED_SHA="$SHA" POLYMARKET_SERVICE_USER={service_user} \
   POLYMARKET_APP_DIR="$APP" PM_V7_RUN_ROOT="$RUN" \
+  POLYMARKET_REUSE_EXACT_SHA_CI=1 PM_V7_CI_REPOSITORY=ENRICOBIGNOZZI/Polymarket \
   POLYMARKET_INSTALL_TAILSCALE=1 POLYMARKET_INSTALL_GRAFANA=1 \
   bash /tmp/v7_london_bootstrap.$SHA.sh >"$LOG" 2>&1; then
   tail -200 "$LOG" >&2 || true
