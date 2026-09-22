@@ -54,6 +54,22 @@ def capital_lock_seconds(*,end_ms:int,event_ms:int,minimum:float)->float:
     return minimum
 
 
+def complete_set_lock_seconds(policy:dict[str,Any],*,end_ms:int,event_ms:int,minimum:float)->float:
+    if policy.get("complete_set_merge_verified") is True:
+        raw=policy.get("complete_set_merge_latency_ms")
+        if isinstance(raw,(int,float)) and math.isfinite(float(raw)) and float(raw)>0:
+            return max(minimum,float(raw)/1000.0)
+    return capital_lock_seconds(end_ms=end_ms,event_ms=event_ms,minimum=minimum)
+
+
+def complete_set_merge_cost(policy:dict[str,Any],capital:float)->float:
+    if policy.get("complete_set_merge_verified") is not True:
+        return 0.0
+    fixed=max(0.0,float(policy.get("complete_set_merge_fixed_cost_pusd") or 0.0))
+    bps=max(0.0,float(policy.get("complete_set_merge_variable_cost_bps") or 0.0))
+    return fixed+capital*bps/10_000.0
+
+
 def taker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]:
     transport=int(policy["taker_transport_delay_ms_for_allocation"])
     skew=int(policy["taker_inter_leg_skew_ms_for_allocation"])
@@ -79,10 +95,14 @@ def taker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]
         capital=q*(yp+np) if kind=="BUY_COMPLETE_SET" else q
         event_ms=int(worst.get("revalidation_wall_ms") or 0)
         end_ms=int(worst.get("market_end_ms") or 0)
-        lock=capital_lock_seconds(end_ms=end_ms,event_ms=event_ms,minimum=minimum)
+        lock=(complete_set_lock_seconds(policy,end_ms=end_ms,event_ms=event_ms,minimum=minimum)
+              if kind=="BUY_COMPLETE_SET"
+              else capital_lock_seconds(end_ms=end_ms,event_ms=event_ms,minimum=minimum))
+        pnl=float(worst["execution_pnl_after_reserve"])-(
+            complete_set_merge_cost(policy,capital) if kind=="BUY_COMPLETE_SET" else 0.0)
         if capital>0 and lock>0:
             out.append({"strategy":"TAKER_COMPLETE_SET","market_id":key[0],
-                        "pnl":float(worst["execution_pnl_after_reserve"]),
+                        "pnl":pnl,
                         "capital":capital,"lock_seconds":lock})
     return out
 
@@ -102,10 +122,12 @@ def maker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]
         event_ms=int(r.get("origin_ms") or 0)
         paired=str(x.get("state")) in {"BOTH_FULL","BOTH_PARTIAL"}
         end_ms=int(r.get("market_end_ms") or 0) if paired else event_ms+int(r.get("ttl_ms") or 0)
-        lock=capital_lock_seconds(end_ms=end_ms,event_ms=event_ms,minimum=minimum)
+        lock=(complete_set_lock_seconds(policy,end_ms=end_ms,event_ms=event_ms,minimum=minimum)
+              if paired else capital_lock_seconds(end_ms=end_ms,event_ms=event_ms,minimum=minimum))
+        pnl=float(x["total_shadow_pnl"])-(complete_set_merge_cost(policy,capital) if paired else 0.0)
         if capital>0 and lock>0:
             out.append({"strategy":"MAKER_COMPLETE_SET","market_id":str(r.get("market_id") or ""),
-                        "pnl":float(x["total_shadow_pnl"]),"capital":capital,
+                        "pnl":pnl,"capital":capital,
                         "lock_seconds":lock})
     return out
 
