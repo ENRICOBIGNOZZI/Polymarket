@@ -651,6 +651,8 @@ struct PureArbFunnelState {
     std::uint64_t sell_after_reserve_positive = 0;
     std::uint64_t sell_l10_executable = 0;
     std::uint64_t sell_fresh_decision = 0;
+    std::uint64_t buy_cycles_recorded = 0;
+    std::uint64_t sell_cycles_recorded = 0;
     std::uint64_t stale_decision_rejections = 0;
     std::array<std::uint64_t, kPureArbReserveArms.size()> buy_reserve_positive{};
     std::array<std::uint64_t, kPureArbReserveArms.size()> sell_reserve_positive{};
@@ -1127,6 +1129,8 @@ public:
         pure_arb_total_pnl_ += sweep.gross_locked_pnl;
         pure_arb_conservative_total_pnl_ += sweep.conservative_locked_pnl;
         ++pure_arb_total_cycles_;
+        if (kind == 1) ++pure_arb_funnel_.buy_cycles_recorded;
+        else if (kind == 2) ++pure_arb_funnel_.sell_cycles_recorded;
 
         PureArbQueuedEvent event{};
         event.market_handle = market_handle;
@@ -1511,6 +1515,8 @@ public:
                 {"sell_after_reserve_positive", pure_arb_funnel_.sell_after_reserve_positive},
                 {"sell_l10_executable", pure_arb_funnel_.sell_l10_executable},
                 {"sell_fresh_decision", pure_arb_funnel_.sell_fresh_decision},
+                {"buy_cycles_recorded", pure_arb_funnel_.buy_cycles_recorded},
+                {"sell_cycles_recorded", pure_arb_funnel_.sell_cycles_recorded},
                 {"stale_decision_rejections", pure_arb_funnel_.stale_decision_rejections}}},
             {"latency_window_samples", static_cast<std::uint64_t>(pure_arb_receive_latency_.size())},
             {"receive_to_enqueue_ns", json::object{
