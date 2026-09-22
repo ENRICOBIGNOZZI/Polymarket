@@ -337,6 +337,8 @@ int main() {
         assert(pure.at("reserve_per_share").as_double() == .0005);
         assert(pure.at("decision_compute_ns").as_int64() == 7'000);
         assert(pure.at("receive_to_decision_ns").as_int64() == 20'000);
+        assert(pure_arb_observation.at("expected_net_edge").is_null());
+        assert(pure_arb_observation.at("conservative_net_edge").is_null());
         ++observation_files;
     }
     assert(observation_files == 1); // Observations never increase the ledger rows.
