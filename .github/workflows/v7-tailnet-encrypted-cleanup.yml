@@ -1,4 +1,4 @@
-name: V7 tailnet encrypted CI quota cleanup
+name: V7 tailnet cleanup + London Prometheus repair
 
 on:
   push:
@@ -8,27 +8,42 @@ on:
       - .github/workflows/v7-tailnet-encrypted-cleanup.yml
       - ops/v7_tailscale_browser_cleanup.py
 
-# recovery-trigger-20260922-final
 permissions:
   contents: read
   actions: read
+  id-token: write
+
+concurrency:
+  group: v7-tailnet-admin-repair
+  cancel-in-progress: true
 
 jobs:
-  cleanup:
+  repair:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+      MAC_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      MAC_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      MAC_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
 
       - name: Validate request
         run: |
+          set -euo pipefail
           python3 - deploy/v7-tailnet-encrypted-cleanup-request.json <<'PY'
           import json,sys
           v=json.load(open(sys.argv[1]))
           assert v=={"schema":"polymarket_v7_tailnet_encrypted_cleanup_v1","user_authorized":True}
           PY
 
-      - name: Decrypt bounded tailnet login
+      - name: Decrypt bounded tailnet admin login
         env:
           SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
         run: |
@@ -36,11 +51,14 @@ jobs:
           test -n "${SSH_PRIVATE_KEY:-}"
           umask 077
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/deploy-key"
-          python3 scripts/v7_ssh_envelope.py             --private-key "$RUNNER_TEMP/deploy-key"             --input deploy/v7-tailnet-login.envelope.json             --output "$RUNNER_TEMP/tailnet-login.json"
+          python3 scripts/v7_ssh_envelope.py \
+            --private-key "$RUNNER_TEMP/deploy-key" \
+            --input deploy/v7-tailnet-login.envelope.json \
+            --output "$RUNNER_TEMP/tailnet-login.json"
           rm -f "$RUNNER_TEMP/deploy-key"
           python3 - "$RUNNER_TEMP/tailnet-login.json" <<'PY'
-          import json,sys,re
-          v=json.load(open(sys.argv[1]))
+          import json,re,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
           assert set(v)=={'schema','purpose','expected_parent_sha','email','password','maximum_deletions'}
           assert v['schema']=='polymarket_v7_tailnet_login_handoff_v2'
           assert v['purpose']=='TAILNET_CI_QUOTA_RECOVERY'
@@ -48,64 +66,230 @@ jobs:
           assert isinstance(v['email'],str) and '@' in v['email']
           assert isinstance(v['password'],str) and v['password']
           assert 1 <= int(v['maximum_deletions']) <= 120
-          print('TAILNET_V2_ENVELOPE_VALID=1')
+          print('TAILNET_ADMIN_ENVELOPE_OK=1')
           PY
 
-      - name: Install Playwright
+      - name: Install browser automation
         run: |
           set -euo pipefail
           python3 -m pip install --quiet --disable-pip-version-check playwright
           command -v google-chrome >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1
+          command -v Xvfb >/dev/null 2>&1
 
-      - name: Remove stale CI nodes only
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: v7-tailnet-admin-repair
+          aws-region: eu-west-2
+
+      - name: Prepare London Tailscale device login
+        id: london_begin
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$(python3 ops/v7_london_tailscale_login_ssm.py \
+            --instance-id "$INSTANCE_ID" --region "$AWS_REGION" begin)"
+          if grep -q '^ALREADY_AUTHENTICATED=1$' <<<"$out"; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "LONDON_ALREADY_AUTHENTICATED=1"
+          else
+            url="$(sed -n 's/^TAILSCALE_LOGIN_URL=//p' <<<"$out" | tail -1)"
+            [[ "$url" =~ ^https://login\.tailscale\.com/a/[A-Za-z0-9_-]+$ ]]
+            echo "::add-mask::$url"
+            echo "login_url=$url" >> "$GITHUB_OUTPUT"
+            echo "already=false" >> "$GITHUB_OUTPUT"
+            echo "LONDON_LOGIN_URL_READY=1"
+          fi
+
+      - name: Login to Tailscale admin and remove stale nodes
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           chrome="$(command -v google-chrome || command -v chromium)"
-          command -v Xvfb >/dev/null 2>&1
           export DISPLAY=:99
           Xvfb :99 -screen 0 1440x1000x24 >"$RUNNER_TEMP/xvfb.log" 2>&1 &
           xvfb_pid=$!
           sleep 1
           profile="$RUNNER_TEMP/v7-tailnet-chrome"
           mkdir -p "$profile"
-          "$chrome"             --remote-debugging-port=9222             --remote-debugging-address=127.0.0.1             --user-data-dir="$profile"             --no-first-run             --no-default-browser-check             --disable-dev-shm-usage             --no-sandbox             about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
+          "$chrome" \
+            --remote-debugging-port=9222 \
+            --remote-debugging-address=127.0.0.1 \
+            --user-data-dir="$profile" \
+            --no-first-run \
+            --no-default-browser-check \
+            --disable-dev-shm-usage \
+            --no-sandbox \
+            about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
           chrome_pid=$!
-          cleanup_browser() { kill "$chrome_pid" "$xvfb_pid" >/dev/null 2>&1 || true; }
+          cleanup_browser(){ kill "$chrome_pid" "$xvfb_pid" >/dev/null 2>&1 || true; }
           trap cleanup_browser EXIT
           ready=0
           for _ in $(seq 1 300); do
             if curl -fsS http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
-              ready=1
-              break
+              ready=1; break
             fi
             sleep 0.1
           done
-          if [[ "$ready" != 1 ]]; then
-            echo "CDP_NOT_READY" >&2
-            tail -n 160 "$RUNNER_TEMP/chrome.log" >&2 || true
-            tail -n 120 "$RUNNER_TEMP/xvfb.log" >&2 || true
-            ps aux | grep -E '[c]hrome|[X]vfb' >&2 || true
-            exit 1
-          fi
-          python3 -m py_compile ops/v7_tailscale_browser_cleanup.py
-          set +e
+          test "$ready" = 1
           PYTHONUNBUFFERED=1 python3 -u ops/v7_tailscale_browser_cleanup.py \
             --credentials "$RUNNER_TEMP/tailnet-login.json" \
             --repository "$GITHUB_REPOSITORY" \
             --github-token "$GH_TOKEN" \
             --chrome "$chrome" \
             --cdp-url http://127.0.0.1:9222 \
-            >"$RUNNER_TEMP/tailnet-cleanup.log" 2>&1
-          rc=$?
-          set -e
-          cat "$RUNNER_TEMP/tailnet-cleanup.log"
-          echo "TAILNET_BROWSER_CLEANUP_RC=$rc"
-          exit "$rc"
+            | tee "$RUNNER_TEMP/tailnet-cleanup.log"
+          echo "TAILNET_STALE_CLEANUP_OK=1"
 
-      - name: Destroy plaintext login
+      - name: Authorize London as the useful permanent node
+        if: steps.london_begin.outputs.already != 'true'
+        env:
+          LOGIN_URL: ${{ steps.london_begin.outputs.login_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${LOGIN_URL:-}"
+          chrome="$(command -v google-chrome || command -v chromium)"
+          export DISPLAY=:99
+          rm -f /tmp/.X99-lock
+          Xvfb :99 -screen 0 1440x1000x24 >"$RUNNER_TEMP/xvfb-authorize.log" 2>&1 &
+          xvfb_pid=$!
+          sleep 1
+          profile="$RUNNER_TEMP/v7-tailnet-chrome"
+          "$chrome" \
+            --remote-debugging-port=9222 \
+            --remote-debugging-address=127.0.0.1 \
+            --user-data-dir="$profile" \
+            --no-first-run \
+            --no-default-browser-check \
+            --disable-dev-shm-usage \
+            --no-sandbox \
+            about:blank >"$RUNNER_TEMP/chrome-authorize.log" 2>&1 &
+          chrome_pid=$!
+          trap 'kill "$chrome_pid" "$xvfb_pid" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 300); do
+            curl -fsS http://127.0.0.1:9222/json/version >/dev/null 2>&1 && break
+            sleep 0.1
+          done
+          curl -fsS http://127.0.0.1:9222/json/version >/dev/null
+          python3 ops/v7_tailscale_authorize_device_url.py \
+            --url "$LOGIN_URL" --cdp-url http://127.0.0.1:9222
+          echo "LONDON_DEVICE_AUTHORIZATION_OK=1"
+
+      - name: Finish London Prometheus tailnet bridge
+        id: london
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ops/v7_london_tailscale_login_ssm.py \
+            --instance-id "$INSTANCE_ID" --region "$AWS_REGION" finish \
+            | tee "$RUNNER_TEMP/london-tailnet-finish.log"
+          ip="$(sed -n 's/^LONDON_TAILSCALE_IP=//p' "$RUNNER_TEMP/london-tailnet-finish.log" | tail -1)"
+          [[ "$ip" =~ ^100\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "ip=$ip" >> "$GITHUB_OUTPUT"
+          echo "LONDON_TAILNET_PROMETHEUS_READY=1"
+
+      - name: Join tailnet for final Mac repair
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          version: 1.94.2
+          statedir: ''
+          hostname: gh-final-grafana-${{ github.run_id }}-${{ github.run_attempt }}
+          ping: ${{ env.MAC_HOST }}
+
+      - name: Verify London Prometheus from tailnet runner
+        env:
+          LONDON_IP: ${{ steps.london.outputs.ip }}
+        run: |
+          set -euo pipefail
+          result="$(curl -fsS --max-time 10 --get \
+            --data-urlencode 'query=polymarket_pure_arb_up' \
+            "http://$LONDON_IP:19091/api/v1/query")"
+          python3 - "$result" <<'PY'
+          import json,sys
+          v=json.loads(sys.argv[1])
+          rows=v.get('data',{}).get('result',[])
+          assert rows and any(float(r['value'][1])==1.0 for r in rows), v
+          print('RUNNER_TO_LONDON_PROMETHEUS_OK=1')
+          PY
+
+      - name: Point mamma Grafana to London and verify end to end
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+          LONDON_IP: ${{ steps.london.outputs.ip }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -T 8 -p "$MAC_PORT" "$MAC_HOST" > ~/.ssh/known_hosts
+
+          scp -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -P "$MAC_PORT" \
+            ops/v7_mamma_grafana_recover.sh \
+            "$MAC_USER@$MAC_HOST:/tmp/v7_mamma_grafana_recover.sh"
+
+          ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o ConnectTimeout=10 -p "$MAC_PORT" "$MAC_USER@$MAC_HOST" \
+            "LONDON_IP='$LONDON_IP' bash -s" <<'REMOTE'
+          set -euo pipefail
+          BASE="$HOME/.cache/polymarket-grafana-london"
+          PROV="$BASE/config/provisioning"
+          DS="$PROV/datasources/prometheus-v7.yml"
+          test -n "${LONDON_IP:-}"
+          mkdir -p "$PROV/datasources"
+          cat > "$DS" <<YAML
+          apiVersion: 1
+
+          datasources:
+            - name: Polymarket V7 Crypto Prometheus
+              uid: prometheus-v7
+              type: prometheus
+              access: proxy
+              url: http://${LONDON_IP}:19091
+              isDefault: true
+              editable: false
+          YAML
+
+          echo '=== DIRECT LONDON PROMETHEUS FROM MAC ==='
+          result="$(curl -fsS --max-time 10 --get \
+            --data-urlencode 'query=polymarket_pure_arb_up' \
+            "http://${LONDON_IP}:19091/api/v1/query")"
+          python3 - "$result" <<'PY'
+          import json,sys
+          v=json.loads(sys.argv[1])
+          rows=v.get('data',{}).get('result',[])
+          assert rows and any(float(r['value'][1])==1.0 for r in rows), v
+          print('MAC_TO_LONDON_PROMETHEUS_OK=1')
+          PY
+
+          chmod 700 /tmp/v7_mamma_grafana_recover.sh
+          /tmp/v7_mamma_grafana_recover.sh
+          rm -f /tmp/v7_mamma_grafana_recover.sh
+
+          grep -q "url: http://${LONDON_IP}:19091" "$DS"
+          search="$(curl -fsS --max-time 5 'http://127.0.0.1:3000/api/search?query=Pure%20Arbitrage')"
+          python3 - "$search" <<'PY'
+          import json,sys
+          rows=json.loads(sys.argv[1])
+          assert any(x.get('uid')=='polymarket-v7-pure-arb' for x in rows), rows
+          print('MAMMA_DASHBOARD_SEARCH_OK=1')
+          PY
+
+          code="$(curl -k -sS -o /tmp/final-dashboard -w '%{http_code}' --max-time 10 \
+            https://mamma-portfolio.tail1bae85.ts.net/d/polymarket-v7-pure-arb/polymarket-v7-crypto-e28094-pure-arbitrage-paper || true)"
+          case "$code" in 200|302) ;; *) echo "FINAL_DASHBOARD_HTTP=$code" >&2; exit 1;; esac
+          echo "FINAL_DASHBOARD_HTTP=$code"
+          echo "FINAL_GRAFANA_LONDON_OK=1"
+          REMOTE
+
+      - name: Destroy plaintext admin login
         if: always()
         run: |
           set +e
-          shred -u "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key" 2>/dev/null ||             rm -f "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key"
+          shred -u "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key" 2>/dev/null || \
+            rm -f "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key"
