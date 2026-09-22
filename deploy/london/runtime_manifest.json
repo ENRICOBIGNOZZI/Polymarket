@@ -30,6 +30,7 @@
     "scripts/v7_clock_guard.py",
     "scripts/v7_combo_collateral_return_shadow.py",
     "scripts/v7_combo_market_source.py",
+    "scripts/v7_combo_rfq_gateway_readonly.py",
     "scripts/v7_combo_rfq_shadow.py",
     "scripts/v7_complete_set_merge_shadow.py",
     "scripts/v7_cross_market_exact_arb_shadow.py",
@@ -140,5 +141,5 @@
     "scripts/v7_collection_plane.sh",
     "scripts/v7_process_runtime.sh"
   ],
-  "version": 8
+  "version": 9
 }
