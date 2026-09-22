@@ -12,7 +12,7 @@ No real orders. No capital authority. No product-of-marginals fill shortcut.
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 import hashlib
 import json
 import math
@@ -183,6 +183,8 @@ class Shadow:
         self.started_ms = time.time_ns() // 1_000_000
         self.funnel: Counter[str] = Counter()
         self.cancels: Counter[str] = Counter()
+        self.flow_events: defaultdict[tuple[str,str], deque[tuple[int,float]]] = defaultdict(deque)
+        self.mid_history: defaultdict[str, deque[tuple[int,float]]] = defaultdict(deque)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.status.parent.mkdir(parents=True, exist_ok=True)
         self._restore()
@@ -195,6 +197,48 @@ class Shadow:
                     self.rows.append(row)
         except (OSError, json.JSONDecodeError):
             pass
+
+    @staticmethod
+    def _tte_bucket(tte_ms: int) -> str:
+        if tte_ms <= 30_000:
+            return "LTE_30S"
+        if tte_ms <= 120_000:
+            return "30_120S"
+        if tte_ms <= 300_000:
+            return "120_300S"
+        return "GT_300S"
+
+    def _recent_sell_volume(self, market_id: str, token_id: str, now_ms: int) -> float:
+        key=(market_id,token_id)
+        q=self.flow_events[key]
+        cutoff=now_ms-self.args.flow_window_ms
+        while q and q[0][0] < cutoff:
+            q.popleft()
+        return sum(size for _,size in q)
+
+    def _vol_regime(self, market_id: str, now_ms: int, yes_mid: float) -> str:
+        q=self.mid_history[market_id]
+        q.append((now_ms,yes_mid))
+        cutoff=now_ms-self.args.vol_window_ms
+        while q and q[0][0] < cutoff:
+            q.popleft()
+        if len(q)<2:
+            return "UNKNOWN"
+        values=[px for _,px in q]
+        span=max(values)-min(values)
+        if span < 0.0025:
+            return "QUIET"
+        if span < 0.01:
+            return "NORMAL"
+        return "FAST"
+
+    @staticmethod
+    def _flow_regime(flow_to_depth: float) -> str:
+        if flow_to_depth < 0.25:
+            return "QUIET"
+        if flow_to_depth < 1.0:
+            return "NORMAL"
+        return "HEAVY"
 
     def _candidate(self, market: dict[str, Any], origin_ms: int) -> dict[str, Any] | None:
         self.funnel["market_checks"] += 1
@@ -257,6 +301,23 @@ class Shadow:
         if target + 1e-12 < self.args.minimum_quote_shares:
             self.funnel["size_too_small"] += 1
             return None
+        try:
+            market_end_ms=int(market.get("end_timestamp_ms") or 0)
+        except (TypeError,ValueError,OverflowError):
+            market_end_ms=0
+        tte_ms=max(0,market_end_ms-origin_ms) if market_end_ms>0 else 0
+        tte_bucket=self._tte_bucket(tte_ms)
+        yes_sell=self._recent_sell_volume(mid,yes,origin_ms)
+        no_sell=self._recent_sell_volume(mid,no,origin_ms)
+        flow_to_depth=(yes_sell+no_sell)/max(1e-9,yes_q+no_q)
+        flow_regime=self._flow_regime(flow_to_depth)
+        yes_mid=0.5*(yes_bid+float(cuts[0]["best_ask"]))
+        vol_regime=self._vol_regime(mid,origin_ms,yes_mid)
+        state_bucket=(
+            f'{str(market.get("asset") or "")}:{str(market.get("horizon") or "")}'
+            f'|tte={tte_bucket}|flow={flow_regime}|vol={vol_regime}'
+        )
+
         cycle_id = stable(self.args.model_sha, mid, origin_ms, yes_bid, no_bid)
         ttl = self.args.ttl_arms_ms[int(cycle_id[:16], 16) % len(self.args.ttl_arms_ms)]
         self.funnel["candidate"] += 1
@@ -264,7 +325,17 @@ class Shadow:
             "cycle_id": cycle_id,
             "market_id": mid,
             "semantic_fingerprint": semantic_fingerprint(market),
-            "market_end_ms": int(market.get("end_timestamp_ms") or 0),
+            "market_end_ms": market_end_ms,
+            "tte_ms": tte_ms,
+            "tte_bucket": tte_bucket,
+            "flow_window_ms": self.args.flow_window_ms,
+            "recent_sell_volume_yes": yes_sell,
+            "recent_sell_volume_no": no_sell,
+            "flow_to_visible_bid_depth": flow_to_depth,
+            "flow_regime": flow_regime,
+            "vol_window_ms": self.args.vol_window_ms,
+            "vol_regime": vol_regime,
+            "state_bucket": state_bucket,
             "asset": str(market.get("asset") or ""),
             "horizon": str(market.get("horizon") or ""),
             "yes_token": yes,
@@ -373,17 +444,26 @@ class Shadow:
 
     def apply_trade(self, row: dict[str, Any]) -> None:
         mid = str(row.get("market_id") or "")
-        c = self.active.get(mid)
-        if c is None:
-            return
         try:
             wall = int(row.get("receive_wall_ms") or 0)
             price, size = float(row.get("price")), float(row.get("size"))
         except (TypeError, ValueError, OverflowError):
             return
+        token = str(row.get("token_id") or "")
+        if mid and token and row.get("aggressor_side") == "SELL" and size > 0:
+            q=self.flow_events[(mid,token)]
+            q.append((wall,size))
+            cutoff=wall-self.args.flow_window_ms
+            while q and q[0][0] < cutoff:
+                q.popleft()
+
+        c = self.active.get(mid)
+        if c is None:
+            return
+        except (TypeError, ValueError, OverflowError):
+            return
         if not c["origin_ms"] <= wall <= c["expires_ms"] or row.get("aggressor_side") != "SELL":
             return
-        token = str(row.get("token_id") or "")
         side = "yes" if token == c["yes_token"] else "no" if token == c["no_token"] else ""
         if not side:
             return
@@ -495,6 +575,12 @@ class Shadow:
             "cycle_id": c["cycle_id"],
             "market_id": c["market_id"],
             "semantic_fingerprint": c.get("semantic_fingerprint"),
+            "tte_ms": c.get("tte_ms"),
+            "tte_bucket": c.get("tte_bucket"),
+            "flow_to_visible_bid_depth": c.get("flow_to_visible_bid_depth"),
+            "flow_regime": c.get("flow_regime"),
+            "vol_regime": c.get("vol_regime"),
+            "state_bucket": c.get("state_bucket"),
             "market_end_ms": c.get("market_end_ms"),
             "origin_ms": c["origin_ms"],
             "expires_ms": c["expires_ms"],
@@ -602,6 +688,31 @@ class Shadow:
                 "sum_total_shadow_pnl": sum(values) if values else 0.0,
             }
 
+        by_state: dict[str, dict[str, Any]] = {}
+        state_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in usable:
+            state_groups[str(row.get("state_bucket") or "UNKNOWN")].append(row)
+        for key, rows in sorted(state_groups.items()):
+            counts=Counter(str(r.get("state")) for r in rows)
+            values=[float(r["total_shadow_pnl"]) for r in rows
+                    if isinstance(r.get("total_shadow_pnl"),(int,float))]
+            paired=counts.get("BOTH_FULL",0)
+            one_leg=counts.get("YES_ONLY",0)+counts.get("NO_ONLY",0)
+            lower=conservative_mean(values)
+            by_state[key]={
+                "cycles":len(rows),
+                "paired_full":paired,
+                "one_leg":one_leg,
+                "paired_fill_probability_direct":paired/len(rows) if rows else None,
+                "paired_fill_probability_lower_90":wilson_lower(paired,len(rows)),
+                "mean_total_shadow_pnl":sum(values)/len(values) if values else None,
+                "conservative_mean_total_shadow_pnl_lower_90":lower,
+                "mature":len(rows)>=self.args.maturity_min_cycles_per_state,
+                "deployment_candidate":bool(
+                    len(rows)>=self.args.maturity_min_cycles_per_state
+                    and lower is not None and lower>0),
+            }
+
         by_queue_arm: dict[str, dict[str, Any]] = {}
         scenario_groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in usable:
@@ -704,6 +815,7 @@ class Shadow:
             "by_context": by_context,
             "by_ttl": by_ttl,
             "by_queue_arm": by_queue_arm,
+            "by_state": by_state,
             "policy_matrix": policy_matrix,
             "deployment_candidate_arms": [
                 key for key,row in policy_matrix.items()
@@ -718,6 +830,7 @@ class Shadow:
                 "minimum_cycles_per_ttl": self.args.maturity_min_cycles_per_ttl,
                 "minimum_cycles_per_context": self.args.maturity_min_cycles_per_context,
                 "minimum_mature_contexts": self.args.maturity_min_contexts,
+                "minimum_cycles_per_state": self.args.maturity_min_cycles_per_state,
             },
             "ttl_arms_ms": self.args.ttl_arms_ms,
             "minimum_quote_shares": self.args.minimum_quote_shares,
@@ -767,11 +880,14 @@ def main() -> int:
     ap.add_argument("--ttl-arms-ms", default="250,500,1000")
     ap.add_argument("--quote-refresh-ms", type=int, default=25)
     ap.add_argument("--interval-ms", type=int, default=5)
+    ap.add_argument("--flow-window-ms", type=int, default=1000)
+    ap.add_argument("--vol-window-ms", type=int, default=1000)
     ap.add_argument("--crypto-maker-rebate-fraction", type=float, default=0.20)
     ap.add_argument("--maturity-min-cycles", type=int, default=300)
     ap.add_argument("--maturity-min-cycles-per-ttl", type=int, default=75)
     ap.add_argument("--maturity-min-cycles-per-context", type=int, default=20)
     ap.add_argument("--maturity-min-contexts", type=int, default=2)
+    ap.add_argument("--maturity-min-cycles-per-state", type=int, default=30)
     args = ap.parse_args()
     args.ttl_arms_ms = sorted({int(x) for x in args.ttl_arms_ms.split(",") if int(x) > 0})
     args.queue_ahead_arms = sorted({float(x) for x in args.queue_ahead_arms.split(",") if float(x) >= 0})
@@ -793,14 +909,17 @@ def main() -> int:
             and 0 <= args.minimum_locked_edge_per_share < 1
             and 0 <= args.maximum_leg_skew_ms <= 5000):
         raise SystemExit("invalid economics")
-    if not (1 <= args.quote_refresh_ms <= 1000 and 1 <= args.interval_ms <= 1000):
+    if not (1 <= args.quote_refresh_ms <= 1000 and 1 <= args.interval_ms <= 1000
+            and 100 <= args.flow_window_ms <= 60_000
+            and 100 <= args.vol_window_ms <= 60_000):
         raise SystemExit("invalid timing")
     if not (0.0 <= args.crypto_maker_rebate_fraction <= 1.0):
         raise SystemExit("invalid maker rebate reference fraction")
     if not (args.maturity_min_cycles > 0
             and args.maturity_min_cycles_per_ttl > 0
             and args.maturity_min_cycles_per_context > 0
-            and args.maturity_min_contexts > 0):
+            and args.maturity_min_contexts > 0
+            and args.maturity_min_cycles_per_state > 0):
         raise SystemExit("invalid maturity requirements")
     Shadow(args).run()
     return 0
