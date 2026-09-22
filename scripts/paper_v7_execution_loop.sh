@@ -483,6 +483,49 @@ fi
 # they cannot submit orders, allocate capital, or promote themselves.
 PURE_ARB_DIR="$RUN_ROOT/research/repricing_book"
 mkdir -p "$PURE_ARB_DIR"
+touch "$PURE_ARB_DIR/combo_rfq_tape.jsonl"
+
+# Exact finite-state relations are discovered only from payoff-identical markets
+# and are independently proved with rational arithmetic before the cross-market
+# scanner may consume them.
+v7_exec_class COLLECTOR python3 scripts/v7_exact_relation_discovery.py \
+  --universe "$RUN_ROOT/universe/current.json" --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/exact_arb_relations.generated.json" --interval-seconds 5 \
+  >> "$PURE_ARB_DIR/exact_relation_discovery.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Public Combo catalog. No credentials and no quoting authority.
+v7_exec_class COLLECTOR python3 scripts/v7_combo_market_source.py \
+  --model-sha "$SHA" --output "$PURE_ARB_DIR/combo_market_source.json" \
+  --interval-seconds 15 --timeout-seconds 3 \
+  >> "$PURE_ARB_DIR/combo_market_source.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# RFQ pricing is shadow-only. The tape remains empty unless a separately
+# authorized read-only RFQ capture is supplied; this process never authenticates
+# or sends quote/cancel/confirmation messages.
+v7_exec_class COLLECTOR python3 scripts/v7_combo_rfq_shadow.py \
+  --model-sha "$SHA" --catalog "$PURE_ARB_DIR/combo_market_source.json" \
+  --rfq-tape "$PURE_ARB_DIR/combo_rfq_tape.jsonl" \
+  --output "$PURE_ARB_DIR/combo_rfq_shadow_status.json" \
+  --interval-seconds 1 --timeout-seconds 1 \
+  >> "$PURE_ARB_DIR/combo_rfq_shadow.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Collateral-return economics are credited only from an independently verified
+# captured plan. Missing plans remain zero-value/fail-closed.
+v7_exec_class COLLECTOR python3 scripts/v7_combo_collateral_return_shadow.py \
+  --model-sha "$SHA" --plan "$RUN_ROOT/control/verified_combo_collateral_return_plan.json" \
+  --output "$PURE_ARB_DIR/combo_collateral_return_status.json" --interval-seconds 5 \
+  >> "$PURE_ARB_DIR/combo_collateral_return.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Independent public clock attestation against CLOB server time.
+v7_exec_class CONTROL python3 scripts/v7_clock_guard.py \
+  --model-sha "$SHA" --output "$RUN_ROOT/control/clock_guard.json" \
+  --maximum-absolute-offset-ms 50 --interval-seconds 5 \
+  >> "$RUN_ROOT/clock_guard.log" 2>&1 &
+v7_register_optional_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_multi_crypto_oracle_hub.py \
   --output "$PURE_ARB_DIR/oracle_hub_status.json" --model-sha "$SHA" \
@@ -522,6 +565,7 @@ v7_register_optional_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_cross_market_exact_arb_shadow.py \
   --universe "$RUN_ROOT/universe/current.json" \
+  --relation-registry "$PURE_ARB_DIR/exact_arb_relations.generated.json" \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/cross_market_exact_arb_status.json" \
   --reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
@@ -733,7 +777,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 22
+v7_assert_registered_child_count 27
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
