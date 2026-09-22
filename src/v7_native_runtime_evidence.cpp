@@ -541,10 +541,12 @@ struct NativeRuntimeEvidenceWriter::Impl {
             {"slow_context", event.slow_context.decision_ns > 0
                 ? json::value(slow_context_json(event.slow_context)) : json::value(nullptr)},
             {"probability_input_features", event.probability.valid ? json::value(std::move(probability_inputs)) : json::value(nullptr)},
-            {"expected_net_edge", event.kind == 4 ? json::value(event.expected_ev)
+            {"expected_net_edge", event.kind == 7 ? json::value(nullptr)
+                : event.kind == 4 ? json::value(event.expected_ev)
                 : std::isfinite(event.economics.expected_net_edge) ? json::value(event.economics.expected_net_edge) : json::value(nullptr)},
-            {"conservative_net_edge", std::isfinite(event.economics.conservative_net_edge)
-                ? json::value(event.economics.conservative_net_edge) : json::value(nullptr)},
+            {"conservative_net_edge", event.kind == 7 ? json::value(nullptr)
+                : std::isfinite(event.economics.conservative_net_edge)
+                    ? json::value(event.economics.conservative_net_edge) : json::value(nullptr)},
             {"expected_fill_probability", event.expected_fill_probability_valid
                 && std::isfinite(event.expected_fill_probability)
                     ? json::value(event.expected_fill_probability) : json::value(nullptr)},
