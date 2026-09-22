@@ -385,6 +385,7 @@ jobs:
             polymarket_v7_crypto_settlement_engine \
             pm_v7_causal_book_observer_tests \
             pm_v7_market_state_tests \
+            pm_v7_pure_arb_lane_tests \
             pm_v7_market_ws_tests \
             pm_v7_oms_tests \
             pm_v7_native_runtime_evidence_tests \
@@ -396,7 +397,7 @@ jobs:
             pm_v7_native_clob_order_lane_driver \
             pm_v7_clob_rate_limit_tests
           ctest --test-dir build-pure-arb-${{ matrix.build_type }} --output-on-failure \
-            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests)'
+            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|pure_arb_lane_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests)'
           ccache --show-stats
 
       - name: Pure-arb native performance gate
@@ -463,6 +464,7 @@ jobs:
             polymarket_v7_maker_fillability_observer \
             pm_v7_causal_book_observer_tests \
             pm_v7_market_state_tests \
+            pm_v7_pure_arb_lane_tests \
             pm_v7_market_ws_tests \
             pm_v7_oms_tests \
             pm_v7_native_runtime_evidence_tests \
@@ -474,7 +476,7 @@ jobs:
             pm_v7_clob_rate_limit_tests
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             ctest --test-dir build-pure-arb-asan --output-on-failure \
-            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests)'
+            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|pure_arb_lane_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests)'
           ccache --show-stats
 
   london-runtime-boundary:
