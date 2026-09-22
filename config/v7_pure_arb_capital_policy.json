@@ -42,5 +42,6 @@
     "MOVING_BLOCK_BOOTSTRAP_LOWER_95"
   ],
   "maximum_observations_per_source": 50000,
-  "maximum_jsonl_scan_bytes": 67108864
+  "maximum_jsonl_scan_bytes": 67108864,
+  "maker_complete_set_merge_policy": "NO_EARLY_RELEASE_UNTIL_IMMEDIATE_MERGE_RUNTIME_EXISTS"
 }
