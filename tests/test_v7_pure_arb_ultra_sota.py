@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import math
 import sys
@@ -157,10 +158,32 @@ def test_self_fill_calibration_uses_verified_user_ws_fractional_fills():
 
 def test_rfq_gateway_has_no_quote_or_confirmation_send_path():
     source=(ROOT/"scripts/v7_combo_rfq_gateway_readonly.py").read_text()
-    assert source.count("_send_frame(sock") == 2  # auth helper + websocket pong only
+    tree=ast.parse(source)
+    calls=[
+        node for node in ast.walk(tree)
+        if isinstance(node,ast.Call)
+        and isinstance(node.func,ast.Name)
+        and node.func.id=="_send_frame"
+    ]
+    assert len(calls)==2
+    opcodes=[]
+    for call in calls:
+        assert len(call.args)>=3
+        opcode=call.args[2]
+        assert isinstance(opcode,ast.Constant) and isinstance(opcode.value,int)
+        opcodes.append(opcode.value)
+    assert sorted(opcodes)==[0x1,0xA]  # auth text + websocket pong only
+    forbidden={
+        "send_quote","cancel_quote","send_cancel","send_confirmation",
+        "confirm_rfq","last_look_response",
+    }
+    defined={
+        node.name for node in ast.walk(tree)
+        if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))
+    }
+    assert not (defined & forbidden)
     assert "outbound_application_messages\":\"AUTH_ONLY" in source
     assert "signed_order" not in source
-
 
 def test_fencing_supervisor_uses_only_canonical_aws_lease():
     source=(ROOT/"scripts/v7_multi_az_fencing_supervisor.py").read_text()
