@@ -101,7 +101,7 @@ jobs:
           xvfb_pid=$!
           profile="$RUNNER_TEMP/v7-tailnet-chrome"
           mkdir -p "$profile"
-          "$chrome"             --remote-debugging-port=9222             --user-data-dir="$profile"             --no-first-run             --no-default-browser-check             --disable-dev-shm-usage             about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
+          "$chrome"             --remote-debugging-port=9222             --remote-debugging-address=127.0.0.1             --user-data-dir="$profile"             --no-first-run             --no-default-browser-check             --disable-dev-shm-usage             --no-sandbox             about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
           chrome_pid=$!
           cleanup_browser() { kill "$chrome_pid" "$xvfb_pid" >/dev/null 2>&1 || true; }
           trap cleanup_browser EXIT
@@ -115,7 +115,7 @@ jobs:
           done
           test "$ready" = 1
           sed -i 's/timeout_s: int = 420/timeout_s: int = 900/' ops/v7_tailscale_ci_cleanup_browser.py
-          python3 ops/v7_tailscale_ci_cleanup_browser.py             --credentials "$RUNNER_TEMP/tailnet-login.json"             --repository "$GITHUB_REPOSITORY"             --github-token "$GH_TOKEN"             --chrome "$chrome"             --cdp-url http://127.0.0.1:9222
+          PYTHONUNBUFFERED=1 python3 -u ops/v7_tailscale_ci_cleanup_browser.py             --credentials "$RUNNER_TEMP/tailnet-login.json"             --repository "$GITHUB_REPOSITORY"             --github-token "$GH_TOKEN"             --chrome "$chrome"             --cdp-url http://127.0.0.1:9222
 
       - name: Destroy plaintext login
         if: always()
