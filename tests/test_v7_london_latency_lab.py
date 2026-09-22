@@ -65,6 +65,8 @@ def test_three_az_bootstrap_repairs_only_disabled_benchmark_checkout():
     assert stop < reset < clean < fetch
     assert 'git -C "$APP" clean -fdx' not in bootstrap
     assert "benchmark_source_checkout_dirty=1" in bootstrap
+    assert "POLYMARKET_REUSE_EXACT_SHA_CI=1" in bootstrap
+    assert "PM_V7_CI_REPOSITORY=ENRICOBIGNOZZI/Polymarket" in bootstrap
 
 
 def test_latency_lab_requires_measured_10pct_tail_gate():
