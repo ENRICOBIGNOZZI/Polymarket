@@ -132,7 +132,14 @@ def wait_for_human_2sv(page, timeout_s: int=420) -> bool:
                 if chosen is not None:
                     break
             if chosen is not None:
-                chosen.click()
+                # Google renders the visible text inside a div while the
+                # surrounding <li> owns pointer events. Click the clickable
+                # row rather than forcing the inner text node.
+                row=chosen.locator("xpath=ancestor::li[1]")
+                if row.count() and row.first.is_visible():
+                    row.first.click()
+                else:
+                    chosen.click(force=True)
                 prompt_triggered=True
                 print("tailnet_auth_google_prompt_triggered=true",flush=True)
                 page.wait_for_timeout(1500)
