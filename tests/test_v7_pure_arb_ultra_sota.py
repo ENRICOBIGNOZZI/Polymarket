@@ -274,6 +274,23 @@ def test_native_latency_trace_is_stage_complete_without_hot_path_io():
     assert "filesystem" not in lane_body
 
 
+def test_pure_arb_economics_are_shared_native_lane():
+    observer=(ROOT/"src/v7_maker_fillability_observer.cpp").read_text()
+    header=(ROOT/"include/pm/v7_pure_arb_lane.hpp").read_text()
+    source=(ROOT/"src/v7_pure_arb_lane.cpp").read_text()
+    cmake=(ROOT/"CMakeLists.txt").read_text()
+    assert '#include "pm/v7_pure_arb_lane.hpp"' in observer
+    assert "pm::v7::pure_arb::evaluate_l1" in observer
+    assert observer.count("pm::v7::pure_arb::sweep(")>=4
+    assert "pure_arb_fee_usdc" not in observer
+    assert "sweep_pure_arb_levels" not in observer
+    assert "struct SweepResult" in header
+    assert "double fee_usdc(" in source
+    assert "gross_edge > terms.reserve_per_share" in source
+    assert "src/v7_pure_arb_lane.cpp" in cmake
+    assert "pm_v7_pure_arb_lane_tests" in cmake
+
+
 if __name__=="__main__":
     tests=[value for name,value in sorted(globals().items())
            if name.startswith("test_") and callable(value)]
