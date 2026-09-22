@@ -256,7 +256,7 @@ jobs:
           python3 tests/test_v7_pure_arb_ultra_sota.py
           python3 tests/test_v7_pure_arb_native_engine_shadow.py
           python3 tests/test_v7_london_latency_lab.py
-          python3 -m py_compile ops/v7_london_ssm_benchmark.py
+          python3 -m py_compile ops/v7_london_ssm_benchmark.py ops/v7_host_latency_ab.py
           bash -n ops/v7_london_latency_lab.sh
           python3 -m unittest tests/test_v7_chaos_runtime.py -v
       - name: Fast-path no C++ build
