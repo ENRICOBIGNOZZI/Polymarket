@@ -75,3 +75,31 @@ curl -sv --max-time 8 --get \
   -o /tmp/v7-prom-query 2>&1 || true
 cat /tmp/v7-prom-query 2>/dev/null || true
 echo
+
+echo "=== TAILSCALE PEER 100.65.195.111 ==="
+TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+[[ -x "$TS" ]] || TS="$(command -v tailscale || true)"
+if [[ -n "$TS" ]]; then
+  "$TS" status --json > /tmp/v7-ts-status-2.json 2>/dev/null || true
+  python3 - <<'PY'
+import json
+from pathlib import Path
+p=Path('/tmp/v7-ts-status-2.json')
+if not p.is_file():
+    raise SystemExit(0)
+v=json.load(open(p))
+for peer in (v.get('Peer') or {}).values():
+    ips=[str(x) for x in (peer.get('TailscaleIPs') or [])]
+    if '100.65.195.111' in ips:
+        print(json.dumps({k:peer.get(k) for k in (
+            'HostName','DNSName','TailscaleIPs','Online','Active','Expired','Tags'
+        )},sort_keys=True))
+PY
+fi
+echo "=== TEST 100.65.195.111:19091 ==="
+curl -sv --max-time 6 --get \
+  --data-urlencode 'query=polymarket_pure_arb_up' \
+  http://100.65.195.111:19091/api/v1/query \
+  -o /tmp/v7-prom-65195 2>&1 || true
+cat /tmp/v7-prom-65195 2>/dev/null || true
+echo
