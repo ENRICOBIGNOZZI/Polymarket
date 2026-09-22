@@ -73,10 +73,12 @@ template <typename T, std::size_t N>
 
 [[nodiscard]] NativeClobSubmitResult fail_before_wire(
     NativeSettlementOmsEndpoint& owner, std::uint64_t client_order_id,
-    NativeClobSubmitReason reason) noexcept {
+    NativeClobSubmitReason reason,
+    const NativeClobLatencyTrace& latency = {}) noexcept {
     NativeClobSubmitResult out;
     out.reason = reason;
     out.client_order_id = client_order_id;
+    out.latency = latency;
     OmsEvent event{};
     event.type = OmsEventType::Reject;
     event.timestamp_ns = now_ns();
@@ -87,11 +89,13 @@ template <typename T, std::size_t N>
 
 [[nodiscard]] NativeClobSubmitResult fail_after_wire(
     NativeSettlementOmsEndpoint& owner, std::uint64_t client_order_id,
-    NativeClobSubmitReason reason, std::int64_t wire_ns = 0) noexcept {
+    NativeClobSubmitReason reason, std::int64_t wire_ns = 0,
+    const NativeClobLatencyTrace& latency = {}) noexcept {
     NativeClobSubmitResult out;
     out.reason = reason;
     out.client_order_id = client_order_id;
     out.wire_monotonic_ns = wire_ns;
+    out.latency = latency;
     OmsEvent event{};
     event.type = OmsEventType::TransportUnknown;
     event.timestamp_ns = now_ns();
@@ -104,9 +108,11 @@ template <typename T, std::size_t N>
 [[nodiscard]] NativeClobSubmitResult reject_after_response(
     NativeSettlementOmsEndpoint& owner, std::uint64_t client_order_id,
     NativeClobSubmitReason reason, int http_status, int retry_after_seconds,
-    std::int64_t wire_ns, std::int64_t response_ns) noexcept {
+    std::int64_t wire_ns, std::int64_t response_ns,
+    const NativeClobLatencyTrace& latency = {}) noexcept {
     NativeClobSubmitResult out;
     out.reason = reason;
+    out.latency = latency;
     out.client_order_id = client_order_id;
     out.http_status = http_status;
     out.retry_after_seconds = retry_after_seconds;
@@ -246,21 +252,21 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         || (command.time_in_force != AdapterTimeInForce::Fak
             && command.time_in_force != AdapterTimeInForce::Fok)) {
         return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::InvalidCommand);
+                                NativeClobSubmitReason::InvalidCommand, out.latency);
     }
     const std::int64_t price_e4_wide =
         command.price_tick * static_cast<std::int64_t>(command.tick_size_e4);
     if (price_e4_wide <= 0 || price_e4_wide >= 10'000
         || price_e4_wide > std::numeric_limits<std::int32_t>::max()) {
         return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::InvalidCommand);
+                                NativeClobSubmitReason::InvalidCommand, out.latency);
     }
     const auto price_e4 = static_cast<std::int32_t>(price_e4_wide);
     const auto amounts = clob_order::marketable_limit_amounts(
         command.side, price_e4, command.tick_size_e4, command.quantity_microunits);
     if (!amounts.valid) {
         return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::PreWireFailure);
+                                NativeClobSubmitReason::PreWireFailure, out.latency);
     }
 
     // Proactive per-signer venue budget. This check is before hashing/signing
@@ -270,14 +276,14 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     if (!impl_->rate_limiter.try_acquire(clob::RateLane::Order, limiter_now_ns, 1)) {
         return fail_before_wire(
             oms_owner, command.client_order_id,
-            NativeClobSubmitReason::RateLimitBudgetExhausted);
+            NativeClobSubmitReason::RateLimitBudgetExhausted, out.latency);
     }
     out.latency.rate_limit_complete_monotonic_ns = now_ns();
 
     const auto salt = impl_->salt.next();
     if (salt == 0) {
         return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::PreWireFailure);
+                                NativeClobSubmitReason::PreWireFailure, out.latency);
     }
 
     std::array<char, 32> salt_text, maker_text, taker_text, timestamp_text;
@@ -290,7 +296,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     if (salt_sv.empty() || maker_sv.empty() || taker_sv.empty()
         || timestamp_sv.empty() || request_ts_sv.empty()) {
         return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::PreWireFailure);
+                                NativeClobSubmitReason::PreWireFailure, out.latency);
     }
     auto& order_hasher = command.side == Side::Buy
         ? impl_->buy_order_hasher : impl_->sell_order_hasher;
@@ -301,7 +307,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
             salt, amounts.maker_amount, amounts.taker_amount,
             wall_timestamp_ms, order_signature)) {
         return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::PreWireFailure);
+                                NativeClobSubmitReason::PreWireFailure, out.latency);
     }
     out.latency.sign_complete_monotonic_ns = now_ns();
 
@@ -323,26 +329,26 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         post = &impl_->sell_fok;
     if (post == nullptr) {
         return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::PreWireFailure);
+                                NativeClobSubmitReason::PreWireFailure, out.latency);
     }
 
     std::array<char, 8192> frame;
     const auto frame_size = post->build(dynamic, request_ts_sv, frame);
     if (frame_size == 0) {
         return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::PreWireFailure);
+                                NativeClobSubmitReason::PreWireFailure, out.latency);
     }
     out.latency.frame_complete_monotonic_ns = now_ns();
     auto& tls = impl_->transport.lane(clob::TransportLane::Order);
     if (!tls.connected()) {
         return fail_before_wire(oms_owner, command.client_order_id,
-                                NativeClobSubmitReason::TransportFailure);
+                                NativeClobSubmitReason::TransportFailure, out.latency);
     }
     out.latency.wire_start_monotonic_ns = now_ns();
     const auto write = tls.write_all({frame.data(), frame_size});
     if (!write.ok) {
         return fail_after_wire(oms_owner, command.client_order_id,
-                               NativeClobSubmitReason::TransportFailure);
+                               NativeClobSubmitReason::TransportFailure, 0, out.latency);
     }
     out.wire_monotonic_ns = write.completed_monotonic_ns;
     OmsEvent wire_event{};
@@ -352,7 +358,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     if (!wire_transition.applied || wire_transition.state != OrderState::AckPending) {
         return fail_after_wire(oms_owner, command.client_order_id,
                                NativeClobSubmitReason::OmsFailure,
-                               write.completed_monotonic_ns);
+                               write.completed_monotonic_ns, out.latency);
     }
 
     impl_->response_parser.reset();
@@ -362,13 +368,13 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         if (writable.empty()) {
             return fail_after_wire(oms_owner, command.client_order_id,
                                    NativeClobSubmitReason::ResponseFailure,
-                                   write.completed_monotonic_ns);
+                                   write.completed_monotonic_ns, out.latency);
         }
         const auto read = tls.read_some(writable);
         if (!read.ok || read.bytes == 0) {
             return fail_after_wire(oms_owner, command.client_order_id,
                                    NativeClobSubmitReason::ResponseFailure,
-                                   write.completed_monotonic_ns);
+                                   write.completed_monotonic_ns, out.latency);
         }
         const auto state = impl_->response_parser.commit(read.bytes);
         if (state == clob_transport::Http1ResponseState::Complete) {
@@ -378,13 +384,13 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         if (state != clob_transport::Http1ResponseState::Receiving) {
             return fail_after_wire(oms_owner, command.client_order_id,
                                    NativeClobSubmitReason::ResponseFailure,
-                                   write.completed_monotonic_ns);
+                                   write.completed_monotonic_ns, out.latency);
         }
     }
     if (response_complete_ns <= 0) {
         return fail_after_wire(oms_owner, command.client_order_id,
                                NativeClobSubmitReason::ResponseFailure,
-                               write.completed_monotonic_ns);
+                               write.completed_monotonic_ns, out.latency);
     }
     out.http_status = impl_->response_parser.status_code();
     out.retry_after_seconds = impl_->response_parser.retry_after_seconds();
@@ -409,21 +415,21 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
             oms_owner, command.client_order_id,
             NativeClobSubmitReason::MatchingEngineRestart,
             out.http_status, out.retry_after_seconds,
-            write.completed_monotonic_ns, response_complete_ns);
+            write.completed_monotonic_ns, response_complete_ns, out.latency);
     }
     if (out.http_status == 503) {
         return reject_after_response(
             oms_owner, command.client_order_id,
             NativeClobSubmitReason::RestrictedTradingMode,
             out.http_status, out.retry_after_seconds,
-            write.completed_monotonic_ns, response_complete_ns);
+            write.completed_monotonic_ns, response_complete_ns, out.latency);
     }
     if (out.http_status == 429) {
         return reject_after_response(
             oms_owner, command.client_order_id,
             NativeClobSubmitReason::RateLimited,
             out.http_status, out.retry_after_seconds,
-            write.completed_monotonic_ns, response_complete_ns);
+            write.completed_monotonic_ns, response_complete_ns, out.latency);
     }
 
     const auto bridge_result = account_bridge.on_post_order_ack(
@@ -434,7 +440,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         || bridge_result.output_count == 0) {
         return fail_after_wire(oms_owner, command.client_order_id,
                                NativeClobSubmitReason::AckFailure,
-                               write.completed_monotonic_ns);
+                               write.completed_monotonic_ns, out.latency);
     }
 
     for (std::size_t i = 0; i < bridge_result.output_count; ++i) {
@@ -442,14 +448,14 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         if (routed.client_order_id != command.client_order_id) {
             return fail_after_wire(oms_owner, command.client_order_id,
                                    NativeClobSubmitReason::OmsFailure,
-                                   write.completed_monotonic_ns);
+                                   write.completed_monotonic_ns, out.latency);
         }
         const auto transition = oms_owner.apply_owned(
             routed.client_order_id, routed.event);
         if (transition.invariant_violation || transition.reconciliation_required) {
             return fail_after_wire(oms_owner, command.client_order_id,
                                    NativeClobSubmitReason::OmsFailure,
-                                   write.completed_monotonic_ns);
+                                   write.completed_monotonic_ns, out.latency);
         }
     }
 
@@ -457,7 +463,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     if (final_record == nullptr) {
         return fail_after_wire(oms_owner, command.client_order_id,
                                NativeClobSubmitReason::OmsFailure,
-                               write.completed_monotonic_ns);
+                               write.completed_monotonic_ns, out.latency);
     }
     out.final_state = final_record->state;
     out.identity_bound = account_bridge.lookup_exchange(command.client_order_id).found;
@@ -471,7 +477,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
             && final_record->state != OrderState::Filled)) {
         return fail_after_wire(oms_owner, command.client_order_id,
                                NativeClobSubmitReason::OmsFailure,
-                               write.completed_monotonic_ns);
+                               write.completed_monotonic_ns, out.latency);
     }
     out.reason = NativeClobSubmitReason::Accepted;
     out.accepted = 1;
