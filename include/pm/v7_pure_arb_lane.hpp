@@ -24,6 +24,8 @@ struct SweepResult {
     double marginal_edge_per_share = 0.0;
     std::uint16_t yes_levels_used = 0;
     std::uint16_t no_levels_used = 0;
+    std::int32_t yes_limit_price_e4 = 0;
+    std::int32_t no_limit_price_e4 = 0;
 
     [[nodiscard]] double shares() const noexcept {
         return static_cast<double>(std::max<std::int64_t>(0, shares_microunits))
@@ -125,6 +127,8 @@ template <std::size_t N>
         result.yes_notional += shares * yes_price;
         result.no_notional += shares * no_price;
         result.marginal_edge_per_share = gross_edge;
+        result.yes_limit_price_e4 = yes_levels[yi].price_e4;
+        result.no_limit_price_e4 = no_levels[ni].price_e4;
         result.yes_levels_used = static_cast<std::uint16_t>(
             std::min<std::size_t>(std::numeric_limits<std::uint16_t>::max(),
                                   std::max<std::size_t>(result.yes_levels_used, yi + 1)));
@@ -185,6 +189,108 @@ template <std::size_t N>
             maximum_shares_microunits);
 }
 
+enum class Direction : std::uint8_t {
+    None = 0,
+    BuyCompleteSet = 1,
+    SellCompleteSet = 2,
+};
+
+enum class RejectReason : std::uint8_t {
+    Accepted = 0,
+    InvalidContext = 1,
+    EpochMismatch = 2,
+    LegSkewExceeded = 3,
+    LineageInvalid = 4,
+    BookInvalid = 5,
+    FeeInvalid = 6,
+    NoPositiveEdge = 7,
+    BelowVenueMinimum = 8,
+    AmbiguousDirection = 9,
+};
+
+struct Context {
+    std::uint64_t market_handle = 0;
+    std::uint64_t event_handle = 0;
+    std::uint64_t yes_instrument_handle = 0;
+    std::uint64_t no_instrument_handle = 0;
+    double fee_rate = 0.0;
+    double fee_exponent = 1.0;
+    double reserve_per_share = 0.0005;
+    std::int64_t minimum_order_microunits = 0;
+    std::int64_t maximum_leg_skew_ns = 100'000'000LL;
+    std::int64_t sell_capacity_microunits =
+        std::numeric_limits<std::int64_t>::max();
+    std::uint8_t fee_verified = 0;
+    std::array<std::uint8_t, 7> reserved{};
+};
+
+struct PairInput {
+    BookHotSnapshot yes{};
+    BookHotSnapshot no{};
+    std::uint64_t yes_connection_epoch = 0;
+    std::uint64_t no_connection_epoch = 0;
+    std::int64_t decision_monotonic_ns = 0;
+};
+
+struct LegPlan {
+    std::uint64_t instrument_handle = 0;
+    std::uint64_t state_version = 0;
+    std::int64_t quantity_microunits = 0;
+    std::int32_t limit_price_e4 = 0;
+    Side side = Side::None;
+    std::array<std::uint8_t, 3> reserved{};
+};
+
+struct PureArbExecutionPlan {
+    std::uint64_t market_handle = 0;
+    std::uint64_t event_handle = 0;
+    std::int64_t trigger_receive_monotonic_ns = 0;
+    std::int64_t decision_monotonic_ns = 0;
+    LegPlan yes{};
+    LegPlan no{};
+    SweepResult economics{};
+    Direction direction = Direction::None;
+    std::uint8_t valid = 0;
+    std::array<std::uint8_t, 6> reserved{};
+};
+
+struct Evaluation {
+    PureArbExecutionPlan plan{};
+    SweepResult buy{};
+    SweepResult sell{};
+    double buy_raw_edge_per_share = 0.0;
+    double sell_raw_edge_per_share = 0.0;
+    double buy_edge_per_share = 0.0;
+    double sell_edge_per_share = 0.0;
+    double buy_fee_per_share = 0.0;
+    double sell_fee_per_share = 0.0;
+    RejectReason reason = RejectReason::InvalidContext;
+    std::uint8_t epoch_synced = 0;
+    std::uint8_t leg_skew_ready = 0;
+    std::uint8_t lineage_ready = 0;
+    std::uint8_t book_valid = 0;
+    std::uint8_t fee_finite = 0;
+    std::uint8_t buy_minimum_met = 0;
+    std::uint8_t sell_minimum_met = 0;
+};
+
+class PureArbLane final {
+public:
+    explicit PureArbLane(Context context) noexcept : context_(context) {}
+
+    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] const Context& context() const noexcept { return context_; }
+    [[nodiscard]] Evaluation evaluate(const PairInput& input) const noexcept;
+
+private:
+    Context context_{};
+};
+
 static_assert(std::is_trivially_copyable_v<SweepResult>);
+static_assert(std::is_trivially_copyable_v<Context>);
+static_assert(std::is_trivially_copyable_v<PairInput>);
+static_assert(std::is_trivially_copyable_v<LegPlan>);
+static_assert(std::is_trivially_copyable_v<PureArbExecutionPlan>);
+static_assert(std::is_trivially_copyable_v<Evaluation>);
 
 } // namespace pm::v7::pure_arb
