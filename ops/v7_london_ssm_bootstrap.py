@@ -42,10 +42,10 @@ if (( bad_git_owner_count > 0 )); then
   echo "benchmark_git_ownership_repairs=$bad_git_owner_count"
   chown -R {service_user}:"$SERVICE_GROUP" "$APP/.git"
 fi
-find "$APP/.git" -xdev ! -user {service_user} -print -quit | grep -q . && {
+find "$APP/.git" -xdev ! -user {service_user} -print -quit | grep -q . && {{
   echo "benchmark .git ownership repair failed" >&2
   exit 77
-}
+}}
 dirty_before="$(sudo -u {service_user} git -C "$APP" status --porcelain)"
 if [[ -n "$dirty_before" ]]; then
   echo "benchmark_source_checkout_dirty=1"
