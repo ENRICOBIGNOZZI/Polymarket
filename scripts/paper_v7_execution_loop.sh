@@ -495,6 +495,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_settlement_source_arb_shadow.py \
   --oracle-status "$PURE_ARB_DIR/oracle_hub_status.json" \
   --selection "$RUN_ROOT/universe/book_selection.json" \
   --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --deep-book-snapshots "$PURE_ARB_DIR/pure_arb_deep_book_snapshots.jsonl" \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/settlement_source_arb_cycles.jsonl" \
   --status "$PURE_ARB_DIR/settlement_source_arb_status.json" \
