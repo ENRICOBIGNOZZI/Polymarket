@@ -162,6 +162,17 @@ def wilson_lower(successes: int, n: int, z: float = 1.6448536269514722) -> float
     return max(0.0, (center-radius)/denom)
 
 
+def conservative_mean(values: list[float], z: float = 1.6448536269514722) -> float | None:
+    xs=[float(x) for x in values if math.isfinite(float(x))]
+    if not xs:
+        return None
+    mean=sum(xs)/len(xs)
+    if len(xs)<2:
+        return mean
+    variance=sum((x-mean)**2 for x in xs)/(len(xs)-1)
+    return mean-z*math.sqrt(variance/len(xs))
+
+
 class Shadow:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -583,6 +594,43 @@ class Shadow:
                 "mean_total_shadow_pnl": sum(values) / len(values) if values else None,
             }
 
+        policy_matrix: dict[str, dict[str, Any]] = {}
+        for ttl in self.args.ttl_arms_ms:
+            for arm in self.args.queue_ahead_arms:
+                values=[]
+                cycles=0
+                paired=0
+                one_leg=0
+                for row in usable:
+                    if int(row.get("ttl_ms") or 0)!=ttl:
+                        continue
+                    scenario=next(
+                        (x for x in row.get("queue_scenarios") or []
+                         if isinstance(x,dict)
+                         and abs(float(x.get("multiplier") or 0.0)-arm)<1e-12),
+                        None)
+                    if scenario is None:
+                        continue
+                    cycles+=1
+                    state=str(scenario.get("state") or "")
+                    paired+=state=="BOTH_FULL"
+                    one_leg+=state in {"YES_ONLY","NO_ONLY"}
+                    if isinstance(scenario.get("total_shadow_pnl"),(int,float)):
+                        values.append(float(scenario["total_shadow_pnl"]))
+                lower_pnl=conservative_mean(values)
+                key=f"ttl={ttl}|queue={arm:.3f}"
+                mature=cycles>=self.args.maturity_min_cycles_per_ttl
+                policy_matrix[key]={
+                    "ttl_ms":ttl,"queue_ahead_multiplier":arm,"cycles":cycles,
+                    "paired_full":paired,"one_leg":one_leg,
+                    "paired_fill_probability_direct":paired/cycles if cycles else None,
+                    "paired_fill_probability_lower_90":wilson_lower(paired,cycles),
+                    "mean_total_shadow_pnl":sum(values)/len(values) if values else None,
+                    "conservative_mean_total_shadow_pnl_lower_90":lower_pnl,
+                    "mature":mature,
+                    "deployment_candidate":bool(mature and lower_pnl is not None and lower_pnl>0),
+                }
+
         paired_total = states.get("BOTH_FULL", 0)
         paired_lower = wilson_lower(paired_total, n)
         research_mature = (
@@ -622,6 +670,11 @@ class Shadow:
             "by_context": by_context,
             "by_ttl": by_ttl,
             "by_queue_arm": by_queue_arm,
+            "policy_matrix": policy_matrix,
+            "deployment_candidate_arms": [
+                key for key,row in policy_matrix.items()
+                if row.get("deployment_candidate") is True
+            ],
             "uses_product_of_marginals": False,
             "joint_probability_semantics": "DIRECT_EMPIRICAL_CYCLE_STATES_NOT_PRODUCT_OF_MARGINALS",
             "confidence_semantics": "WILSON_ONE_SIDED_90_LOWER_ON_DIRECT_PAIRED_FULL",
