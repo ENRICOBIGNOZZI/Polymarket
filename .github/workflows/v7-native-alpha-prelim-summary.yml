@@ -30,9 +30,69 @@ jobs:
         run: |
           set -euo pipefail
           instance="$(python3 -c 'import json;print(json.load(open("deploy/v7-native-alpha-prelim-summary.json"))["instance_id"])')"
-          cmd="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters commands='[
-            "python3 - <<\x27PY\x27\nimport csv,json,statistics\nfrom pathlib import Path\ncands=[]\nfor p in Path(\x27/tmp\x27).glob(\x27polymarket-*alpha*/output/21_native_alpha_grid.csv\x27):\n    if p.is_file(): cands.append((p.stat().st_mtime_ns,p))\nif not cands: raise SystemExit(\x27NO_GRID\x27)\np=max(cands)[1]\nrows=list(csv.DictReader(p.open()))\nby={}\nfor r in rows:\n    try: pnl=float(r[\x27total_pnl\x27])\n    except: continue\n    r[\x27_pnl\x27]=pnl\n    by.setdefault(r[\x27alpha\x27],[]).append(r)\nsummary=[]\nfor a,rr in by.items():\n    vals=[x[\x27_pnl\x27] for x in rr]\n    fills=sum(int(float(x.get(\x27fills\x27) or 0)) for x in rr)\n    obs=sum(int(float(x.get(\x27observed\x27) or 0)) for x in rr)\n    best=max(rr,key=lambda x:x[\x27_pnl\x27])\n    worst=min(rr,key=lambda x:x[\x27_pnl\x27])\n    summary.append({\x27alpha\x27:a,\x27cells\x27:len(vals),\x27median_pnl\x27:statistics.median(vals),\x27mean_pnl\x27:statistics.fmean(vals),\x27positive_fraction\x27:sum(v>0 for v in vals)/len(vals),\x27best\x27:{\x27latency\x27:best[\x27entry_latency_ms\x27],\x27exit\x27:best[\x27exit_horizon_ms\x27],\x27pnl\x27:best[\x27_pnl\x27]},\x27worst\x27:{\x27latency\x27:worst[\x27entry_latency_ms\x27],\x27exit\x27:worst[\x27exit_horizon_ms\x27],\x27pnl\x27:worst[\x27_pnl\x27]},\x27fills_sum_cells\x27:fills,\x27observed_sum_cells\x27:obs})\nsummary.sort(key=lambda x:(x[\x27median_pnl\x27],x[\x27mean_pnl\x27]),reverse=True)\nallrows=[r for rr in by.values() for r in rr]\ntop=sorted(allrows,key=lambda x:x[\x27_pnl\x27],reverse=True)[:15]\nbottom=sorted(allrows,key=lambda x:x[\x27_pnl\x27])[:15]\nout={\x27grid\x27:str(p),\x27alpha_count\x27:len(by),\x27row_count\x27:len(rows),\x27top_alpha_median\x27:summary[:20],\x27bottom_alpha_median\x27:summary[-10:],\x27top_cells\x27:[{k:r[k] for k in (\x27alpha\x27,\x27entry_latency_ms\x27,\x27exit_horizon_ms\x27,\x27total_pnl\x27,\x27selected\x27,\x27observed\x27,\x27fills\x27)} for r in top],\x27bottom_cells\x27:[{k:r[k] for k in (\x27alpha\x27,\x27entry_latency_ms\x27,\x27exit_horizon_ms\x27,\x27total_pnl\x27,\x27selected\x27,\x27observed\x27,\x27fills\x27)} for r in bottom]}\nprint(json.dumps(out,sort_keys=True))\nPY"
-          ]' --query 'Command.CommandId' --output text)"
+          cat >/tmp/summary.py <<'PY'
+          import csv,json,statistics
+          from pathlib import Path
+          cands=[]
+          for p in Path('/tmp').glob('polymarket-native-alpha-2h-*/output/21_native_alpha_grid.csv'):
+              if p.is_file():
+                  cands.append((p.stat().st_mtime_ns,p))
+          if not cands:
+              raise SystemExit('NO_GRID')
+          p=max(cands)[1]
+          rows=list(csv.DictReader(p.open()))
+          by={}
+          for r in rows:
+              try:
+                  pnl=float(r['total_pnl'])
+              except Exception:
+                  continue
+              r['_pnl']=pnl
+              by.setdefault(r['alpha'],[]).append(r)
+          summary=[]
+          for a,rr in by.items():
+              vals=[x['_pnl'] for x in rr]
+              best=max(rr,key=lambda x:x['_pnl'])
+              worst=min(rr,key=lambda x:x['_pnl'])
+              summary.append({
+                  'alpha':a,
+                  'cells':len(vals),
+                  'median_pnl':statistics.median(vals),
+                  'mean_pnl':statistics.fmean(vals),
+                  'positive_fraction':sum(v>0 for v in vals)/len(vals),
+                  'nonnegative_fraction':sum(v>=0 for v in vals)/len(vals),
+                  'best':{'latency':int(best['entry_latency_ms']),'exit':int(best['exit_horizon_ms']),'pnl':best['_pnl'],'selected':int(float(best.get('selected') or 0)),'observed':int(float(best.get('observed') or 0)),'fills':int(float(best.get('fills') or 0))},
+                  'worst':{'latency':int(worst['entry_latency_ms']),'exit':int(worst['exit_horizon_ms']),'pnl':worst['_pnl']},
+                  'median_observed':statistics.median([int(float(x.get('observed') or 0)) for x in rr]),
+                  'median_fills':statistics.median([int(float(x.get('fills') or 0)) for x in rr]),
+              })
+          summary.sort(key=lambda x:(x['median_pnl'],x['positive_fraction'],x['mean_pnl']),reverse=True)
+          allrows=[r for rr in by.values() for r in rr]
+          top=sorted(allrows,key=lambda x:x['_pnl'],reverse=True)[:20]
+          bottom=sorted(allrows,key=lambda x:x['_pnl'])[:20]
+          baseline=by.get('baseline_continuation',[])
+          def cells_compact(seq):
+              return [{'alpha':r['alpha'],'latency':int(r['entry_latency_ms']),'exit':int(r['exit_horizon_ms']),'pnl':r['_pnl'],'selected':int(float(r.get('selected') or 0)),'observed':int(float(r.get('observed') or 0)),'fills':int(float(r.get('fills') or 0)),'hit_rate':None if not r.get('hit_rate') else float(r['hit_rate']),'max_drawdown':None if not r.get('max_drawdown') else float(r['max_drawdown'])} for r in seq]
+          out={
+              'grid':str(p),
+              'alpha_count':len(by),
+              'row_count':len(rows),
+              'top_alpha_median':summary[:25],
+              'bottom_alpha_median':summary[-15:],
+              'top_cells':cells_compact(top),
+              'bottom_cells':cells_compact(bottom),
+              'baseline_cells':cells_compact(sorted(baseline,key=lambda x:(int(x['entry_latency_ms']),int(x['exit_horizon_ms'])))),
+          }
+          print(json.dumps(out,separators=(',',':'),sort_keys=True))
+          PY
+          b64="$(base64 -w0 /tmp/summary.py)"
+          params="$(python3 - "$b64" <<'PY'
+          import json,shlex,sys
+          b=sys.argv[1]
+          print(json.dumps({'commands':[f"printf %s {shlex.quote(b)} | base64 -d | python3"]}))
+          PY
+          )"
+          cmd="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --parameters "$params" --query 'Command.CommandId' --output text)"
           for i in $(seq 1 60); do
             status="$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$instance" --query Status --output text 2>/dev/null || true)"
             case "$status" in Success|Failed|Cancelled|TimedOut) break;; esac
