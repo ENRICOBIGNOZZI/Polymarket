@@ -334,6 +334,13 @@ if(BUILD_TESTING)
   add_test(NAME pm_v7_native_paper_execution_tests
     COMMAND pm_v7_native_paper_execution_tests)
 
+  add_executable(pm_v7_native_paper_pair_execution_tests
+    tests/test_v7_native_paper_pair_execution.cpp)
+  target_link_libraries(pm_v7_native_paper_pair_execution_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_native_paper_pair_execution_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_native_paper_pair_execution_tests
+    COMMAND pm_v7_native_paper_pair_execution_tests)
+
   add_executable(pm_v7_native_runtime_evidence_tests
     tests/test_v7_native_runtime_evidence.cpp)
   target_link_libraries(pm_v7_native_runtime_evidence_tests PRIVATE pm_v7_common)
