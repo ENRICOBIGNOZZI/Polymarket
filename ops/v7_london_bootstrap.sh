@@ -24,7 +24,7 @@ CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"
 
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  build-essential ca-certificates cmake curl git gnupg jq libboost-all-dev \
+  build-essential ca-certificates cmake curl ethtool git gnupg jq libboost-all-dev \
   libcurl4-openssl-dev libssl-dev libsecp256k1-dev ninja-build pkg-config \
   prometheus prometheus-node-exporter python3 python3-numpy python3-pip python3-venv rsync util-linux
 
