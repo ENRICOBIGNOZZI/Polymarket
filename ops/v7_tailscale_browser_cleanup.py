@@ -271,7 +271,18 @@ def login(page,email,password):
             nxt=first_visible(page.locator("#passwordNext")) or first_visible(page.get_by_role("button",name=re.compile(r"Next",re.I)))
             if nxt is None:
                 raise RuntimeError("google_password_next_missing")
-            nxt.click()
+            before_url=str(page.url or "")
+            try:
+                nxt.click(timeout=10000)
+            except Exception:
+                after_url=str(page.url or "")
+                if not (
+                    after_url != before_url and
+                    is_google_accounts_url(after_url) and
+                    ("/challenge/" in after_url or "/accounts/SetSID" in after_url or "/SetSID" in after_url)
+                ):
+                    raise
+                print("tailnet_cleanup_password_next_navigation_observed=true",flush=True)
             page.wait_for_timeout(1200)
             try:
                 body=page.locator("body").inner_text(timeout=3000)
