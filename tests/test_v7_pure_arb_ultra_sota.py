@@ -69,7 +69,7 @@ def test_combo_rfq_exact_hedge_bounds(monkeypatch):
         "B_Y":{"bid":0.29,"bid_q":10.0,"ask":0.30,"ask_q":10.0},
         "B_N":{"bid":0.69,"bid_q":10.0,"ask":0.70,"ask_q":10.0},
     }
-    monkeypatch.setattr(rfq,"book",lambda base,token,timeout:books[token])
+    monkeypatch.setattr(rfq,"batch_bbos",lambda base,tokens,timeout:{token:books[token] for token in tokens})
     monkeypatch.setattr(rfq,"fee_rate",lambda base,token,timeout:0.0)
     args=SimpleNamespace(clob_url="x",timeout_seconds=1.0,reference_shares=5.0,reserve_per_share=0.001)
     common={"rfq_id":"r","leg_position_ids":["A_Y","B_Y"],
