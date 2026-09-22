@@ -107,18 +107,19 @@ def test_ultra_sota_runtime_is_registered_fail_closed():
         "v7_clock_guard.py",
     ):
         assert loop.count(name)==1
-    assert "v7_assert_registered_child_count 28" in loop
+    assert "v7_assert_registered_child_count 29" in loop
     manifest=json.loads((ROOT/"config/v7_process_manifest.json").read_text())
-    assert manifest["expected_process_count"]==29
-    assert manifest["expected_launcher_child_count"]==28
+    assert manifest["expected_process_count"]==30
+    assert manifest["expected_launcher_child_count"]==29
     ids={p["id"] for p in manifest["processes"]}
     assert {"pure_arb_exact_relation_discovery","combo_market_source","combo_rfq_shadow",
-            "combo_collateral_return_shadow","clock_guard","pure_arb_maker_queue_calibration"}<=ids
+            "combo_collateral_return_shadow","clock_guard","pure_arb_maker_self_fill_calibration","multi_az_fencing_guard"}<=ids
     bundle=json.loads((ROOT/"deploy/london/runtime_manifest.json").read_text())
     for name in (
         "scripts/v7_exact_relation_discovery.py","scripts/v7_combo_market_source.py",
         "scripts/v7_combo_rfq_shadow.py","scripts/v7_combo_collateral_return_shadow.py",
-        "scripts/v7_clock_guard.py",
+        "scripts/v7_clock_guard.py","scripts/v7_maker_self_fill_calibration.py",
+        "scripts/v7_multi_az_fencing_guard.py",
     ):
         assert name in bundle["python_entrypoints"]
 
