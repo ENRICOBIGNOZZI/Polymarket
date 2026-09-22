@@ -135,5 +135,14 @@
     "restricted_http_status": 503,
     "retry_after_supported": true,
     "taker_policy": "NO_BLIND_RETRY"
+  },
+  "order_heartbeat": {
+    "required_for_resting_orders": true,
+    "endpoint": "POST /v1/heartbeats",
+    "send_interval_seconds": 5,
+    "venue_cancel_timeout_seconds": 10,
+    "current_native_taker_lane_requires_heartbeat": false,
+    "maker_promotion_requires_native_heartbeat": true,
+    "failure_policy": "NO_NEW_MAKER_RISK_AND_CANCEL_RESTING_IF_HEARTBEAT_UNHEALTHY"
   }
 }
