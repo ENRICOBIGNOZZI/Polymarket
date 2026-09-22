@@ -745,6 +745,8 @@ public:
         pure_arb_book_epochs_.resize(max_handle + 1, 0);
         pure_arb_book_receive_wall_ms_.resize(max_handle + 1, 0);
         pure_arb_markets_.resize(max_market_handle + 1);
+        pure_arb_pair_by_handle_.resize(max_handle + 1);
+        pure_arb_deep_trigger_active_.resize(max_market_handle + 1, 0);
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
         for (const auto& token : tokens_) {
             auto& market = pure_arb_markets_[token.market_handle];
@@ -760,6 +762,11 @@ public:
                 pure_arb_prefunded_complete_set_shares_;
             if (token.is_yes != 0) market.yes_handle = token.instrument_handle;
             else market.no_handle = token.instrument_handle;
+        }
+        for (const auto& token : tokens_) {
+            const auto& market = pure_arb_markets_[token.market_handle];
+            pure_arb_pair_by_handle_[token.instrument_handle] = PureArbPairBinding{
+                token.market_handle, market.yes_handle, market.no_handle};
         }
         for (const auto& token : tokens_) {
             lanes_[token.instrument_handle] = std::make_unique<pm::v7::maker::MakerInstrumentLane>(1);
