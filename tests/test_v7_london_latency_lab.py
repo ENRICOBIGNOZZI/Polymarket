@@ -115,6 +115,18 @@ def test_london_runtime_staging_and_ci_receipts_are_service_user_owned():
     assert 'sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP"' in bootstrap
 
 
+def test_public_transport_probe_reconnects_only_after_transport_loss():
+    probe = (ROOT / "src/v7_public_paired_clob_transport_probe.cpp").read_text()
+    assert "reconnect_if_needed" in probe
+    assert "transport.ready()" in probe
+    assert "transport.connect(options.ca_file)" in probe
+    assert '"transport_reconnects"' in probe
+    assert '"transport_reconnect_failures"' in probe
+    # The success bar stays unchanged: reconnect prevents one closed socket
+    # from poisoning all later samples; it does not weaken sample validity.
+    assert "options.samples * 95" in probe
+
+
 def test_public_transport_probe_classifies_failure_causes():
     probe = (ROOT / "src/v7_public_paired_clob_transport_probe.cpp").read_text()
     for key in (
