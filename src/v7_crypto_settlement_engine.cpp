@@ -938,8 +938,8 @@ int main(int argc, char** argv) {
                         event.receive_monotonic_ns);
 
                     // Canonical same-process pure complete-set arbitrage lane.
-                    // This block performs no filesystem/JSON/network I/O.  It
-                    // updates the causal pair state, calls one shared native
+                    // This block performs no external I/O. It updates the
+                    // causal pair state, calls one shared native
                     // decision kernel and publishes at most one POD trace record.
                     const auto current_epoch =
                         pm_epoch.load(std::memory_order_acquire);
