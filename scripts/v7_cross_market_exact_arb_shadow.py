@@ -79,6 +79,142 @@ def token_map(row: dict[str,Any]) -> dict[str,str] | None:
     return result if set(result)=={"YES","NO"} else None
 
 
+def load_relation_registry(path: Path | None) -> list[dict[str, Any]]:
+    if path is None:
+        return []
+    value=load(path)
+    if (
+        value.get("schema")!="polymarket_v7_exact_arb_relation_registry_v1"
+        or value.get("version")!=1
+        or value.get("paper_only") is not True
+        or value.get("authenticated_execution") is not False
+        or value.get("real_order_submission") is not False
+        or value.get("automatic_promotion") is not False
+    ):
+        raise ValueError("exact arb relation registry invalid")
+    rows=value.get("relations")
+    if not isinstance(rows,list):
+        raise ValueError("exact arb relations missing")
+    return [row for row in rows if isinstance(row,dict) and row.get("enabled") is True]
+
+
+def _selector_matches(row: dict[str,Any], selector: dict[str,Any]) -> bool:
+    allowed={
+        "market_id","asset","horizon","contract_family","settlement_semantic_hash",
+        "normalized_rules_hash","window_start_unix","close_timestamp_unix",
+    }
+    if not selector or any(key not in allowed for key in selector):
+        return False
+    for key,want in selector.items():
+        got=row.get(key)
+        if key in {"window_start_unix","close_timestamp_unix"}:
+            try:
+                if int(got or 0)!=int(want): return False
+            except (TypeError,ValueError):
+                return False
+        elif str(got or "")!=str(want):
+            return False
+    return True
+
+
+def _resolve_relation_market(markets: list[dict[str,Any]], selector: dict[str,Any]) -> dict[str,Any] | None:
+    found=[row for row in markets if _selector_matches(row,selector)]
+    return found[0] if len(found)==1 else None
+
+
+def explicit_relation_opportunities(
+    relations: list[dict[str,Any]], markets: list[dict[str,Any]],
+    books: dict[str,dict[str,float] | None], args: argparse.Namespace,
+) -> tuple[list[dict[str,Any]],int,int]:
+    opportunities=[]; checked=0; invalid=0
+    for relation in relations:
+        checked+=1
+        rid=str(relation.get("id") or "")
+        states=relation.get("states")
+        legs=relation.get("legs")
+        try:
+            guarantee=float(relation.get("guaranteed_payout"))
+        except (TypeError,ValueError):
+            invalid+=1; continue
+        if (not rid or not isinstance(states,list) or not states or len(states)>32
+                or not isinstance(legs,list) or len(legs)<2 or len(legs)>16
+                or not math.isfinite(guarantee) or guarantee<=0):
+            invalid+=1; continue
+
+        resolved=[]
+        algebra=[0.0 for _ in states]
+        valid=True
+        for leg in legs:
+            if not isinstance(leg,dict):
+                valid=False; break
+            selector=leg.get("selector")
+            outcome=str(leg.get("outcome") or "").upper()
+            vector=leg.get("payout_vector")
+            try: coefficient=float(leg.get("coefficient",1.0))
+            except (TypeError,ValueError):
+                valid=False; break
+            if (not isinstance(selector,dict) or outcome not in {"YES","NO"}
+                    or not isinstance(vector,list) or len(vector)!=len(states)
+                    or not math.isfinite(coefficient) or coefficient<=0):
+                valid=False; break
+            try: payouts=[float(x) for x in vector]
+            except (TypeError,ValueError):
+                valid=False; break
+            if any(not math.isfinite(x) or x<0 for x in payouts):
+                valid=False; break
+            market=_resolve_relation_market(markets,selector)
+            mapping=token_map(market) if market is not None else None
+            fees=fee_params(market) if market is not None else None
+            if market is None or mapping is None or fees is None:
+                valid=False; break
+            token=mapping[outcome]
+            for i,payout in enumerate(payouts):
+                algebra[i]+=coefficient*payout
+            resolved.append((market,token,coefficient,fees))
+
+        if not valid or any(abs(x-guarantee)>1e-12 for x in algebra):
+            invalid+=1; continue
+
+        basket_cost=0.0
+        qmax=args.maximum_shares
+        leg_rows=[]
+        for market,token,coefficient,(rate,exponent) in resolved:
+            if token not in books:
+                books[token]=fetch_book(args.clob_url,token,args.timeout_seconds)
+            book=books[token]
+            if book is None:
+                valid=False; break
+            fee=fee_per_share(book["ask"],rate,exponent)
+            if not math.isfinite(fee):
+                valid=False; break
+            basket_cost+=coefficient*(book["ask"]+fee)
+            qmax=min(qmax,book["ask_q"]/coefficient)
+            leg_rows.append({
+                "market_id":str(market.get("market_id") or ""),
+                "token_id":token,"coefficient":coefficient,
+                "ask":book["ask"],"ask_depth":book["ask_q"],
+                "fee_per_share":fee,
+            })
+        if not valid:
+            continue
+        edge=guarantee-basket_cost-args.reserve_per_share
+        if edge>args.minimum_locked_edge_per_share and qmax>=args.minimum_shares:
+            opportunities.append({
+                "kind":"EXPLICIT_EXACT_PAYOUT_BASKET",
+                "relation_id":rid,
+                "proof_type":"FINITE_STATE_PAYOUT_VECTOR",
+                "states":[str(x) for x in states],
+                "guaranteed_payout":guarantee,
+                "basket_cost_after_fees":basket_cost,
+                "reserve_per_basket_unit":args.reserve_per_share,
+                "locked_edge_per_basket_unit":edge,
+                "executable_basket_units":qmax,
+                "locked_pnl_capacity":qmax*edge,
+                "legs":leg_rows,
+            })
+    return opportunities,checked,invalid
+
+
 def fetch_book(base: str, token: str, timeout: float) -> dict[str,float] | None:
     url=base.rstrip("/")+"/book?"+urllib.parse.urlencode({"token_id":token})
     req=urllib.request.Request(url,headers={"User-Agent":"polymarket-v7-cross-market-shadow"})
@@ -121,6 +257,7 @@ def scan(args: argparse.Namespace) -> dict[str,Any]:
 
     now=int(time.time())
     groups: defaultdict[tuple[Any,...],list[dict[str,Any]]]=defaultdict(list)
+    open_markets: list[dict[str,Any]]=[]
     for row in universe.get("markets") or []:
         if not isinstance(row,dict) or row.get("active") is not True or row.get("closed") is True                 or row.get("accepting_orders") is not True:
             continue
@@ -129,7 +266,9 @@ def scan(args: argparse.Namespace) -> dict[str,Any]:
         fees=fee_params(row)
         if identity is None or mapping is None or fees is None: continue
         if not (identity[-2] <= now < identity[-1]): continue
-        groups[identity].append({**row,"_tokens":mapping,"_fees":fees})
+        enriched={**row,"_tokens":mapping,"_fees":fees}
+        groups[identity].append(enriched)
+        open_markets.append(enriched)
 
     duplicate_groups=[rows for rows in groups.values() if len(rows)>1]
     opportunities=[]; pairs_checked=0; books={}
@@ -177,6 +316,11 @@ def scan(args: argparse.Namespace) -> dict[str,Any]:
                             "executable_shares":shares,
                             "locked_pnl_capacity":shares*edge,
                         })
+    relations=load_relation_registry(args.relation_registry)
+    explicit,relations_checked,relations_invalid=explicit_relation_opportunities(
+        relations,open_markets,books,args)
+    opportunities.extend(explicit)
+
     return {
         "schema":STATUS_SCHEMA,"state":"COLLECTING","paper_only":True,
         "authenticated_execution":False,"real_order_submission":False,
@@ -185,6 +329,9 @@ def scan(args: argparse.Namespace) -> dict[str,Any]:
         "timestamp_ms":time.time_ns()//1_000_000,
         "identity_rule":"EXACT_ASSET_HORIZON_FAMILY_SETTLEMENT_HASH_WINDOW",
         "identity_groups":len(duplicate_groups),"pairs_checked":pairs_checked,
+        "explicit_relations_configured":len(relations),
+        "explicit_relations_checked":relations_checked,
+        "explicit_relations_invalid":relations_invalid,
         "opportunities_count":len(opportunities),
         "locked_pnl_capacity":sum(float(x["locked_pnl_capacity"]) for x in opportunities),
         "opportunities":sorted(opportunities,key=lambda x:x["locked_pnl_capacity"],reverse=True)[:100],
@@ -196,6 +343,7 @@ def main() -> int:
     ap.add_argument("--universe",type=Path,required=True)
     ap.add_argument("--model-sha",required=True)
     ap.add_argument("--output",type=Path,required=True)
+    ap.add_argument("--relation-registry",type=Path,default=Path("config/v7_exact_arb_relations.json"))
     ap.add_argument("--clob-url",default="https://clob.polymarket.com")
     ap.add_argument("--reserve-per-share",type=float,default=0.0005)
     ap.add_argument("--minimum-locked-edge-per-share",type=float,default=0.0005)
