@@ -569,8 +569,10 @@ v7_register_optional_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_venue_mode.py \
   --source "$RUN_ROOT/control/venue_mode_source.json" \
+  --account-source "$RUN_ROOT/control/account_execution_mode.json" \
   --output "$PURE_ARB_DIR/venue_mode_status.json" --model-sha "$SHA" \
-  --paper-counterfactual-mode NORMAL --maximum-age-ms 5000 --interval-ms 1000 \
+  --paper-counterfactual-mode NORMAL --paper-account-counterfactual OPEN \
+  --maximum-age-ms 5000 --interval-ms 1000 \
   >> "$PURE_ARB_DIR/venue_mode.log" 2>&1 &
 v7_register_optional_child "$!"
 
