@@ -44,9 +44,15 @@ constexpr double kMicrounitsPerShare = 1'000'000.0;
 // Bounded rolling window: diagnostics only; never grows the hot-path heap.
 constexpr std::size_t kPureArbLatencySamples = 4096;
 constexpr std::size_t kPureArbOutputCapacity = 4096;
-constexpr std::size_t kPureArbDeepCapacity = 64;
+constexpr std::size_t kPureArbDeepCapacity = 256;
 constexpr std::array<double, 7> kPureArbReserveArms{
     0.0, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005
+};
+// Sparse event-time deep evidence around each new positive-arbitrage episode.
+// It preserves causal full-depth arrival/unwind reconstruction without writing
+// a 1024-level book on every WebSocket mutation.
+constexpr std::array<std::int64_t, 16> kPureArbDeepEvidenceArmsMs{
+    0, 1, 2, 5, 10, 25, 50, 100, 200, 250, 275, 300, 400, 500, 750, 1000
 };
 
 std::atomic<bool> g_stop{false};
@@ -553,6 +559,9 @@ struct PureArbDeepEvidence {
     std::uint64_t connection_epoch = 0;
     std::int64_t receive_wall_ms = 0;
     std::int64_t trigger_receive_monotonic_ns = 0;
+    std::int64_t capture_origin_wall_ms = 0;
+    std::uint8_t evaluate_candidate = 0;
+    std::array<std::uint8_t, 7> reserved{};
     pm::v7::BookDeepSnapshot yes{};
     pm::v7::BookDeepSnapshot no{};
 };
@@ -749,6 +758,8 @@ public:
         pure_arb_markets_.resize(max_market_handle + 1);
         pure_arb_pair_by_handle_.resize(max_handle + 1);
         pure_arb_deep_trigger_active_.resize(max_market_handle + 1, 0);
+        pure_arb_deep_capture_origin_wall_ms_.resize(max_market_handle + 1, 0);
+        pure_arb_deep_capture_next_arm_.resize(max_market_handle + 1, 0);
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
         for (const auto& token : tokens_) {
             auto& market = pure_arb_markets_[token.market_handle];
@@ -812,31 +823,68 @@ public:
         }
         const auto binding = pure_arb_pair_by_handle_[event.instrument_handle];
         if (binding.market_handle == 0 || binding.yes_handle == 0 || binding.no_handle == 0
-            || binding.market_handle >= pure_arb_deep_trigger_active_.size()) {
+            || binding.market_handle >= pure_arb_deep_trigger_active_.size()
+            || binding.market_handle >= pure_arb_deep_capture_origin_wall_ms_.size()
+            || binding.market_handle >= pure_arb_deep_capture_next_arm_.size()) {
             return;
         }
         const auto yes_hot = decoder_->snapshot(binding.yes_handle);
         const auto no_hot = decoder_->snapshot(binding.no_handle);
         if (yes_hot.valid == 0 || no_hot.valid == 0
             || yes_hot.lineage_continuous == 0 || no_hot.lineage_continuous == 0) {
-            pure_arb_deep_trigger_active_[binding.market_handle] = 0;
             return;
         }
+
         const double raw_buy = 1.0 - e4_price(yes_hot.best_ask_e4) - e4_price(no_hot.best_ask_e4);
         const double raw_sell = e4_price(yes_hot.best_bid_e4) + e4_price(no_hot.best_bid_e4) - 1.0;
         const bool candidate = raw_buy > pure_arb_reserve_per_share_ + 1e-12
             || raw_sell > pure_arb_reserve_per_share_ + 1e-12;
-        if (!candidate) {
-            pure_arb_deep_trigger_active_[binding.market_handle] = 0;
+
+        auto& episode_active = pure_arb_deep_trigger_active_[binding.market_handle];
+        auto& capture_origin = pure_arb_deep_capture_origin_wall_ms_[binding.market_handle];
+        auto& next_arm = pure_arb_deep_capture_next_arm_[binding.market_handle];
+
+        bool evaluate_candidate = false;
+        if (candidate && episode_active == 0) {
+            // A new economic episode starts a bounded deep-evidence window.
+            episode_active = 1;
+            capture_origin = receive.wall_ms;
+            next_arm = 0;
+            evaluate_candidate = true;
+            ++pure_arb_deep_candidates_;
+        } else if (!candidate) {
+            // End the economic episode, but keep its deep evidence capture alive
+            // through the final configured arrival/unwind arm.
+            episode_active = 0;
+        }
+
+        if (capture_origin <= 0 || receive.wall_ms < capture_origin) return;
+        const auto elapsed_ms = receive.wall_ms - capture_origin;
+        if (elapsed_ms > kPureArbDeepEvidenceArmsMs.back() + 100) {
+            capture_origin = 0;
+            next_arm = 0;
             return;
         }
-        if (pure_arb_deep_trigger_active_[binding.market_handle] != 0) return;
+        if (next_arm >= kPureArbDeepEvidenceArmsMs.size()
+            || elapsed_ms < kPureArbDeepEvidenceArmsMs[next_arm]) {
+            return;
+        }
+
+        // One actual market event is sufficient for every scheduled arm that
+        // elapsed since the previous event; there was no newer causal state
+        // before this receive timestamp.
+        while (next_arm < kPureArbDeepEvidenceArmsMs.size()
+               && elapsed_ms >= kPureArbDeepEvidenceArmsMs[next_arm]) {
+            ++next_arm;
+        }
 
         PureArbDeepEvidence deep{};
         deep.market_handle = binding.market_handle;
         deep.connection_epoch = connection_epoch_.load(std::memory_order_relaxed);
         deep.receive_wall_ms = receive.wall_ms;
         deep.trigger_receive_monotonic_ns = receive.monotonic_ns;
+        deep.capture_origin_wall_ms = capture_origin;
+        deep.evaluate_candidate = evaluate_candidate ? 1 : 0;
         deep.yes = decoder_->deep_snapshot(binding.yes_handle);
         deep.no = decoder_->deep_snapshot(binding.no_handle);
         if (deep.yes.valid == 0 || deep.no.valid == 0
@@ -849,8 +897,6 @@ public:
             ++pure_arb_deep_queue_drops_;
             return;
         }
-        pure_arb_deep_trigger_active_[binding.market_handle] = 1;
-        ++pure_arb_deep_candidates_;
     }
 
     void on_frame(std::string_view payload, const pm::fast::FeedReceiveStamp& receive) {
@@ -997,7 +1043,6 @@ public:
         connection_epoch_.fetch_add(1, std::memory_order_relaxed);
         reconnects_.fetch_add(1, std::memory_order_relaxed);
         reset_pure_arb_state();
-        std::fill(pure_arb_deep_trigger_active_.begin(), pure_arb_deep_trigger_active_.end(), 0);
         for (std::size_t i=1; i<lanes_.size(); ++i) {
             if (lanes_[i]) *lanes_[i] = pm::v7::maker::MakerInstrumentLane(1);
             feature_start_ns_[i] = 0;
@@ -1236,6 +1281,11 @@ public:
             market.buy.active = false;
             market.sell.active = false;
         }
+        std::fill(pure_arb_deep_trigger_active_.begin(), pure_arb_deep_trigger_active_.end(), 0);
+        std::fill(pure_arb_deep_capture_origin_wall_ms_.begin(),
+                  pure_arb_deep_capture_origin_wall_ms_.end(), 0);
+        std::fill(pure_arb_deep_capture_next_arm_.begin(),
+                  pure_arb_deep_capture_next_arm_.end(), 0);
     }
 
     void record_pure_arb_cycle(std::uint64_t market_handle,
@@ -1561,6 +1611,8 @@ public:
             {"observer_session_id", session_id_},
             {"connection_epoch", row.connection_epoch},
             {"receive_wall_ms", row.receive_wall_ms},
+            {"capture_origin_wall_ms", row.capture_origin_wall_ms},
+            {"candidate_decision_snapshot", row.evaluate_candidate != 0},
             {"market_id", market.market_id},
             {"yes_token", by_handle_[market.yes_handle]->token_id},
             {"no_token", by_handle_[market.no_handle]->token_id},
@@ -1878,7 +1930,7 @@ public:
         PureArbDeepEvidence deep{};
         while (pure_arb_deep_queue_->try_pop(deep)) {
             write_pure_arb_deep_snapshot(deep);
-            evaluate_pure_arb_deep(deep);
+            if (deep.evaluate_candidate != 0) evaluate_pure_arb_deep(deep);
         }
         const auto now_wall_ms = wall_ms();
         if (wrote && !state_only_ && now_wall_ms - last_evidence_flush_ms_ >= 25) {
@@ -1945,6 +1997,8 @@ public:
         root["state_only"] = state_only_;
         root["pure_arb_paper_enabled"] = pure_arb_paper_;
         root["pure_arb_deep_snapshots_written"] = pure_arb_deep_snapshots_written_;
+        root["pure_arb_deep_evidence_horizon_ms"] = kPureArbDeepEvidenceArmsMs.back();
+        root["pure_arb_deep_evidence_sparse_event_time"] = true;
         root["state_publish_ms"] = state_publish_ms_;
         root["book_event_tape_enabled"] = !state_only_;
         root["compact_label_tape_enabled"] = compact_label_output_.is_open();
@@ -2328,6 +2382,8 @@ private:
     std::uint64_t pure_arb_deep_evaluations_ = 0;
     std::vector<PureArbPairBinding> pure_arb_pair_by_handle_;
     std::vector<std::uint8_t> pure_arb_deep_trigger_active_;
+    std::vector<std::int64_t> pure_arb_deep_capture_origin_wall_ms_;
+    std::vector<std::uint8_t> pure_arb_deep_capture_next_arm_;
     std::vector<pm::v7::BookHotSnapshot> pure_arb_latest_books_;
     std::vector<std::uint64_t> pure_arb_book_epochs_;
     std::vector<std::int64_t> pure_arb_book_receive_wall_ms_;
