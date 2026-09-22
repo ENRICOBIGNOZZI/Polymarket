@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 28,
-  "expected_launcher_child_count": 27,
+  "expected_process_count": 29,
+  "expected_launcher_child_count": 28,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -849,6 +849,32 @@
       "exact_sha_required": true,
       "config_identity_required": true,
       "launcher_log": "research/repricing_book/capital_allocator.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_maker_queue_calibration",
+      "executable": "scripts/v7_maker_queue_calibration.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:pure_arb_maker_shadow",
+        "control/verified_maker_fill_receipts.jsonl"
+      ],
+      "outputs": [
+        "research/repricing_book/maker_queue_calibration.json",
+        "research/repricing_book/maker_queue_calibration.log"
+      ],
+      "dependencies": [
+        "pure_arb_maker_shadow"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/maker_queue_calibration.log",
       "london_deployed": true,
       "runtime_class": "COLLECTOR",
       "authority_overrides": {}
