@@ -1,5 +1,5 @@
 name: V7 tailnet cleanup and mamma Grafana recovery
-# retry-2fa-20260922
+# final-v2-headed-recovery-20260922
 
 on:
   push:
@@ -15,7 +15,7 @@ permissions:
 jobs:
   recover:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
@@ -36,22 +36,37 @@ jobs:
             --input deploy/v7-tailnet-login.envelope.json \
             --output "$RUNNER_TEMP/tailnet-login.json"
           rm -f "$RUNNER_TEMP/deploy-key"
-          python3 - "$RUNNER_TEMP/tailnet-login.json" <<'PY'
+          python3 - "$RUNNER_TEMP/tailnet-login.json" "$GITHUB_SHA" <<'PY'
           import json,sys
-          v=json.load(open(sys.argv[1],encoding='utf-8'))
-          assert v['schema']=='polymarket_v7_tailnet_login_handoff_v1'
+          p=sys.argv[1]
+          v=json.load(open(p,encoding='utf-8'))
+          assert v['schema']=='polymarket_v7_tailnet_login_handoff_v2'
           assert v['purpose']=='TAILNET_CI_QUOTA_RECOVERY'
-          allowed=v['allowed_prefixes']
-          safe={
-              'gh-deploy-','gh-health-','gh-freeze-','gh-inventory-',
-              'gh-mamma-recover-','github-runnervm'
-          }
-          assert isinstance(allowed,list) and allowed
-          assert all(x in safe for x in allowed)
-          assert 1 <= int(v['maximum_deletions']) <= 24
+          assert isinstance(v.get('expected_parent_sha'),str) and len(v['expected_parent_sha'])==40
+          assert 1 <= int(v['maximum_deletions']) <= 120
           assert isinstance(v['email'],str) and '@' in v['email']
           assert isinstance(v['password'],str) and v['password']
+          # Derive the older bounded cleanup payload consumed by the existing
+          # ordinary-Chrome cleanup script. No credential value is printed.
+          derived={
+              'schema':'polymarket_v7_tailnet_login_handoff_v1',
+              'purpose':'TAILNET_CI_QUOTA_RECOVERY',
+              'expected_main_sha':v['expected_parent_sha'],
+              'email':v['email'],
+              'password':v['password'],
+              'allowed_prefixes':[
+                  'gh-deploy-','gh-health-','gh-freeze-','gh-inventory-',
+                  'gh-mamma-recover-','github-runnervm'
+              ],
+              'maximum_deletions':min(int(v['maximum_deletions']),24),
+          }
+          with open(p,'w',encoding='utf-8') as h:
+              json.dump(derived,h)
+          print('TAILNET_V2_TO_BOUNDED_V1_OK=1')
           PY
+          expected="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["expected_main_sha"])' "$RUNNER_TEMP/tailnet-login.json")"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$expected" HEAD
 
       - name: Install browser automation
         run: |
@@ -94,6 +109,7 @@ jobs:
             tail -n 100 "$RUNNER_TEMP/chrome.log" >&2 || true
             exit 1
           fi
+          sed -i 's/timeout_s: int = 420/timeout_s: int = 900/' ops/v7_tailscale_ci_cleanup.py
           python3 ops/v7_tailscale_ci_cleanup.py \
             --credentials "$RUNNER_TEMP/tailnet-login.json" \
             --repository "$GITHUB_REPOSITORY" \
