@@ -755,6 +755,10 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
     if universe.get("book_selection_state") != "READY" or _integer(universe.get("book_selection_contexts")) != 30 or _integer(universe.get("book_selection_tokens")) != 60:
         reasons.append("crypto_book_data_coverage_incomplete")
     book_data = snapshot.get("book_data") or {}
+    expected_subscribed_markets = max(
+        30, _integer(universe.get("book_selection_subscribed_markets"), 30))
+    expected_subscribed_tokens = max(
+        60, _integer(universe.get("book_selection_subscribed_tokens"), 60))
     if (
         book_data.get("schema") != "polymarket_v7_maker_fillability_ws_status_v1"
         or book_data.get("model_sha") != snapshot.get("sha")
@@ -762,10 +766,10 @@ def health_reasons(snapshot: dict[str, Any], *, max_runtime_age: int = 180, max_
         or book_data.get("authenticated_execution") is not False
         or book_data.get("real_order_submission") is not False
         or book_data.get("state") != "running"
-        or _integer(book_data.get("subscribed_markets")) != 30
-        or _integer(book_data.get("subscribed_tokens")) != 60
-        or _integer(book_data.get("observed_markets")) != 30
-        or _integer(book_data.get("observed_tokens")) != 60
+        or _integer(book_data.get("subscribed_markets")) != expected_subscribed_markets
+        or _integer(book_data.get("subscribed_tokens")) != expected_subscribed_tokens
+        or _integer(book_data.get("observed_markets")) != expected_subscribed_markets
+        or _integer(book_data.get("observed_tokens")) != expected_subscribed_tokens
         or book_data.get("subscription_coverage_complete") is not True
         or book_data.get("evidence_complete") is not True
         or _integer(book_data.get("dropped_events")) != 0
