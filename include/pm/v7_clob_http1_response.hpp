@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <span>
 #include <string_view>
 
@@ -31,6 +33,14 @@ public:
     [[nodiscard]] int status_code() const noexcept { return status_code_; }
     [[nodiscard]] bool connection_close() const noexcept { return connection_close_; }
     [[nodiscard]] int retry_after_seconds() const noexcept { return retry_after_seconds_; }
+    [[nodiscard]] double rate_limit_remaining() const noexcept { return rate_limit_remaining_; }
+    [[nodiscard]] std::int64_t rate_limit_reset_unix_seconds() const noexcept {
+        return rate_limit_reset_unix_seconds_;
+    }
+    [[nodiscard]] std::string_view rate_limit_tier() const noexcept {
+        return {rate_limit_tier_.data(), rate_limit_tier_size_};
+    }
+    [[nodiscard]] bool rate_limit_warning() const noexcept { return rate_limit_warning_; }
     [[nodiscard]] std::size_t message_size() const noexcept { return message_size_; }
     [[nodiscard]] std::string_view body() const noexcept;
 
@@ -47,6 +57,11 @@ private:
     bool headers_parsed_ = false;
     bool connection_close_ = false;
     int retry_after_seconds_ = 0;
+    double rate_limit_remaining_ = std::numeric_limits<double>::quiet_NaN();
+    std::int64_t rate_limit_reset_unix_seconds_ = 0;
+    std::array<char, 16> rate_limit_tier_{};
+    std::uint8_t rate_limit_tier_size_ = 0;
+    bool rate_limit_warning_ = false;
     Http1ResponseState state_ = Http1ResponseState::Receiving;
 };
 
