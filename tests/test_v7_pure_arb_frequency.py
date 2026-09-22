@@ -98,6 +98,9 @@ def test_cpp_hot_path_contract_contains_new_frequency_guards():
         "sell_reserve_positive",
         "pure_arb_receive_to_decision_limit_ns_",
         "last_executable_shares_l10",
+        "last_executable_shares_deep",
+        "LOCAL_DEEP_BOOK_POSITIVE_MARGINAL_EDGE",
+        "pure_arb_deep_queue_",
         "buy_cycles_recorded",
         "sell_cycles_recorded",
     ]
@@ -118,11 +121,14 @@ def test_runtime_wires_all_zero_authority_frequency_workers_once():
         "v7_cross_market_exact_arb_shadow.py",
         "v7_pure_arb_arrival_survival_shadow.py",
         "v7_pure_arb_deep_sizing_shadow.py",
+        "v7_pure_arb_venue_mode.py",
+        "v7_pure_arb_exchange_execution_shadow.py",
+        "v7_pure_arb_capital_allocator.py",
     ]
     for worker in workers:
         assert loop.count(worker)==1,worker
     assert "--pure-arb-prefunded-complete-set-shares 1000" in loop
-    assert "v7_assert_registered_child_count 15" in loop
+    assert "v7_assert_registered_child_count 18" in loop
 
 
 
@@ -135,7 +141,7 @@ def test_rollover_policy_preloads_slow_contexts_inside_final_five_minutes():
 
 def test_arrival_shadow_defines_delay_and_reserve_counterfactuals():
     source=(ROOT/"scripts/v7_pure_arb_arrival_survival_shadow.py").read_text(encoding="utf-8")
-    assert "1,2,5,10,25,50" in source
+    assert "1,2,5,10,25,50,100,200,250,275,300,400,500,750,1000" in source
     assert "reserve_curve" in source
     assert "SURVIVED_EXECUTABLE" in source
     assert "captured_pnl_l1" in source
