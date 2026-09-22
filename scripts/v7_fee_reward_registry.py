@@ -7,6 +7,7 @@ The registry is evidence and policy, never an execution or accounting writer.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from datetime import datetime, timezone
 import json
 import math
@@ -14,10 +15,14 @@ import os
 from pathlib import Path
 import re
 import time
+import urllib.parse
+import urllib.request
 from typing import Any
 
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+WALLET_REWARD_AUDIT_SCHEMA = "polymarket_v7_wallet_reward_audit_v1"
 
 
 def finite(value: Any, default: float = math.nan) -> float:
@@ -41,6 +46,107 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
     temporary = path.with_name(path.name + f".tmp.{os.getpid()}")
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+
+def _wallet_hash(user: str) -> str:
+    return hashlib.sha256(user.lower().encode("ascii")).hexdigest()
+
+
+def parse_wallet_reward_audit(payload: dict[str, Any], user: str, now_ms: int) -> dict[str, Any]:
+    base = {
+        "schema": WALLET_REWARD_AUDIT_SCHEMA,
+        "configured": bool(user),
+        "verified": False,
+        "source": "polymarket_data_api_v2_user_pnl",
+        "observed_at_ms": now_ms,
+        "wallet_sha256": _wallet_hash(user) if EVM_ADDRESS.fullmatch(user) else None,
+        "allocatable_to_market": False,
+        "allocation_reason": "WALLET_LEVEL_NOT_MARKET_ATTRIBUTABLE",
+        "maker_rebate_cumulative_pusd": 0.0,
+        "reward_income_cumulative_pusd": 0.0,
+        "sponsored_income_cumulative_pusd": 0.0,
+        "maker_rebate_delta_pusd": 0.0,
+        "reward_income_delta_pusd": 0.0,
+        "sponsored_income_delta_pusd": 0.0,
+        "delta_seconds": None,
+    }
+    if not EVM_ADDRESS.fullmatch(user):
+        base["reason"] = "WALLET_UNCONFIGURED_OR_INVALID"
+        return base
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or str(data.get("proxy_wallet") or "").lower() != user.lower():
+        base["reason"] = "DATA_IDENTITY_MISMATCH"
+        return base
+    points = data.get("points")
+    if not isinstance(points, list):
+        base["reason"] = "POINTS_MISSING"
+        return base
+
+    clean: list[dict[str, float]] = []
+    for row in points:
+        if not isinstance(row, dict):
+            continue
+        try:
+            timestamp = int(row.get("timestamp") or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if timestamp <= 0:
+            continue
+        maker = finite(row.get("maker_rebate"), 0.0)
+        reward = finite(row.get("reward_income"), 0.0)
+        sponsored = finite(row.get("sponsored_income"), 0.0)
+        if not all(math.isfinite(x) for x in (maker, reward, sponsored)):
+            continue
+        clean.append({
+            "timestamp": float(timestamp),
+            "maker_rebate": maker,
+            "reward_income": reward,
+            "sponsored_income": sponsored,
+        })
+    clean.sort(key=lambda row: row["timestamp"])
+    if not clean:
+        base["reason"] = "NO_PNL_POINTS"
+        return base
+
+    latest = clean[-1]
+    previous = clean[-2] if len(clean) >= 2 else latest
+    delta_seconds = max(0, int(latest["timestamp"] - previous["timestamp"]))
+    base.update({
+        "verified": True,
+        "reason": None,
+        "source_fidelity": str(data.get("source_fidelity") or ""),
+        "interval": str(data.get("interval") or ""),
+        "fidelity": str(data.get("fidelity") or ""),
+        "source_timestamp_s": int(latest["timestamp"]),
+        "maker_rebate_cumulative_pusd": latest["maker_rebate"],
+        "reward_income_cumulative_pusd": latest["reward_income"],
+        "sponsored_income_cumulative_pusd": latest["sponsored_income"],
+        "maker_rebate_delta_pusd": latest["maker_rebate"] - previous["maker_rebate"],
+        "reward_income_delta_pusd": latest["reward_income"] - previous["reward_income"],
+        "sponsored_income_delta_pusd": latest["sponsored_income"] - previous["sponsored_income"],
+        "delta_seconds": delta_seconds,
+    })
+    return base
+
+
+def fetch_wallet_reward_audit(
+    base_url: str, user: str, *, now_ms: int, timeout_seconds: float = 3.0,
+) -> dict[str, Any]:
+    if not EVM_ADDRESS.fullmatch(user):
+        return parse_wallet_reward_audit({}, user, now_ms)
+    query = urllib.parse.urlencode({"user": user, "interval": "1d", "fidelity": "1h"})
+    url = base_url.rstrip("/") + "/v2/user-pnl?" + query
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/json", "User-Agent": "polymarket-v7-reward-audit/1"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            value = json.load(response)
+        return parse_wallet_reward_audit(value if isinstance(value, dict) else {}, user, now_ms)
+    except Exception as exc:
+        result = parse_wallet_reward_audit({}, user, now_ms)
+        result["reason"] = "DATA_API_" + type(exc).__name__.upper()
+        return result
 
 
 def _fee(market: dict[str, Any], now_ms: int, ttl_ms: int) -> dict[str, Any]:
@@ -185,14 +291,21 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-sha", required=True)
     parser.add_argument("--exchange-semantics", type=Path)
+    parser.add_argument("--data-api-url", default="https://data-api.polymarket.com")
+    parser.add_argument("--wallet-reward-timeout-seconds", type=float, default=3.0)
     parser.add_argument("--interval", type=float, default=0.0)
     args = parser.parse_args()
     while True:
         try:
+            now_ms = int(time.time() * 1000)
             result = build(
                 load(args.universe), load(args.rewards), model_sha=args.model_sha,
-                now_ms=int(time.time() * 1000),
+                now_ms=now_ms,
                 exchange_semantics=load(args.exchange_semantics) if args.exchange_semantics else None)
+            proxy_wallet = str(os.environ.get("POLYMARKET_PROXY_WALLET") or "").strip()
+            result["wallet_reward_audit"] = fetch_wallet_reward_audit(
+                args.data_api_url, proxy_wallet, now_ms=now_ms,
+                timeout_seconds=max(0.25, min(10.0, args.wallet_reward_timeout_seconds)))
             atomic_json(args.output, result)
         except Exception as exc:
             atomic_json(args.output, {
