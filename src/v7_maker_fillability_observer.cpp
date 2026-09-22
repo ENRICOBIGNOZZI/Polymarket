@@ -1156,7 +1156,7 @@ public:
         ++pure_arb_funnel_.epoch_synced;
 
         if (yes_wall <= 0 || no_wall <= 0
-            || std::llabs(yes_wall - no_wall) > pure_arb_max_leg_skew_ms_) {
+            || (yes_wall >= no_wall ? yes_wall - no_wall : no_wall - yes_wall) > pure_arb_max_leg_skew_ms_) {
             market.buy.active = false;
             market.sell.active = false;
             return;
