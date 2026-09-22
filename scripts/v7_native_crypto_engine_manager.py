@@ -786,6 +786,10 @@ class Manager:
             "taker_minimum_tte_ns": self.args.minimum_tte_ns,
             "taker_maximum_tte_ns": self.args.maximum_tte_ns,
             "maker_share_cap_microunits": self.args.maker_share_cap_microunits,
+            "pure_arb_native_shadow": True,
+            "pure_arb_reserve_per_share": 0.0005,
+            "pure_arb_max_leg_skew_ns": 100_000_000,
+            "pure_arb_execution_authority": False,
             "launch_retry_contexts": sorted(self.launch_retry_attempts),
             "launch_retry_count": len(self.launch_retry_attempts),
             "launch_retry_attempts": dict(sorted(self.launch_retry_attempts.items())),
@@ -969,6 +973,9 @@ class Manager:
             "--max-single-order-microdollars", str(max_order),
             "--taker-fee-rate", repr(fee_rate),
             "--taker-fee-exponent", repr(fee_exponent),
+            "--pure-arb-native-shadow",
+            "--pure-arb-reserve-per-share", "0.0005",
+            "--pure-arb-max-leg-skew-ns", "100000000",
             "--duration-seconds", "0",
         ]
         command.extend(["--slow-context", str(context_path(self.run_root, str(market["market_id"])))])
