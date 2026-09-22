@@ -8,12 +8,13 @@ using namespace pm::v7;
 namespace {
 ExecutionPlan plan(std::uint64_t id, StrategyId strategy, IntentType type,
                    Side side, ExecutionPolicyId policy, std::int64_t px,
-                   std::int64_t qty = 2'000'000) {
+                   std::int64_t qty = 2'000'000,
+                   std::uint64_t instrument = 11) {
     ExecutionPlan out{};
     out.intent.intent_id = id;
     out.intent.market_handle = 7;
     out.intent.event_handle = 8;
-    out.intent.instrument_handle = 11;
+    out.intent.instrument_handle = instrument;
     out.intent.state_version = 9;
     out.intent.decision_monotonic_ns = 1'000;
     out.intent.exchange_event_ns = 900;
@@ -22,7 +23,9 @@ ExecutionPlan plan(std::uint64_t id, StrategyId strategy, IntentType type,
     out.intent.strategy_id = strategy;
     out.intent.type = type;
     out.intent.side = side;
-    out.intent.urgency = policy == ExecutionPolicyId::AggressiveTaker ? Urgency::Aggressive : Urgency::Passive;
+    out.intent.urgency = (policy == ExecutionPolicyId::AggressiveTaker
+        || policy == ExecutionPolicyId::PureArbFok)
+        ? Urgency::Aggressive : Urgency::Passive;
     out.intent.purpose = IntentPurpose::Alpha;
     out.intent.passive = policy == ExecutionPolicyId::PassiveMaker;
     out.intent.post_only = out.intent.passive;
@@ -131,6 +134,82 @@ void test_maker_fill_after_queue_depletion() {
     assert(filled.records[0].order_state == OrderState::Filled);
     assert(authority.active_orders() == 0);
     assert(authority.inventory_snapshot(11).total_microunits == 2'000'000);
+}
+
+void test_pure_arb_fok_pair_is_two_or_zero() {
+    NativeSettlementAuthority authority(limits());
+    assert(authority.sync_inventory(7, 11, 0, 0, 1));
+    assert(authority.sync_inventory(7, 12, 0, 0, 1));
+    NativeSettlementOmsEndpoint endpoint(authority);
+    NativePaperExecutionAdapter paper(endpoint);
+
+    auto yes_plan = plan(70, StrategyId::HardArbitrage,
+        IntentType::TargetPosition, Side::Buy,
+        ExecutionPolicyId::PureArbFok, 41, 2'000'000, 11);
+    auto no_plan = plan(71, StrategyId::HardArbitrage,
+        IntentType::TargetPosition, Side::Buy,
+        ExecutionPolicyId::PureArbFok, 50, 2'000'000, 12);
+    const auto pair = authority.submit_pair(
+        yes_plan, no_plan, 1'000'000, 2'000);
+    assert(pair.accepted);
+
+    auto yes_book = book();
+    auto no_book = book();
+    no_book.best_bid_e4 = 4900;
+    no_book.best_ask_e4 = 5000;
+    no_book.bid_levels[0] = {4900, 5'000'000};
+    no_book.ask_levels[0] = {5000, 5'000'000};
+
+    const auto result = paper.submit_pair_fok(
+        pair.yes.tx.command, yes_book,
+        pair.no.tx.command, no_book, 2'100);
+    assert(result.accepted);
+    assert(result.paired_fill);
+    assert(!result.one_leg_fill);
+    assert(result.yes.filled_microunits == 2'000'000);
+    assert(result.no.filled_microunits == 2'000'000);
+    assert(authority.active_orders() == 0);
+    assert(authority.inventory_snapshot(11).total_microunits == 2'000'000);
+    assert(authority.inventory_snapshot(12).total_microunits == 2'000'000);
+}
+
+void test_pure_arb_fok_pair_insufficient_depth_fills_neither_leg() {
+    NativeSettlementAuthority authority(limits());
+    assert(authority.sync_inventory(7, 11, 0, 0, 1));
+    assert(authority.sync_inventory(7, 12, 0, 0, 1));
+    NativeSettlementOmsEndpoint endpoint(authority);
+    NativePaperExecutionAdapter paper(endpoint);
+
+    auto yes_plan = plan(72, StrategyId::HardArbitrage,
+        IntentType::TargetPosition, Side::Buy,
+        ExecutionPolicyId::PureArbFok, 41, 2'000'000, 11);
+    auto no_plan = plan(73, StrategyId::HardArbitrage,
+        IntentType::TargetPosition, Side::Buy,
+        ExecutionPolicyId::PureArbFok, 50, 2'000'000, 12);
+    const auto pair = authority.submit_pair(
+        yes_plan, no_plan, 1'000'000, 2'000);
+    assert(pair.accepted);
+
+    auto yes_book = book();
+    auto no_book = book();
+    no_book.best_bid_e4 = 4900;
+    no_book.best_ask_e4 = 5000;
+    no_book.best_ask_microunits = 1'000'000;
+    no_book.bid_levels[0] = {4900, 5'000'000};
+    no_book.ask_levels[0] = {5000, 1'000'000};
+
+    const auto result = paper.submit_pair_fok(
+        pair.yes.tx.command, yes_book,
+        pair.no.tx.command, no_book, 2'100);
+    assert(!result.accepted);
+    assert(!result.paired_fill);
+    assert(!result.one_leg_fill);
+    assert(result.yes.filled_microunits == 0);
+    assert(result.no.filled_microunits == 0);
+    assert(authority.active_orders() == 0);
+    assert(authority.inventory_snapshot(11).total_microunits == 0);
+    assert(authority.inventory_snapshot(12).total_microunits == 0);
+    assert(authority.capital_snapshot().order_reserved_microdollars == 0);
 }
 
 void test_mutated_command_cannot_paper_fill() {
@@ -286,6 +365,8 @@ int main() {
     test_price_improvement_fills_at_arrival_price_and_releases_limit_reserve();
     test_unknown_delay_and_overflow_never_make_a_fill();
     test_taker_fills_common_authority();
+    test_pure_arb_fok_pair_is_two_or_zero();
+    test_pure_arb_fok_pair_insufficient_depth_fills_neither_leg();
     test_maker_queue_and_cancel_latency();
     test_maker_fill_after_queue_depletion();
     test_mutated_command_cannot_paper_fill();
