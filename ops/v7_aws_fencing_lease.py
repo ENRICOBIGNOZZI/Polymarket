@@ -5,11 +5,16 @@ Cold control-plane utility. It never starts execution. The runtime may consume
 a fresh receipt only after the deployment creates the configured DynamoDB table.
 """
 from __future__ import annotations
-import argparse,json,subprocess,time
+import argparse,json,signal,subprocess,time
 from pathlib import Path
 from typing import Any
 
 SCHEMA="polymarket_v7_aws_fencing_lease_v1"
+_STOP=False
+
+def _stop(*_):
+    global _STOP
+    _STOP=True
 
 def aws(args:list[str],region:str)->dict[str,Any]:
     proc=subprocess.run(["aws","--region",region,*args],check=False,capture_output=True,text=True,timeout=10)
@@ -52,6 +57,17 @@ def renew(table:str,lease_id:str,owner:str,token:int,region:str,lease_ms:int)->d
     if observed!=until:raise RuntimeError("invalid_renew_receipt")
     return {"fencing_token":token,"lease_until_ms":until,"renewed_at_ms":now}
 
+def release(table:str,lease_id:str,owner:str,token:int,region:str)->None:
+    now=time.time_ns()//1_000_000
+    values=json.dumps({
+        ":owner":{"S":owner},":token":{"N":str(token)},":now":{"N":str(now)}
+    },separators=(",",":"))
+    aws(["dynamodb","update-item","--table-name",table,
+         "--key",json.dumps({"lease_id":{"S":lease_id}},separators=(",",":")),
+         "--update-expression","SET lease_until_ms=:now",
+         "--condition-expression","owner_id=:owner AND fencing_token=:token",
+         "--expression-attribute-values",values,"--return-values","NONE"],region)
+
 def atomic(path:Path,value:dict[str,Any])->None:
     path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix(path.suffix+".tmp")
     tmp.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8");tmp.replace(path)
@@ -69,18 +85,27 @@ def main()->int:
                          "model_sha":a.model_sha,"owner":a.owner,"error":type(exc).__name__})
         return 2
     token=r["fencing_token"]
-    while True:
-        atomic(a.output,{"schema":SCHEMA,"state":"LEASE_HELD","paper_only":True,
-                         "authenticated_execution":False,"real_order_submission":False,
-                         "model_sha":a.model_sha,"run_id":a.run_id,"owner":a.owner,
-                         "region":a.region,**r})
-        time.sleep(a.renew_ms/1000.0)
-        try:r=renew(a.table,a.lease_id,a.owner,token,a.region,a.lease_ms)
-        except Exception as exc:
-            atomic(a.output,{"schema":SCHEMA,"state":"LEASE_LOST","paper_only":True,
+    signal.signal(signal.SIGTERM,_stop);signal.signal(signal.SIGINT,_stop)
+    try:
+        while not _STOP:
+            atomic(a.output,{"schema":SCHEMA,"state":"LEASE_HELD","paper_only":True,
                              "authenticated_execution":False,"real_order_submission":False,
                              "model_sha":a.model_sha,"run_id":a.run_id,"owner":a.owner,
-                             "fencing_token":token,"error":type(exc).__name__})
-            return 3
+                             "region":a.region,**r})
+            deadline=time.monotonic()+a.renew_ms/1000.0
+            while not _STOP and time.monotonic()<deadline:
+                time.sleep(min(.25,max(0.0,deadline-time.monotonic())))
+            if _STOP:break
+            try:r=renew(a.table,a.lease_id,a.owner,token,a.region,a.lease_ms)
+            except Exception as exc:
+                atomic(a.output,{"schema":SCHEMA,"state":"LEASE_LOST","paper_only":True,
+                                 "authenticated_execution":False,"real_order_submission":False,
+                                 "model_sha":a.model_sha,"run_id":a.run_id,"owner":a.owner,
+                                 "fencing_token":token,"error":type(exc).__name__})
+                return 3
+    finally:
+        try:release(a.table,a.lease_id,a.owner,token,a.region)
+        except Exception:pass
+    return 0
 
 if __name__=="__main__":raise SystemExit(main())
