@@ -205,6 +205,15 @@ add_executable(polymarket_v7_external_venue_runtime src/v7_external_venue_runtim
 target_link_libraries(polymarket_v7_external_venue_runtime PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_external_venue_runtime PRIVATE -Wall -Wextra -Wpedantic)
 
+# Public transport-only London latency probe. It never submits orders and is
+# safe to include in the minimal London runtime bundle.
+add_executable(polymarket_v7_public_paired_tls_probe
+  src/v7_public_paired_tls_probe.cpp)
+target_link_libraries(polymarket_v7_public_paired_tls_probe PRIVATE
+  pm_v7_clob_native Threads::Threads)
+target_compile_options(polymarket_v7_public_paired_tls_probe PRIVATE
+  -Wall -Wextra -Wpedantic)
+
 # One canonical London PAPER native executable; no parallel candidate runtime.
 add_executable(polymarket_v7_crypto_settlement_engine
   src/v7_crypto_settlement_engine.cpp)
@@ -316,6 +325,8 @@ if(BUILD_TESTING)
   target_compile_options(pm_v7_coinbase_l2_observer_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_coinbase_l2_observer_tests COMMAND pm_v7_coinbase_l2_observer_tests)
 
+  add_test(NAME pm_v7_public_paired_tls_probe_validate
+    COMMAND polymarket_v7_public_paired_tls_probe --validate-only)
   add_test(NAME pm_v7_crypto_settlement_native_candidate_validate
     COMMAND polymarket_v7_crypto_settlement_engine --validate-only)
   add_test(NAME pm_v7_pure_arb_multi_runtime_validate
