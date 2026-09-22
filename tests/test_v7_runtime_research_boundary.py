@@ -18,7 +18,7 @@ def test_runtime_and_research_process_manifests_are_disjoint():
     assert runtime['expected_process_count']==23 and runtime['expected_launcher_child_count']==22
     assert all(p.get('london_deployed') is True and p.get('runtime_class') in {'HOT_PATH','COLLECTOR','CONTROL'} for p in runtime['processes'])
     pure=[p for p in runtime['processes'] if str(p.get('id','')).startswith('pure_arb_') or p.get('id')=='venue_mode_source']
-    assert len(pure)==12
+    assert len(pure)==13
     for p in pure:
         profile=runtime['profiles'][p['profile']]
         flags=dict(profile['authority_flags']); flags.update(p.get('authority_overrides') or {})
