@@ -675,6 +675,15 @@ class Manager:
             "accepted_decision_observations": sum(
                 int(row.get("accepted_decision_observations") or 0) for row in rows
             ),
+            "pure_arb_shadow_observations": sum(
+                int(row.get("pure_arb_shadow_observations") or 0) for row in rows
+            ),
+            "pure_arb_shadow_buy_cycles": sum(
+                int(row.get("pure_arb_shadow_buy_cycles") or 0) for row in rows
+            ),
+            "pure_arb_shadow_sell_cycles": sum(
+                int(row.get("pure_arb_shadow_sell_cycles") or 0) for row in rows
+            ),
             "rejected_decision_observations": sum(
                 int(row.get("rejected_decision_observations") or 0) for row in rows
             ),
@@ -827,6 +836,15 @@ class Manager:
             ),
             "native_rejected_decision_observations": int(
                 evidence.get("rejected_decision_observations") or 0
+            ),
+            "native_pure_arb_shadow_observations": int(
+                evidence.get("pure_arb_shadow_observations") or 0
+            ),
+            "native_pure_arb_shadow_buy_cycles": int(
+                evidence.get("pure_arb_shadow_buy_cycles") or 0
+            ),
+            "native_pure_arb_shadow_sell_cycles": int(
+                evidence.get("pure_arb_shadow_sell_cycles") or 0
             ),
             "native_decision_reason_counts": evidence.get("decision_reason_counts") or {},
             "native_context_decision_reason_counts":
