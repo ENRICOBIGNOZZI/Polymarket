@@ -24,17 +24,25 @@ def launcher_logs(text: str) -> list[str]:
     lines = text.splitlines()
     previous = 0
     logs: list[str] = []
+    aliases: dict[str, str] = {}
+    for line in lines:
+        match = re.match(r'^([A-Z][A-Z0-9_]*)="\\$RUN_ROOT(?:/([^"]*))?"$', line.strip())
+        if match:
+            aliases[match.group(1)] = (match.group(2) or "").strip("/")
     for index, line in enumerate(lines):
         if ('pids+=("$!")' not in line and 'v7_register_child "$!"' not in line and 'v7_register_optional_child "$!"' not in line):
             continue
         segment = "\n".join(lines[previous:index + 1])
         previous = index + 1
-        found = re.findall(r"\$RUN_ROOT/([A-Za-z0-9_./${}-]+\.log)", segment)
+        normalized = segment
+        for alias_name, prefix in aliases.items():
+            replacement = f"$RUN_ROOT/{prefix}" if prefix else "$RUN_ROOT"
+            normalized = normalized.replace(f"${alias_name}", replacement)
+        found = re.findall(r"\$RUN_ROOT/([A-Za-z0-9_./${}-]+\.log)", normalized)
         if not found:
             raise ProcessManifestError(f"launcher_child_log_missing:{index + 1}")
         logs.append(found[-1])
     return logs
-
 
 def resolve(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     if (

@@ -12,7 +12,6 @@ EXPECTED_DASHBOARD_KEYS = (
     "external_fair_dashboard",
     "latency_dashboard",
     "multi_crypto_dashboard",
-    "pure_arb_dashboard",
 )
 FORBIDDEN_VISIBLE = (
     "two-engine",

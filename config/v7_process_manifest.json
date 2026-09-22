@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 10,
-  "expected_launcher_child_count": 9,
+  "expected_process_count": 22,
+  "expected_launcher_child_count": 21,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -409,6 +409,327 @@
       "launcher_log": "canonical_economics.log",
       "london_deployed": true,
       "runtime_class": "CONTROL"
+    },
+    {
+      "id": "pure_arb_oracle_hub",
+      "executable": "scripts/v7_multi_crypto_oracle_hub.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:crypto_universe"
+      ],
+      "outputs": [
+        "research/repricing_book/oracle_hub_status.json",
+        "research/repricing_book/oracle_hub.log"
+      ],
+      "dependencies": [
+        "crypto_universe"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/oracle_hub.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_postfix",
+      "executable": "scripts/v7_settlement_source_arb_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:pure_arb_oracle_hub",
+        "process:pm_book_observer"
+      ],
+      "outputs": [
+        "research/repricing_book/settlement_source_arb_cycles.jsonl",
+        "research/repricing_book/settlement_source_arb_status.json",
+        "research/repricing_book/settlement_source_arb.log"
+      ],
+      "dependencies": [
+        "pure_arb_oracle_hub",
+        "pm_book_observer"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/settlement_source_arb.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_maker_shadow",
+      "executable": "scripts/v7_two_sided_complete_set_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:pm_book_observer"
+      ],
+      "outputs": [
+        "research/repricing_book/two_sided_complete_set_cycles.jsonl",
+        "research/repricing_book/two_sided_complete_set_status.json",
+        "research/repricing_book/two_sided_complete_set.log"
+      ],
+      "dependencies": [
+        "pm_book_observer"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/two_sided_complete_set.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_cross_market",
+      "executable": "scripts/v7_cross_market_exact_arb_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:crypto_universe"
+      ],
+      "outputs": [
+        "research/repricing_book/cross_market_exact_arb_status.json",
+        "research/repricing_book/cross_market_exact_arb.log"
+      ],
+      "dependencies": [
+        "crypto_universe"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/cross_market_exact_arb.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_arrival_survival",
+      "executable": "scripts/v7_pure_arb_arrival_survival_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:pm_book_observer",
+        "process:native_engine_manager"
+      ],
+      "outputs": [
+        "research/repricing_book/pure_arb_arrival_survival_cycles.jsonl",
+        "research/repricing_book/pure_arb_arrival_survival_status.json",
+        "research/repricing_book/pure_arb_arrival_survival.log"
+      ],
+      "dependencies": [
+        "pm_book_observer",
+        "native_engine_manager"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/pure_arb_arrival_survival.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_deep_sizing",
+      "executable": "scripts/v7_pure_arb_deep_sizing_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:pm_book_observer"
+      ],
+      "outputs": [
+        "research/repricing_book/pure_arb_deep_sizing_cycles.jsonl",
+        "research/repricing_book/pure_arb_deep_sizing_status.json",
+        "research/repricing_book/pure_arb_deep_sizing.log"
+      ],
+      "dependencies": [
+        "pm_book_observer"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/pure_arb_deep_sizing.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "venue_mode_source",
+      "executable": "scripts/v7_polymarket_status_source.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [],
+      "outputs": [
+        "control/venue_mode_source.json",
+        "research/repricing_book/venue_mode_source.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/venue_mode_source.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_venue_mode",
+      "executable": "scripts/v7_pure_arb_venue_mode.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:venue_mode_source"
+      ],
+      "outputs": [
+        "research/repricing_book/venue_mode_status.json",
+        "research/repricing_book/venue_mode.log"
+      ],
+      "dependencies": [
+        "venue_mode_source"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/venue_mode.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_exchange_execution",
+      "executable": "scripts/v7_pure_arb_exchange_execution_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:pm_book_observer",
+        "process:pure_arb_venue_mode",
+        "process:native_engine_manager"
+      ],
+      "outputs": [
+        "research/repricing_book/exchange_execution_cycles.jsonl",
+        "research/repricing_book/exchange_execution_status.json",
+        "research/repricing_book/exchange_execution.log"
+      ],
+      "dependencies": [
+        "pm_book_observer",
+        "pure_arb_venue_mode",
+        "native_engine_manager"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/exchange_execution.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_fee_reward_registry",
+      "executable": "scripts/v7_fee_reward_registry.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:crypto_universe"
+      ],
+      "outputs": [
+        "research/repricing_book/fee_reward_registry.json",
+        "research/repricing_book/fee_reward_registry.log"
+      ],
+      "dependencies": [
+        "crypto_universe"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/fee_reward_registry.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_capital_allocator",
+      "executable": "scripts/v7_pure_arb_capital_allocator.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:pure_arb_exchange_execution",
+        "process:pure_arb_maker_shadow",
+        "process:pure_arb_postfix",
+        "process:pure_arb_cross_market",
+        "process:pure_arb_fee_reward_registry"
+      ],
+      "outputs": [
+        "research/repricing_book/capital_allocator_status.json",
+        "research/repricing_book/capital_allocator.log"
+      ],
+      "dependencies": [
+        "pure_arb_exchange_execution",
+        "pure_arb_maker_shadow",
+        "pure_arb_postfix",
+        "pure_arb_cross_market",
+        "pure_arb_fee_reward_registry"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/capital_allocator.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "pure_arb_maker_policy",
+      "executable": "scripts/v7_pure_arb_maker_policy.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:pure_arb_maker_shadow",
+        "process:pure_arb_capital_allocator",
+        "process:pure_arb_venue_mode"
+      ],
+      "outputs": [
+        "research/repricing_book/maker_policy_status.json",
+        "research/repricing_book/maker_policy.log"
+      ],
+      "dependencies": [
+        "pure_arb_maker_shadow",
+        "pure_arb_capital_allocator",
+        "pure_arb_venue_mode"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/maker_policy.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
     }
   ]
 }
