@@ -181,6 +181,7 @@ summary={
    "pgo_promotion_candidate":candidate(p,b),
  },
  "handoff":handoff["latency_ns"],
+ "direct_decision_queue_depth":0,
  "public_transport":net,
  "host_counters_delta":{
    "softirq":max(0,int(sys.argv[4])-int(sys.argv[3])),
