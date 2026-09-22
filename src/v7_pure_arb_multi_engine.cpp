@@ -106,6 +106,7 @@ std::uint64_t MultiMarketEngine::next_intent_id() noexcept {
 
 void MultiMarketEngine::publish_prefix(
     std::uint64_t client_order_id,
+    std::uint64_t instrument_handle,
     const PureArbExecutionPlan& plan,
     std::int64_t risk_admitted_ns) noexcept {
     if (latency_tape_ == nullptr || client_order_id == 0) return;
@@ -116,6 +117,7 @@ void MultiMarketEngine::publish_prefix(
         event.trace_id = client_order_id;
         event.client_order_id = client_order_id;
         event.market_handle = plan.market_handle;
+        event.instrument_handle = instrument_handle;
         event.timestamp_ns = timestamp;
         event.stage = stage;
         (void)latency_tape_->publish(event);
@@ -212,11 +214,23 @@ MultiMarketDecision MultiMarketEngine::on_market_event(
     out.admitted = 1;
     publish_prefix(
         out.admission.yes.tx.command.client_order_id,
+        out.admission.yes.tx.command.instrument_handle,
         out.plan, out.admission.risk_admitted_monotonic_ns);
     publish_prefix(
         out.admission.no.tx.command.client_order_id,
+        out.admission.no.tx.command.instrument_handle,
         out.plan, out.admission.risk_admitted_monotonic_ns);
     return out;
+}
+
+bool MultiMarketEngine::current_books(
+    std::size_t context_index,
+    BookHotSnapshot& yes,
+    BookHotSnapshot& no) const noexcept {
+    if (!valid_ || context_index >= count_) return false;
+    yes = markets_[context_index].yes;
+    no = markets_[context_index].no;
+    return true;
 }
 
 void MultiMarketEngine::invalidate_all() noexcept {
