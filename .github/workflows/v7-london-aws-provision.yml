@@ -7,6 +7,8 @@ on:
       - CMakeLists.txt
       - ops/v7_london_latency_lab.sh
       - ops/v7_london_ssm_benchmark.py
+      - ops/v7_london_ssm_bootstrap.py
+      - ops/v7_london_bootstrap.sh
       - src/v7_public_paired_clob_transport_probe.cpp
       - .github/workflows/v7-london-aws-provision.yml
   workflow_dispatch:
