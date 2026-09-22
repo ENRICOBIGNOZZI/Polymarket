@@ -480,6 +480,28 @@ def _render_complete_set_maker_metrics(status: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _render_cross_market_exact_arb_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_cross_market_exact_arb_status_v1"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+    )
+    return [
+        _metric("polymarket_cross_market_exact_arb_up",
+                safe and status.get("state") == "COLLECTING"),
+        _metric("polymarket_cross_market_exact_arb_identity_groups",
+                status.get("identity_groups")),
+        _metric("polymarket_cross_market_exact_arb_pairs_checked_total",
+                status.get("pairs_checked")),
+        _metric("polymarket_cross_market_exact_arb_opportunities",
+                status.get("opportunities_count")),
+        _metric("polymarket_cross_market_exact_arb_locked_pnl_capacity_usd",
+                status.get("locked_pnl_capacity")),
+    ]
+
+
 def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, multi_crypto_shadow_run_root: Path | None = None, include_profit_experiment_report: bool = True) -> dict[str, Any]:
     live_observation_clock = now is None
     now = int(time.time()) if now is None else int(now)
@@ -629,6 +651,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         run_root / "research/repricing_book/settlement_source_arb_status.json")
     snapshot["complete_set_maker_shadow"] = _json(
         run_root / "research/repricing_book/two_sided_complete_set_status.json")
+    snapshot["cross_market_exact_arb"] = _json(
+        run_root / "research/repricing_book/cross_market_exact_arb_status.json")
     return snapshot
 
 
@@ -1000,6 +1024,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     lines.extend(_render_pure_arb_metrics(snapshot.get("pure_arb") or {}))
     lines.extend(_render_settlement_source_arb_metrics(snapshot.get("settlement_source_arb") or {}))
     lines.extend(_render_complete_set_maker_metrics(snapshot.get("complete_set_maker_shadow") or {}))
+    lines.extend(_render_cross_market_exact_arb_metrics(snapshot.get("cross_market_exact_arb") or {}))
     retention=operations.get('retention') or {}
     storage=retention.get('hft_storage') or {}
     population=retention.get('hft_opportunity_preservation') or {}
