@@ -44,6 +44,10 @@ v7_exec_class() {
       cpuset="${PM_V7_COLLECTOR_CPUSET:-}"
       nice_value="${PM_V7_COLLECTOR_NICE:-5}"
       ;;
+    LATENCY_OBSERVER)
+      cpuset="${PM_V7_LATENCY_CPUSET:-${PM_V7_COLLECTOR_CPUSET:-}}"
+      nice_value="${PM_V7_LATENCY_NICE:-0}"
+      ;;
     CONTROL)
       cpuset="${PM_V7_CONTROL_CPUSET:-}"
       nice_value="${PM_V7_CONTROL_NICE:-3}"
@@ -77,6 +81,7 @@ v7_run_class() {
   case "$class" in
     HOT_PATH) cpuset="${PM_V7_HOT_CPUSET:-}"; nice_value="${PM_V7_HOT_NICE:-0}" ;;
     COLLECTOR) cpuset="${PM_V7_COLLECTOR_CPUSET:-}"; nice_value="${PM_V7_COLLECTOR_NICE:-5}" ;;
+    LATENCY_OBSERVER) cpuset="${PM_V7_LATENCY_CPUSET:-${PM_V7_COLLECTOR_CPUSET:-}}"; nice_value="${PM_V7_LATENCY_NICE:-0}" ;;
     CONTROL) cpuset="${PM_V7_CONTROL_CPUSET:-}"; nice_value="${PM_V7_CONTROL_NICE:-3}" ;;
     *) echo "invalid V7 runtime resource class: $class" >&2; return 66 ;;
   esac

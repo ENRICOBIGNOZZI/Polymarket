@@ -191,7 +191,7 @@ python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC"
 # enough logical CPUs. The plan is preserved as evidence.
 while IFS='=' read -r key value; do
   case "$key" in
-    PM_V7_HOT_CPUSET|PM_V7_COLLECTOR_CPUSET|PM_V7_CONTROL_CPUSET|PM_V7_HOT_NICE|PM_V7_COLLECTOR_NICE|PM_V7_CONTROL_NICE)
+    PM_V7_HOT_CPUSET|PM_V7_COLLECTOR_CPUSET|PM_V7_CONTROL_CPUSET|PM_V7_LATENCY_CPUSET|PM_V7_HOT_NICE|PM_V7_COLLECTOR_NICE|PM_V7_CONTROL_NICE|PM_V7_LATENCY_NICE)
       export "$key=$value" ;;
     *) echo "unexpected resource-plan key: $key" >&2; exit 74 ;;
   esac
@@ -315,7 +315,7 @@ v7_register_child "$!"
 # the exchange-native sidecar below separately applies the verified per-market venue delay and transport arms.
 # The universe keeps 30 active contexts and may preload future M5/M15 books.
 # Future books are warm data only: the arb evaluator still requires start<=now<end.
-v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
+v7_exec_class LATENCY_OBSERVER "$FILLABILITY_OBSERVER" \
   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only \
   --output-dir "$RUN_ROOT/research/repricing_book" \
@@ -483,6 +483,66 @@ fi
 # they cannot submit orders, allocate capital, or promote themselves.
 PURE_ARB_DIR="$RUN_ROOT/research/repricing_book"
 mkdir -p "$PURE_ARB_DIR"
+touch "$PURE_ARB_DIR/combo_rfq_tape.jsonl"
+
+# Exact finite-state relations are discovered only from payoff-identical markets
+# and are independently proved with rational arithmetic before the cross-market
+# scanner may consume them.
+v7_exec_class COLLECTOR python3 scripts/v7_exact_relation_discovery.py \
+  --universe "$RUN_ROOT/universe/current.json" --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/exact_arb_relations.generated.json" --interval-seconds 5 \
+  >> "$PURE_ARB_DIR/exact_relation_discovery.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Public Combo catalog. No credentials and no quoting authority.
+v7_exec_class COLLECTOR python3 scripts/v7_combo_market_source.py \
+  --model-sha "$SHA" --output "$PURE_ARB_DIR/combo_market_source.json" \
+  --interval-seconds 15 --timeout-seconds 3 \
+  >> "$PURE_ARB_DIR/combo_market_source.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Authenticated RFQ data collector. Its only outbound application text frame
+# is AUTH; there is no implementation for RFQ quote/cancel/confirmation sends.
+v7_exec_class COLLECTOR python3 scripts/v7_combo_rfq_gateway_readonly.py \
+  --model-sha "$SHA" --tape "$PURE_ARB_DIR/combo_rfq_tape.jsonl" \
+  --status "$PURE_ARB_DIR/combo_rfq_gateway_status.json" \
+  >> "$PURE_ARB_DIR/combo_rfq_gateway.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# RFQ pricing is shadow-only. The tape remains empty unless a separately
+# authorized read-only RFQ capture is supplied; this process never authenticates
+# or sends quote/cancel/confirmation messages.
+v7_exec_class COLLECTOR python3 scripts/v7_combo_rfq_shadow.py \
+  --model-sha "$SHA" --catalog "$PURE_ARB_DIR/combo_market_source.json" \
+  --rfq-tape "$PURE_ARB_DIR/combo_rfq_tape.jsonl" \
+  --output "$PURE_ARB_DIR/combo_rfq_shadow_status.json" \
+  --interval-seconds 0.05 --timeout-seconds 1 \
+  >> "$PURE_ARB_DIR/combo_rfq_shadow.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Collateral-return economics are credited only from an independently verified
+# captured plan. Missing plans remain zero-value/fail-closed.
+v7_exec_class COLLECTOR python3 scripts/v7_combo_collateral_return_shadow.py \
+  --model-sha "$SHA" --plan "$RUN_ROOT/control/verified_combo_collateral_return_plan.json" \
+  --output "$PURE_ARB_DIR/combo_collateral_return_status.json" --interval-seconds 5 \
+  >> "$PURE_ARB_DIR/combo_collateral_return.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Independent public clock attestation against CLOB server time.
+v7_exec_class CONTROL python3 scripts/v7_clock_guard.py \
+  --model-sha "$SHA" --output "$RUN_ROOT/control/clock_guard.json" \
+  --maximum-absolute-offset-ms 50 --interval-seconds 5 \
+  --fail-after-consecutive-unsafe 3 \
+  >> "$RUN_ROOT/clock_guard.log" 2>&1 &
+v7_register_child "$!"
+
+v7_exec_class CONTROL python3 scripts/v7_multi_az_fencing_supervisor.py \
+  --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  --server-id "$SERVER_ID" --owner-id "$RUN_ID:$SERVER_ID" \
+  --lease-id "polymarket-v7-paper-single-writer" --region eu-west-2 \
+  --lease-ms 15000 --renew-ms 5000 --minimum-remaining-ms 5000 --poll-ms 1000 \
+  >> "$RUN_ROOT/fencing_supervisor.log" 2>&1 &
+v7_register_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_multi_crypto_oracle_hub.py \
   --output "$PURE_ARB_DIR/oracle_hub_status.json" --model-sha "$SHA" \
@@ -522,6 +582,7 @@ v7_register_optional_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_cross_market_exact_arb_shadow.py \
   --universe "$RUN_ROOT/universe/current.json" \
+  --relation-registry "$PURE_ARB_DIR/exact_arb_relations.generated.json" \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/cross_market_exact_arb_status.json" \
   --reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
@@ -632,6 +693,16 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_capital_allocator.py \
   >> "$PURE_ARB_DIR/capital_allocator.log" 2>&1 &
 v7_register_optional_child "$!"
 
+touch "$RUN_ROOT/control/verified_self_fill_evidence.jsonl"
+# Queue-model calibration is dormant until independently verified own-order
+# USER-WS fills exist. Missing evidence yields WAITING, never synthetic calibration.
+v7_exec_class COLLECTOR python3 scripts/v7_maker_self_fill_calibration.py \
+  --model-sha "$SHA" --maker-cycles "$PURE_ARB_DIR/two_sided_complete_set_cycles.jsonl" \
+  --verified-self-fills "$RUN_ROOT/control/verified_self_fill_evidence.jsonl" \
+  --output "$PURE_ARB_DIR/maker_self_fill_calibration.json" --interval-seconds 30 \
+  >> "$PURE_ARB_DIR/maker_self_fill_calibration.log" 2>&1 &
+v7_register_optional_child "$!"
+
 v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_maker_policy.py \
   --maker-status "$PURE_ARB_DIR/two_sided_complete_set_status.json" \
   --capital-status "$PURE_ARB_DIR/capital_allocator_status.json" \
@@ -733,7 +804,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 22
+v7_assert_registered_child_count 30
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

@@ -1,0 +1,20 @@
+{
+  "schema": "polymarket_v7_pure_arb_performance_slo_v1",
+  "version": 1,
+  "paper_only": true,
+  "units": "nanoseconds",
+  "native_clob_prewire": {
+    "p99_hard_max": 300000,
+    "p999_hard_max": 1000000,
+    "stretch_p99": 100000,
+    "rate_limit_check_p99_hard_max": 20000,
+    "zero_copy_post_p99_hard_max": 100000
+  },
+  "signal_to_oms": {
+    "p99_hard_max": 300000,
+    "p999_hard_max": 750000,
+    "stretch_p99": 100000
+  },
+  "policy": "FAIL_ON_HARD_SLO_REPORT_STRETCH_SEPARATELY",
+  "note": "Synthetic local CPU benchmarks only. Hard prewire p99 matches the repository live serialization/sign/enqueue target; stretch target remains 100us. Not network or exchange latency."
+}

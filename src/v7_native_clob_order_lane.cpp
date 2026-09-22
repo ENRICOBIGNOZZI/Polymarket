@@ -4,6 +4,7 @@
 
 #include "pm/v7_clob_http_frame.hpp"
 #include "pm/v7_clob_http1_response.hpp"
+#include "pm/v7_clob_rate_limit.hpp"
 #include "pm/v7_clob_order_amounts.hpp"
 #include "pm/v7_clob_order_salt.hpp"
 #include "pm/v7_clob_prepared_post.hpp"
@@ -144,6 +145,7 @@ struct NativeClobOrderLane::Impl final {
     clob_post::PreparedPostOrderBuilder sell_fok;
     clob::DualPersistentTlsTransport transport;
     clob_transport::FixedHttp1Response response_parser{};
+    clob::ClobRateLimiter rate_limiter{};
     bool valid = false;
 
     Impl(const NativeClobLaneConfig& config,
@@ -260,6 +262,16 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                 NativeClobSubmitReason::PreWireFailure);
     }
 
+    // Proactive per-signer venue budget. This check is before hashing/signing
+    // and before any wire write; a locally exhausted bucket never consumes
+    // crypto or TLS work and never becomes TransportUnknown.
+    const auto limiter_now_ns = now_ns();
+    if (!impl_->rate_limiter.try_acquire(clob::RateLane::Order, limiter_now_ns, 1)) {
+        return fail_before_wire(
+            oms_owner, command.client_order_id,
+            NativeClobSubmitReason::RateLimitBudgetExhausted);
+    }
+
     const auto salt = impl_->salt.next();
     if (salt == 0) {
         return fail_before_wire(oms_owner, command.client_order_id,
@@ -370,7 +382,18 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     }
     out.http_status = impl_->response_parser.status_code();
     out.retry_after_seconds = impl_->response_parser.retry_after_seconds();
+    out.rate_limit_remaining = impl_->response_parser.rate_limit_remaining();
+    out.rate_limit_reset_unix_seconds =
+        impl_->response_parser.rate_limit_reset_unix_seconds();
+    out.rate_limit_tier = clob::parse_rate_tier(
+        impl_->response_parser.rate_limit_tier());
+    out.rate_limit_warning =
+        static_cast<std::uint8_t>(impl_->response_parser.rate_limit_warning());
     out.response_complete_monotonic_ns = response_complete_ns;
+    impl_->rate_limiter.observe(
+        clob::RateLane::Order, out.rate_limit_remaining, out.rate_limit_tier,
+        out.rate_limit_reset_unix_seconds, out.rate_limit_warning != 0,
+        out.retry_after_seconds, out.http_status, response_complete_ns);
 
     // Venue restrictions are explicit rejects, not ambiguous network failures.
     // The caller may back off/re-evaluate policy, but this lane never performs

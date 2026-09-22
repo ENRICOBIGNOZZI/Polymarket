@@ -5,6 +5,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(PM_LONDON_RUNTIME_ONLY "Build only binaries required by the London execution runtime" OFF)
 
+# Release-only interprocedural optimization.  This is deliberately portable:
+# unsupported toolchains fall back to ordinary Release instead of changing
+# runtime semantics or requiring host-specific ISA flags.
+include(CheckIPOSupported)
+check_ipo_supported(RESULT PM_V7_IPO_SUPPORTED OUTPUT PM_V7_IPO_ERROR LANGUAGES CXX)
+if(PM_V7_IPO_SUPPORTED)
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+endif()
+
 if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)
 endif()
@@ -333,6 +342,11 @@ if(BUILD_TESTING)
   add_executable(pm_v7_native_clob_order_lane_driver tests/v7_native_clob_order_lane_driver.cpp)
   target_link_libraries(pm_v7_native_clob_order_lane_driver PRIVATE pm_v7_account_native)
   target_compile_options(pm_v7_native_clob_order_lane_driver PRIVATE -UNDEBUG)
+
+  add_executable(pm_v7_clob_rate_limit_tests tests/test_v7_clob_rate_limit.cpp)
+  target_link_libraries(pm_v7_clob_rate_limit_tests PRIVATE pm_v7_clob_native)
+  target_compile_options(pm_v7_clob_rate_limit_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_clob_rate_limit_tests COMMAND pm_v7_clob_rate_limit_tests)
 
   add_test(NAME pm_v7_native_clob_full_prewire_bench_smoke
     COMMAND polymarket_v7_native_clob_full_prewire_bench 64)

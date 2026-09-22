@@ -11,18 +11,17 @@ Capacity research only; fetched books are not causal execution evidence.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, deque
 import json
 import math
 import os
 from pathlib import Path
 import time
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from v7_pm_repricing_common import atomic_json
-from v7_pure_arb_economics import raw_fee_per_share, rounded_fee_usdc
+from v7_pure_arb_economics import raw_fee_per_share, rounded_fee_usdc, tail_jsonl
+from v7_clob_public_batch import fetch_books, full_book as parse_full_book
 
 CYCLE_SCHEMAS={
     "polymarket_v7_pure_arb_paper_cycle_v2",
@@ -64,25 +63,6 @@ def fee_params(row:dict[str,Any])->tuple[float,float]|None:
     return None
 
 
-def full_book(base:str,token:str,timeout:float)->dict[str,list[tuple[float,float]]]|None:
-    url=base.rstrip("/")+"/book?"+urllib.parse.urlencode({"token_id":token})
-    req=urllib.request.Request(url,headers={"User-Agent":"polymarket-v7-deep-sizing-shadow"})
-    try:
-        with urllib.request.urlopen(req,timeout=timeout) as resp:v=json.load(resp)
-    except (OSError,TimeoutError,json.JSONDecodeError):return None
-    if not isinstance(v,dict):return None
-    def parse(rows,reverse):
-        out=[]
-        for row in rows if isinstance(rows,list) else []:
-            if not isinstance(row,dict):continue
-            try:p=float(row["price"]);q=float(row["size"])
-            except (KeyError,TypeError,ValueError):continue
-            if math.isfinite(p) and math.isfinite(q) and 0<p<1 and q>0:out.append((p,q))
-        return sorted(out,key=lambda x:x[0],reverse=reverse)
-    bids=parse(v.get("bids"),True);asks=parse(v.get("asks"),False)
-    return {"bids":bids,"asks":asks} if bids and asks else None
-
-
 def sweep(a:list[tuple[float,float]],b:list[tuple[float,float]],rate:float,exponent:float,
           reserve:float,buy:bool,max_shares:float)->dict[str,float]:
     i=j=0;ar=br=0.0;q=0.0;pnl=0.0;not_a=not_b=0.0;marginal=0.0
@@ -112,13 +92,18 @@ def sweep(a:list[tuple[float,float]],b:list[tuple[float,float]],rate:float,expon
 
 
 class Tail:
-    def __init__(self,path:Path,sha:str):self.path,self.sha,self.handle=path,sha,None
+    def __init__(self,path:Path,sha:str,*,start_at_end:bool=False):
+        self.path,self.sha,self.handle=path,sha,None
+        self.start_at_end_pending=bool(start_at_end)
     def poll(self):
         out=[]
         for _ in range(2):
             if self.handle is None:
                 try:self.handle=self.path.open("rb")
                 except OSError:return out
+                if self.start_at_end_pending:
+                    self.handle.seek(0,os.SEEK_END)
+                    self.start_at_end_pending=False
             while True:
                 pos=self.handle.tell();raw=self.handle.readline()
                 if not raw or not raw.endswith(b"\n"):self.handle.seek(pos);break
@@ -140,22 +125,33 @@ class Tail:
 
 class Shadow:
     def __init__(self,args):
-        self.args=args;self.tail=Tail(args.candidates,args.model_sha)
-        self.rows=[];self.seen=set();args.output.parent.mkdir(parents=True,exist_ok=True)
+        self.args=args
+        try:resumed=args.output.exists() and args.output.stat().st_size>0
+        except OSError:resumed=False
+        self.tail=Tail(args.candidates,args.model_sha,start_at_end=resumed)
+        self.rows=deque(maxlen=args.status_window_cycles)
+        self.seen=set()
+        self.seen_order=deque()
+        self.resumed_follow_new_only=resumed
+        args.output.parent.mkdir(parents=True,exist_ok=True)
         self._restore()
     def _restore(self):
-        try:
-            for raw in self.args.output.read_text(encoding="utf-8").splitlines():
-                r=json.loads(raw)
-                if r.get("schema")==ROW_SCHEMA and r.get("model_sha")==self.args.model_sha:
-                    self.rows.append(r);self.seen.add(str(r.get("candidate_id") or ""))
-        except (OSError,json.JSONDecodeError):pass
+        for r in tail_jsonl(
+            self.args.output,max_rows=self.args.status_window_cycles,
+            max_bytes=self.args.status_restore_bytes):
+            if r.get("schema")==ROW_SCHEMA and r.get("model_sha")==self.args.model_sha:
+                self.rows.append(r)
+    def _mark_seen(self,cid:str)->bool:
+        if not cid or cid in self.seen:return False
+        while len(self.seen_order)>=self.args.seen_candidate_limit:
+            old=self.seen_order.popleft();self.seen.discard(old)
+        self.seen.add(cid);self.seen_order.append(cid)
+        return True
     def evaluate(self,c):
         mid=str(c.get("market_id") or "");kind=str(c.get("kind") or "")
         detected=int(c.get("receive_wall_ms") or 0)
         cid=f"{mid}:{kind}:{detected}"
-        if cid in self.seen:return None
-        self.seen.add(cid)
+        if not self._mark_seen(cid):return None
         m=selection_map(load(self.args.selection),self.args.model_sha).get(mid)
         base={"schema":ROW_SCHEMA,"model_sha":self.args.model_sha,"paper_only":True,
               "authenticated_execution":False,"real_order_submission":False,
@@ -167,8 +163,10 @@ class Shadow:
         if fp is None:base["state"]="CENSORED_FEE";return base
         yes,no=str(m.get("yes_token") or ""),str(m.get("no_token") or "")
         started=time.time_ns()//1_000_000
-        y=full_book(self.args.clob_url,yes,self.args.timeout_seconds)
-        n=full_book(self.args.clob_url,no,self.args.timeout_seconds)
+        batch=fetch_books(
+            self.args.clob_url,[yes,no],self.args.timeout_seconds,
+            chunk_size=2,user_agent="polymarket-v7-deep-sizing-shadow")
+        y=parse_full_book(batch.get(yes));n=parse_full_book(batch.get(no))
         fetched=time.time_ns()//1_000_000
         base["fetch_complete_wall_ms"]=fetched;base["fetch_delay_from_detection_ms"]=max(0,fetched-detected)
         if y is None or n is None:base["state"]="CENSORED_BOOK";return base
@@ -183,7 +181,12 @@ class Shadow:
         base.update({"state":"EVALUATED","l10_detected_shares":l10,"l10_detected_pnl":l10_pnl,
                      "incremental_shares_vs_l10":max(0.0,result["shares"]-l10),
                      "incremental_pnl_vs_l10":result["locked_pnl_after_reserve"]-l10_pnl,
-                     "capacity_semantics":"NONCAUSAL_FULL_BOOK_AUDIT_NOT_EXECUTION_EVIDENCE"})
+                     "capacity_semantics":"NONCAUSAL_FULL_BOOK_AUDIT_NOT_EXECUTION_EVIDENCE",
+          "status_window_cycles":self.args.status_window_cycles,
+          "status_window_size":len(self.rows),
+          "seen_candidate_limit":self.args.seen_candidate_limit,
+          "seen_candidate_count":len(self.seen),
+          "restart_policy":"FOLLOW_NEW_CANDIDATES_ONLY" if self.resumed_follow_new_only else "INITIAL_TAPE_DRAIN"})
         return base
     def publish(self):
         evaluated=[r for r in self.rows if r.get("state")=="EVALUATED"]
@@ -220,9 +223,15 @@ def main():
     ap.add_argument("--prefunded-complete-set-shares",type=float,default=1000)
     ap.add_argument("--timeout-seconds",type=float,default=2)
     ap.add_argument("--interval-seconds",type=float,default=.25)
+    ap.add_argument("--status-window-cycles",type=int,default=20000)
+    ap.add_argument("--status-restore-bytes",type=int,default=67108864)
+    ap.add_argument("--seen-candidate-limit",type=int,default=100000)
     a=ap.parse_args()
     if len(a.model_sha)!=40 or not(0<=a.reserve_per_share<1 and a.maximum_shares>0
-        and a.prefunded_complete_set_shares>0 and .1<=a.timeout_seconds<=10 and .05<=a.interval_seconds<=60):
+        and a.prefunded_complete_set_shares>0 and .1<=a.timeout_seconds<=10 and .05<=a.interval_seconds<=60
+        and 100<=a.status_window_cycles<=1_000_000
+        and 1_048_576<=a.status_restore_bytes<=1_073_741_824
+        and 1_000<=a.seen_candidate_limit<=1_000_000):
         raise SystemExit("invalid arguments")
     Shadow(a).run();return 0
 if __name__=="__main__":raise SystemExit(main())

@@ -187,7 +187,8 @@ jobs:
             # This integration-test helper is EXCLUDE_FROM_ALL but its CTest is
             # part of the full suite, so build it explicitly before ctest.
             cmake --build build-ASan-UBSan --parallel "$(nproc)" --target \
-              pm_v7_native_clob_order_lane_driver
+              pm_v7_native_clob_order_lane_driver \
+            pm_v7_clob_rate_limit_tests
             ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
               ctest --test-dir build-ASan-UBSan --parallel "$(nproc)" --output-on-failure
           else
@@ -237,6 +238,7 @@ jobs:
           python3 -m json.tool config/v7_exact_arb_relations.json >/dev/null
           python3 -m json.tool config/v7_exchange_semantics.json >/dev/null
           python3 -m json.tool config/v7_pure_arb_capital_policy.json >/dev/null
+          python3 -m json.tool config/v7_pure_arb_performance_slo.json >/dev/null
           python3 -m json.tool artifacts/github_main_ruleset.json >/dev/null
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
@@ -250,6 +252,7 @@ jobs:
           python3 tests/test_v7_pure_arb_frequency.py
           python3 tests/test_v7_pure_arb_exchange_native.py
           python3 tests/test_v7_pure_arb_sota.py
+          python3 tests/test_v7_pure_arb_ultra_sota.py
           python3 -m unittest tests/test_v7_chaos_runtime.py -v
       - name: Fast-path no C++ build
         if: needs.classify.outputs.cpp_required != 'true'
@@ -339,7 +342,18 @@ jobs:
             scripts/v7_pure_arb_venue_mode.py \
             scripts/v7_complete_set_merge_shadow.py \
             scripts/v7_fee_reward_registry.py \
-            scripts/v7_causal_book.py
+            scripts/v7_causal_book.py \
+            scripts/v7_clob_public_batch.py \
+            scripts/v7_exact_relation_discovery.py \
+            scripts/v7_combo_market_source.py \
+            scripts/v7_combo_rfq_gateway_readonly.py \
+            scripts/v7_combo_rfq_shadow.py \
+            scripts/v7_combo_collateral_return_shadow.py \
+            scripts/v7_clock_guard.py \
+            scripts/v7_maker_self_fill_calibration.py \
+            scripts/v7_multi_az_fencing_guard.py \
+            scripts/v7_multi_az_fencing_supervisor.py \
+            ops/v7_aws_fencing_lease.py
           python3 tests/test_v7_pure_arb_sota.py
           python3 tests/test_v7_pure_arb_frequency.py
           python3 tests/test_v7_pure_arb_exchange_native.py
@@ -379,10 +393,31 @@ jobs:
             pm_v7_execution_admission_tests \
             pm_v7_native_settlement_authority_tests \
             pm_v7_paper_queue_tests \
-            pm_v7_native_clob_order_lane_driver
+            pm_v7_native_clob_order_lane_driver \
+            pm_v7_clob_rate_limit_tests
           ctest --test-dir build-pure-arb-${{ matrix.build_type }} --output-on-failure \
-            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests)'
+            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests)'
           ccache --show-stats
+
+      - name: Pure-arb native performance gate
+        if: matrix.build_type == 'Release'
+        run: |
+          set -euo pipefail
+          cmake --build build-pure-arb-Release --parallel "$(nproc)" --target \
+            polymarket_v7_native_clob_full_prewire_bench \
+            polymarket_v7_crypto_to_oms_bench
+          build-pure-arb-Release/polymarket_v7_native_clob_full_prewire_bench 100000 \
+            > build-pure-arb-Release/pure-arb-prewire-bench.json
+          build-pure-arb-Release/polymarket_v7_crypto_to_oms_bench --samples 100000 \
+            > build-pure-arb-Release/pure-arb-signal-to-oms-bench.json
+          python3 scripts/v7_pure_arb_performance_gate.py \
+            --config config/v7_pure_arb_performance_slo.json \
+            --prewire build-pure-arb-Release/pure-arb-prewire-bench.json \
+            --signal-to-oms build-pure-arb-Release/pure-arb-signal-to-oms-bench.json \
+            --output build-pure-arb-Release/pure-arb-performance-gate.json
+          cat build-pure-arb-Release/pure-arb-prewire-bench.json
+          cat build-pure-arb-Release/pure-arb-signal-to-oms-bench.json
+          cat build-pure-arb-Release/pure-arb-performance-gate.json
 
   pure-arb-sota-sanitizer:
     name: pure-arb-sota-sanitizer
@@ -435,10 +470,11 @@ jobs:
             pm_v7_native_paper_execution_tests \
             pm_v7_execution_admission_tests \
             pm_v7_native_settlement_authority_tests \
-            pm_v7_paper_queue_tests
+            pm_v7_paper_queue_tests \
+            pm_v7_clob_rate_limit_tests
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             ctest --test-dir build-pure-arb-asan --output-on-failure \
-            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests)'
+            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests)'
           ccache --show-stats
 
   london-runtime-boundary:

@@ -40,6 +40,7 @@ def resolve(config:dict, cpus:list[int]|None=None)->dict:
             "paper_only":True,"cpu_count":len(cpus),"all_cpus":cpus,
             "minimum_visible_cpus":minimum,"required_assigned_cpus":required,
             "hot_path_cpus":[],"collector_cpus":[],"control_cpus":[],
+            "latency_observer_cpus":[],"latency_observer_isolated":False,
             "housekeeping_cpus":[],"spare_cpus":[],
             "cpu_classes_disjoint":False,
             "outer_cpuset_contract_satisfied":False,
@@ -52,6 +53,15 @@ def resolve(config:dict, cpus:list[int]|None=None)->dict:
     start=housekeeping_n+control_n
     collector=low[start:start+collector_n]
     spare=low[start+collector_n:]
+    latency_cfg=config.get("latency_observer") or {}
+    prefer_spare=latency_cfg.get("prefer_spare_core") is True
+    if prefer_spare and spare:
+        latency_observer=[spare[-1]]
+        spare=spare[:-1]
+        latency_observer_isolated=True
+    else:
+        latency_observer=list(collector)
+        latency_observer_isolated=False
     classes=[set(hot),set(collector),set(control),set(housekeeping)]
     disjoint=all(not classes[i]&classes[j] for i in range(len(classes)) for j in range(i+1,len(classes)))
     if config.get("require_disjoint_cpu_classes") is True and not disjoint:
@@ -61,12 +71,15 @@ def resolve(config:dict, cpus:list[int]|None=None)->dict:
         "paper_only":True,"cpu_count":len(cpus),"all_cpus":cpus,
         "minimum_visible_cpus":minimum,"required_assigned_cpus":required,
         "hot_path_cpus":hot,"collector_cpus":collector,"control_cpus":control,
+        "latency_observer_cpus":latency_observer,
+        "latency_observer_isolated":latency_observer_isolated,
         "housekeeping_cpus":housekeeping,"spare_cpus":spare,
         "cpu_classes_disjoint":disjoint,
         "outer_cpuset_contract_satisfied":True,
         "hot_nice":int((config.get("hot_path") or {}).get("nice") or 0),
         "collector_nice":int((config.get("collector") or {}).get("nice") or 5),
         "control_nice":int((config.get("control") or {}).get("nice") or 3),
+        "latency_observer_nice":int((config.get("latency_observer") or {}).get("nice") or 0),
         "runtime_training":False,"retrospective_analytics":False,
     }
 
@@ -94,9 +107,11 @@ def main()->int:
             "PM_V7_HOT_CPUSET":_fmt(out["hot_path_cpus"]),
             "PM_V7_COLLECTOR_CPUSET":_fmt(out["collector_cpus"]),
             "PM_V7_CONTROL_CPUSET":_fmt(out["control_cpus"]),
+            "PM_V7_LATENCY_CPUSET":_fmt(out["latency_observer_cpus"]),
             "PM_V7_HOT_NICE":str(out["hot_nice"]),
             "PM_V7_COLLECTOR_NICE":str(out["collector_nice"]),
             "PM_V7_CONTROL_NICE":str(out["control_nice"]),
+            "PM_V7_LATENCY_NICE":str(out["latency_observer_nice"]),
         }
         for k,v in pairs.items(): print(f"{k}={v}")
     return 0
