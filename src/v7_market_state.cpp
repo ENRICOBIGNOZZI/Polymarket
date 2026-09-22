@@ -251,6 +251,39 @@ std::uint8_t CanonicalL2Book::fill_side_snapshot(
     return count;
 }
 
+BookDeepSnapshot CanonicalL2Book::deep_snapshot() const noexcept {
+    BookDeepSnapshot out;
+    out.state_version = state_version_;
+    out.exchange_event_ns = exchange_event_ns_;
+    out.receive_monotonic_ns = receive_monotonic_ns_;
+    out.tick_size_e4 = tick_size_e4_;
+    out.lineage_continuous = static_cast<std::uint8_t>(lineage_continuous_);
+
+    std::int32_t bid = best_bid_e4_;
+    while (bid > 0 && out.bid_level_count < out.bid_levels.size()) {
+        const auto quantity = quantity_at(Side::Buy, bid);
+        if (quantity > 0) out.bid_levels[out.bid_level_count++] = PriceLevelE4{bid, quantity};
+        bid = next_bid(bid);
+    }
+    out.bid_truncated = static_cast<std::uint8_t>(bid > 0);
+
+    std::int32_t ask = best_ask_e4_;
+    while (ask > 0 && out.ask_level_count < out.ask_levels.size()) {
+        const auto quantity = quantity_at(Side::Sell, ask);
+        if (quantity > 0) out.ask_levels[out.ask_level_count++] = PriceLevelE4{ask, quantity};
+        ask = next_ask(ask);
+    }
+    out.ask_truncated = static_cast<std::uint8_t>(ask > 0);
+
+    out.valid = static_cast<std::uint8_t>(
+        lineage_continuous_ && state_version_ > 0 && exchange_event_ns_ > 0
+        && receive_monotonic_ns_ > 0 && best_bid_e4_ > 0
+        && best_ask_e4_ > best_bid_e4_
+        && out.bid_level_count > 0 && out.ask_level_count > 0
+        && out.bid_truncated == 0 && out.ask_truncated == 0);
+    return out;
+}
+
 BookHotSnapshot CanonicalL2Book::hot_snapshot() const noexcept {
     BookHotSnapshot out;
     out.state_version = state_version_;
