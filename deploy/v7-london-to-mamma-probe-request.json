@@ -1,4 +1,4 @@
 {
-  "schema": "polymarket_v7_london_to_mamma_probe_v1",
-  "read_only": true
+    "schema": "polymarket_v7_london_to_mamma_probe_v1",
+    "read_only": true
 }
