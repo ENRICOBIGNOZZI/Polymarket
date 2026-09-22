@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pm/v7_native_order_tx.hpp"
+#include "pm/v7_clob_rate_limit.hpp"
 #include "pm/v7_user_oms_bridge.hpp"
 
 #include <cstdint>
@@ -24,6 +25,7 @@ enum class NativeClobSubmitReason : std::uint8_t {
     MatchingEngineRestart = 9,
     RestrictedTradingMode = 10,
     RateLimited = 11,
+    RateLimitBudgetExhausted = 12,
 };
 
 struct NativeClobLaneConfig {
@@ -48,6 +50,10 @@ struct NativeClobSubmitResult {
     std::uint64_t client_order_id = 0;
     int http_status = 0;
     int retry_after_seconds = 0;
+    clob::RateTier rate_limit_tier = clob::RateTier::Unknown;
+    double rate_limit_remaining = 0.0;
+    std::int64_t rate_limit_reset_unix_seconds = 0;
+    std::uint8_t rate_limit_warning = 0;
     std::int64_t wire_monotonic_ns = 0;
     std::int64_t response_complete_monotonic_ns = 0;
     std::uint8_t accepted = 0;
