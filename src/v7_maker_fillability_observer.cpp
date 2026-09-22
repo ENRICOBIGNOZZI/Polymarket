@@ -574,6 +574,7 @@ struct PureArbDirectionState {
     double last_edge_per_share = 0.0;
     double last_executable_shares = 0.0;
     double last_executable_shares_l10 = 0.0;
+    double last_executable_shares_deep = 0.0;
     double last_locked_pnl = 0.0;
     double last_conservative_locked_pnl = 0.0;
     std::int64_t last_detect_wall_ms = 0;
@@ -642,6 +643,7 @@ struct PureArbQueuedEvent {
     double conservative_edge_per_share = 0.0;
     double marginal_edge_per_share = 0.0;
     double executable_shares_l1 = 0.0;
+    double executable_shares_l10 = 0.0;
     double gross_locked_pnl = 0.0;
     double conservative_locked_pnl = 0.0;
     double yes_vwap = 0.0;
@@ -1156,6 +1158,9 @@ public:
                         find_value(row, "last_executable_shares_l1"), 0.0);
                     direction.last_executable_shares_l10 = number64(
                         find_value(row, "last_executable_shares_l10"), direction.last_executable_shares);
+                    direction.last_executable_shares_deep = number64(
+                        find_value(row, "last_executable_shares_deep"),
+                        direction.last_executable_shares_l10);
                     direction.last_locked_pnl = number64(
                         find_value(row, "last_locked_pnl_pre_gas"), 0.0);
                     direction.last_conservative_locked_pnl = number64(
@@ -1234,7 +1239,7 @@ public:
         direction.max_edge_per_share = std::max(direction.max_edge_per_share, edge_per_share);
         direction.last_edge_per_share = edge_per_share;
         direction.last_executable_shares = executable_shares_l1;
-        direction.last_executable_shares_l10 = shares;
+        direction.last_executable_shares_deep = shares;
         direction.last_locked_pnl = sweep.gross_locked_pnl;
         direction.last_conservative_locked_pnl = sweep.conservative_locked_pnl;
         direction.last_detect_wall_ms = receive_wall_ms;
@@ -1257,6 +1262,7 @@ public:
         event.conservative_edge_per_share = sweep.conservative_edge_per_share();
         event.marginal_edge_per_share = sweep.marginal_edge_per_share;
         event.executable_shares_l1 = executable_shares_l1;
+        event.executable_shares_l10 = direction.last_executable_shares_l10;
         event.gross_locked_pnl = sweep.gross_locked_pnl;
         event.conservative_locked_pnl = sweep.conservative_locked_pnl;
         event.yes_vwap = sweep.yes_vwap();
@@ -1295,7 +1301,8 @@ public:
                 {"marginal_edge_per_share", queued.marginal_edge_per_share},
                 {"reserve_per_share", pure_arb_reserve_per_share_},
                 {"executable_shares_l1", queued.executable_shares_l1},
-                {"executable_shares_l10", micro_shares(queued.shares_microunits)},
+                {"executable_shares_l10", queued.executable_shares_l10},
+                {"executable_shares_local_deep", micro_shares(queued.shares_microunits)},
                 {"paper_locked_pnl_pre_gas", queued.gross_locked_pnl},
                 {"conservative_locked_pnl_after_reserve", queued.conservative_locked_pnl},
                 {"yes_price", queued.yes_vwap},
@@ -1614,6 +1621,7 @@ public:
                     {"max_edge_per_share", market.buy.max_edge_per_share},
                     {"last_executable_shares_l1", market.buy.last_executable_shares},
                     {"last_executable_shares_l10", market.buy.last_executable_shares_l10},
+                    {"last_executable_shares_deep", market.buy.last_executable_shares_deep},
                     {"last_locked_pnl_pre_gas", market.buy.last_locked_pnl},
                     {"last_conservative_locked_pnl_after_reserve", market.buy.last_conservative_locked_pnl},
                     {"last_detect_wall_ms", market.buy.last_detect_wall_ms}}},
@@ -1626,6 +1634,7 @@ public:
                     {"max_edge_per_share", market.sell.max_edge_per_share},
                     {"last_executable_shares_l1", market.sell.last_executable_shares},
                     {"last_executable_shares_l10", market.sell.last_executable_shares_l10},
+                    {"last_executable_shares_deep", market.sell.last_executable_shares_deep},
                     {"last_locked_pnl_pre_gas", market.sell.last_locked_pnl},
                     {"last_conservative_locked_pnl_after_reserve", market.sell.last_conservative_locked_pnl},
                     {"last_detect_wall_ms", market.sell.last_detect_wall_ms}}},
