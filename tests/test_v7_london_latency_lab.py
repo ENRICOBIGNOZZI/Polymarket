@@ -90,6 +90,15 @@ def test_three_az_bootstrap_repairs_git_metadata_ownership_before_fetch():
     assert 'chown -R {service_user}:"$SERVICE_GROUP" "$APP/.git"' in bootstrap
 
 
+def test_london_bootstrap_propagates_reused_exact_sha_ci_gate():
+    bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
+    stage = (ROOT / "ops/v7_london_stage_release.sh").read_text()
+    assert 'POLYMARKET_REUSE_EXACT_SHA_CI="${POLYMARKET_REUSE_EXACT_SHA_CI:-0}"' in bootstrap
+    assert 'PM_V7_CI_REPOSITORY="${PM_V7_CI_REPOSITORY:-ENRICOBIGNOZZI/Polymarket}"' in bootstrap
+    assert 'if [[ "$REUSE_EXACT_SHA_CI" == 1 ]]' in stage
+    assert "REUSED_EXACT_SHA_CI" in stage
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
