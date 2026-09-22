@@ -57,34 +57,61 @@ def _catalog():
         "paper_only":True,"authenticated_execution":False,
         "real_order_submission":False,"model_sha":SHA,
         "position_index":{
-            "A_Y":{"market_id":"a","condition_id":"ca","outcome":"YES","complement_position_id":"A_N"},
-            "B_Y":{"market_id":"b","condition_id":"cb","outcome":"YES","complement_position_id":"B_N"},
+            "A_Y":{"market_id":"a","condition_id":"ca","outcome":"YES","complement_position_id":"A_N","fee_rate":0.0},
+            "A_N":{"market_id":"a","condition_id":"ca","outcome":"NO","complement_position_id":"A_Y","fee_rate":0.0},
+            "B_Y":{"market_id":"b","condition_id":"cb","outcome":"YES","complement_position_id":"B_N","fee_rate":0.0},
+            "B_N":{"market_id":"b","condition_id":"cb","outcome":"NO","complement_position_id":"B_Y","fee_rate":0.0},
         },
     }
 
 
 def test_combo_rfq_exact_hedge_bounds(monkeypatch):
     books={
-        "A_Y":{"bid":0.39,"bid_q":10.0,"ask":0.40,"ask_q":10.0},
-        "A_N":{"bid":0.59,"bid_q":10.0,"ask":0.60,"ask_q":10.0},
-        "B_Y":{"bid":0.29,"bid_q":10.0,"ask":0.30,"ask_q":10.0},
-        "B_N":{"bid":0.69,"bid_q":10.0,"ask":0.70,"ask_q":10.0},
+        "A_Y":{"bid":0.39,"bid_q":100.0,"ask":0.40,"ask_q":100.0},
+        "A_N":{"bid":0.59,"bid_q":100.0,"ask":0.60,"ask_q":100.0},
+        "B_Y":{"bid":0.29,"bid_q":100.0,"ask":0.30,"ask_q":100.0},
+        "B_N":{"bid":0.69,"bid_q":100.0,"ask":0.70,"ask_q":100.0},
     }
-    monkeypatch.setattr(rfq,"batch_bbos",lambda base,tokens,timeout:{token:books[token] for token in tokens})
-    monkeypatch.setattr(rfq,"fee_rate",lambda base,token,timeout:0.0)
-    args=SimpleNamespace(clob_url="x",timeout_seconds=1.0,reference_shares=5.0,reserve_per_share=0.001)
-    common={"rfq_id":"r","leg_position_ids":["A_Y","B_Y"],
-            "submission_deadline":10_000,"receive_wall_ms":9_700}
-    sell_yes=rfq.evaluate({**common,"direction":"BUY","side":"YES"},_catalog(),args)
+    monkeypatch.setattr(
+        rfq,"batch_bbos",
+        lambda base,tokens,timeout:{token:books[token] for token in tokens})
+    args=SimpleNamespace(clob_url="x",timeout_seconds=1.0,reserve_per_share=0.001)
+    common={
+        "rfq_id":"r","leg_position_ids":["A_Y","B_Y"],
+        "submission_deadline":10_000,"receive_wall_ms":9_700,"side":"YES",
+    }
+
+    # BUY RFQ = requester buys Combo YES with pUSD notional.
+    sell_yes=rfq.evaluate(
+        {**common,"direction":"BUY",
+         "requested_size":{"unit":"notional","value_e6":"3000000"}},
+        _catalog(),args)
     assert sell_yes["state"]=="PRICED_EXACT_BOUND"
     assert math.isclose(sell_yes["reference_quote_bound"],0.30)
     assert sell_yes["quote_budget_ms"]==300
-    sell_no=rfq.evaluate({**common,"direction":"BUY","side":"NO"},_catalog(),args)
-    assert math.isclose(sell_no["reference_quote_bound"],1.30)
-    buy_yes=rfq.evaluate({**common,"direction":"SELL","side":"YES"},_catalog(),args)
+    assert sell_yes["sizing_semantics"]=="BUY_NOTIONAL_FLOOR_AT_QUOTE_PRICE"
+    assert sell_yes["hedge_position_id"]=="B_Y"
+
+    # SELL RFQ = requester sells exact Combo YES shares.
+    buy_yes=rfq.evaluate(
+        {**common,"direction":"SELL",
+         "requested_size":{"unit":"shares","value_e6":"5000000"}},
+        _catalog(),args)
+    assert buy_yes["state"]=="PRICED_EXACT_BOUND"
     assert math.isclose(buy_yes["reference_quote_bound"],-0.30)
-    buy_no=rfq.evaluate({**common,"direction":"SELL","side":"NO"},_catalog(),args)
-    assert math.isclose(buy_no["reference_quote_bound"],0.70)
+    assert buy_yes["sizing_semantics"]=="SELL_EXACT_SHARES"
+
+    # Protocol is YES-only and unit semantics are direction-specific.
+    unsupported=rfq.evaluate(
+        {**common,"direction":"BUY","side":"NO",
+         "requested_size":{"unit":"notional","value_e6":"3000000"}},
+        _catalog(),args)
+    assert unsupported["state"]=="INVALID_OR_UNSUPPORTED_REQUEST"
+    wrong_unit=rfq.evaluate(
+        {**common,"direction":"BUY",
+         "requested_size":{"unit":"shares","value_e6":"5000000"}},
+        _catalog(),args)
+    assert wrong_unit["state"]=="INVALID_OR_UNSUPPORTED_REQUEST"
 
 
 def test_collateral_return_is_never_credited_without_verified_capture():
