@@ -313,6 +313,7 @@ def main():
     p.add_argument("--repository",required=True)
     p.add_argument("--github-token",required=True)
     p.add_argument("--chrome",default="google-chrome")
+    p.add_argument("--cdp-url",default="")
     a=p.parse_args()
     value=json.loads(a.credentials.read_text(encoding="utf-8"))
     required={"schema","purpose","expected_parent_sha","email","password","maximum_deletions"}
@@ -333,14 +334,20 @@ def main():
     with sync_playwright() as pw:
         print("tailnet_cleanup_stage=PLAYWRIGHT_READY", flush=True)
         chrome=shutil.which(a.chrome) or a.chrome
-        browser=pw.chromium.launch(
-            headless=True,
-            executable_path=chrome,
-            args=["--disable-dev-shm-usage"],
-        )
-        print("tailnet_cleanup_stage=BROWSER_LAUNCHED", flush=True)
-        context=browser.new_context()
-        page=context.new_page()
+        if a.cdp_url:
+            browser=pw.chromium.connect_over_cdp(a.cdp_url)
+            print("tailnet_cleanup_stage=CDP_CONNECTED", flush=True)
+            context=browser.contexts[0] if browser.contexts else browser.new_context()
+            page=context.pages[0] if context.pages else context.new_page()
+        else:
+            browser=pw.chromium.launch(
+                headless=True,
+                executable_path=chrome,
+                args=["--disable-dev-shm-usage"],
+            )
+            print("tailnet_cleanup_stage=BROWSER_LAUNCHED", flush=True)
+            context=browser.new_context()
+            page=context.new_page()
         print("tailnet_cleanup_stage=LOGIN_BEGIN", flush=True)
         login(page,value["email"],value["password"])
         print("tailnet_cleanup_stage=LOGIN_OK", flush=True)
