@@ -119,6 +119,9 @@ struct UserOmsBridge::Impl {
     std::uint64_t foreign_correlations = 0;
     std::uint64_t pending_overflow = 0;
     std::uint64_t dedupe_bucket_overflow = 0;
+    NativeLatencyTape* latency_tape = nullptr;
+
+    explicit Impl(NativeLatencyTape* tape) noexcept : latency_tape(tape) {}
 
     [[nodiscard]] bool emit(std::uint64_t client_order_id,
                             OmsEventType type,
@@ -140,6 +143,15 @@ struct UserOmsBridge::Impl {
         routed.event.fill_delta_microunits = fill_delta;
         routed.event.user_ws_match_monotonic_ns =
             user_ws_source ? timestamp_ns : 0;
+        if (user_ws_source && type == OmsEventType::FillDelta
+            && latency_tape != nullptr) {
+            NativeLatencyEvent latency{};
+            latency.trace_id = client_order_id;
+            latency.client_order_id = client_order_id;
+            latency.timestamp_ns = timestamp_ns;
+            latency.stage = NativeLatencyStage::UserWsMatch;
+            (void)latency_tape->publish(latency);
+        }
         return true;
     }
 
@@ -368,7 +380,8 @@ struct UserOmsBridge::Impl {
     }
 };
 
-UserOmsBridge::UserOmsBridge() : impl_(std::make_unique<Impl>()) {}
+UserOmsBridge::UserOmsBridge(NativeLatencyTape* latency_tape)
+    : impl_(std::make_unique<Impl>(latency_tape)) {}
 UserOmsBridge::~UserOmsBridge() = default;
 
 UserOmsBridgeResult UserOmsBridge::on_post_order_ack(
