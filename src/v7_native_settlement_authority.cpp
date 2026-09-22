@@ -2,7 +2,6 @@
 #include "pm/v7_native_settlement_oms_endpoint.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <limits>
 
@@ -261,14 +260,12 @@ NativeSettlementAuthorityResult NativeSettlementAuthority::submit(
         out.reason = NativeSettlementAuthorityReason::AdmissionDenied;
         return out;
     }
-    out.risk_admitted_monotonic_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-    out.tx = order_tx_.prepare_submit(
-        plan, out.risk_admitted_monotonic_ns);
+    // Preserve the caller's monotonic clock domain. Runtime telemetry may
+    // stamp the exact post-admission instant outside this deterministic owner.
+    out.risk_admitted_monotonic_ns = now_monotonic_ns;
+    out.tx = order_tx_.prepare_submit(plan, now_monotonic_ns);
     if (out.tx.accepted != 0) {
-        out.tx.command.risk_admitted_monotonic_ns =
-            out.risk_admitted_monotonic_ns;
+        out.tx.command.risk_admitted_monotonic_ns = now_monotonic_ns;
     }
     if (out.tx.accepted == 0 || out.tx.oms.state != OrderState::SendPending) {
         if (out.admission.capital_reserved != 0) {
