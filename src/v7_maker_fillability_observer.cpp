@@ -1007,17 +1007,16 @@ public:
         return rate == 0.0 ? 0.0 : rate * std::pow(price * (1.0 - price), exponent);
     }
 
-    [[nodiscard]] PureArbSweepResult sweep_pure_arb(
-        const pm::v7::BookHotSnapshot& yes,
-        const pm::v7::BookHotSnapshot& no,
+    template <std::size_t N>
+    [[nodiscard]] PureArbSweepResult sweep_pure_arb_levels(
+        const std::array<pm::v7::PriceLevelE4, N>& yes_levels,
+        std::size_t yes_count,
+        const std::array<pm::v7::PriceLevelE4, N>& no_levels,
+        std::size_t no_count,
         const PureArbMarketState& market,
         bool buy,
-        std::int64_t maximum_shares_microunits = std::numeric_limits<std::int64_t>::max()) const noexcept {
+        std::int64_t maximum_shares_microunits) const noexcept {
         PureArbSweepResult result{};
-        const auto& yes_levels = buy ? yes.ask_levels : yes.bid_levels;
-        const auto& no_levels = buy ? no.ask_levels : no.bid_levels;
-        const std::size_t yes_count = buy ? yes.ask_level_count : yes.bid_level_count;
-        const std::size_t no_count = buy ? no.ask_level_count : no.bid_level_count;
         std::size_t yi = 0, ni = 0;
         std::int64_t yes_remaining = 0, no_remaining = 0;
         std::int64_t capacity_remaining = std::max<std::int64_t>(0, maximum_shares_microunits);
@@ -1049,10 +1048,12 @@ public:
             result.yes_notional += shares * yes_price;
             result.no_notional += shares * no_price;
             result.marginal_edge_per_share = gross_edge;
-            result.yes_levels_used = static_cast<std::uint8_t>(
-                std::max<std::size_t>(result.yes_levels_used, yi + 1));
-            result.no_levels_used = static_cast<std::uint8_t>(
-                std::max<std::size_t>(result.no_levels_used, ni + 1));
+            result.yes_levels_used = static_cast<std::uint16_t>(
+                std::min<std::size_t>(std::numeric_limits<std::uint16_t>::max(),
+                                      std::max<std::size_t>(result.yes_levels_used, yi + 1)));
+            result.no_levels_used = static_cast<std::uint16_t>(
+                std::min<std::size_t>(std::numeric_limits<std::uint16_t>::max(),
+                                      std::max<std::size_t>(result.no_levels_used, ni + 1)));
 
             yes_remaining -= quantity;
             no_remaining -= quantity;
@@ -1061,6 +1062,40 @@ public:
             if (no_remaining <= 0) ++ni;
         }
         return result;
+    }
+
+    [[nodiscard]] PureArbSweepResult sweep_pure_arb(
+        const pm::v7::BookHotSnapshot& yes,
+        const pm::v7::BookHotSnapshot& no,
+        const PureArbMarketState& market,
+        bool buy,
+        std::int64_t maximum_shares_microunits = std::numeric_limits<std::int64_t>::max()) const noexcept {
+        return buy
+            ? sweep_pure_arb_levels(
+                yes.ask_levels, yes.ask_level_count,
+                no.ask_levels, no.ask_level_count,
+                market, true, maximum_shares_microunits)
+            : sweep_pure_arb_levels(
+                yes.bid_levels, yes.bid_level_count,
+                no.bid_levels, no.bid_level_count,
+                market, false, maximum_shares_microunits);
+    }
+
+    [[nodiscard]] PureArbSweepResult sweep_pure_arb(
+        const pm::v7::BookDeepSnapshot& yes,
+        const pm::v7::BookDeepSnapshot& no,
+        const PureArbMarketState& market,
+        bool buy,
+        std::int64_t maximum_shares_microunits = std::numeric_limits<std::int64_t>::max()) const noexcept {
+        return buy
+            ? sweep_pure_arb_levels(
+                yes.ask_levels, yes.ask_level_count,
+                no.ask_levels, no.ask_level_count,
+                market, true, maximum_shares_microunits)
+            : sweep_pure_arb_levels(
+                yes.bid_levels, yes.bid_level_count,
+                no.bid_levels, no.bid_level_count,
+                market, false, maximum_shares_microunits);
     }
 
     void restore_pure_arb_status() {
