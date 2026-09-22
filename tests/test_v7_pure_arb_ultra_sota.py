@@ -104,7 +104,8 @@ def test_ultra_sota_runtime_is_registered_fail_closed():
     for name in (
         "v7_exact_relation_discovery.py","v7_combo_market_source.py",
         "v7_combo_rfq_shadow.py","v7_combo_collateral_return_shadow.py",
-        "v7_clock_guard.py",
+        "v7_clock_guard.py","v7_combo_rfq_gateway_readonly.py",
+        "v7_multi_az_fencing_supervisor.py",
     ):
         assert loop.count(name)==1
     assert "v7_assert_registered_child_count 30" in loop
@@ -113,13 +114,14 @@ def test_ultra_sota_runtime_is_registered_fail_closed():
     assert manifest["expected_launcher_child_count"]==30
     ids={p["id"] for p in manifest["processes"]}
     assert {"pure_arb_exact_relation_discovery","combo_market_source","combo_rfq_shadow",
-            "combo_collateral_return_shadow","clock_guard","pure_arb_maker_self_fill_calibration","multi_az_fencing_guard","combo_rfq_gateway_readonly"}<=ids
+            "combo_collateral_return_shadow","clock_guard","pure_arb_maker_self_fill_calibration","multi_az_fencing_supervisor","combo_rfq_gateway_readonly"}<=ids
     bundle=json.loads((ROOT/"deploy/london/runtime_manifest.json").read_text())
     for name in (
         "scripts/v7_exact_relation_discovery.py","scripts/v7_combo_market_source.py",
         "scripts/v7_combo_rfq_shadow.py","scripts/v7_combo_collateral_return_shadow.py",
         "scripts/v7_clock_guard.py","scripts/v7_maker_self_fill_calibration.py",
-        "scripts/v7_multi_az_fencing_guard.py","scripts/v7_combo_rfq_gateway_readonly.py",
+        "scripts/v7_multi_az_fencing_guard.py","scripts/v7_multi_az_fencing_supervisor.py",
+        "scripts/v7_combo_rfq_gateway_readonly.py",
     ):
         assert name in bundle["python_entrypoints"]
 
