@@ -88,7 +88,7 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Fee-ready Contexts",
+      "title": "Active / Preloaded Contexts",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -102,10 +102,18 @@
       "description": "How many of the 30 asset×horizon contexts have an authoritative fee treatment.",
       "targets": [
         {
-          "expr": "polymarket_pure_arb_fee_ready_contexts",
+          "expr": "polymarket_pure_arb_active_contexts",
           "refId": "A",
           "instant": true,
-          "range": false
+          "range": false,
+          "legendFormat": "active"
+        },
+        {
+          "expr": "polymarket_pure_arb_preloaded_contexts",
+          "refId": "B",
+          "instant": true,
+          "range": false,
+          "legendFormat": "preloaded"
         }
       ],
       "fieldConfig": {
@@ -134,7 +142,7 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Locked PAPER Capacity",
+      "title": "Conservative Locked PnL",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -148,7 +156,7 @@
       "description": "Cumulative fee-adjusted top-of-book arbitrage capacity captured once per positive episode. PAPER simulation; pre-gas/on-chain fixed costs.",
       "targets": [
         {
-          "expr": "polymarket_pure_arb_paper_locked_pnl_pre_gas_usd_total",
+          "expr": "polymarket_pure_arb_conservative_locked_pnl_after_reserve_usd_total",
           "refId": "A",
           "instant": true,
           "range": false
@@ -473,7 +481,7 @@
     {
       "id": 12,
       "type": "bargauge",
-      "title": "Executable L1 Shares",
+      "title": "Executable L10 Shares",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -487,7 +495,7 @@
       "description": "Simultaneously executable top-level quantity: min of the two relevant leg depths.",
       "targets": [
         {
-          "expr": "polymarket_pure_arb_context_last_executable_shares_l1{asset=~\"$asset\",horizon=~\"$horizon\",kind=~\"$kind\"}",
+          "expr": "polymarket_pure_arb_context_last_executable_shares_l10{asset=~\"$asset\",horizon=~\"$horizon\",kind=~\"$kind\"}",
           "refId": "A",
           "legendFormat": "{{asset}} {{horizon}} {{kind}}",
           "instant": true,
@@ -987,11 +995,440 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 73
       },
       "options": {
         "mode": "markdown",
         "content": "### Mechanical complete-set arbitrage only\n**BUY_COMPLETE_SET:** buy YES + NO when fee-adjusted total cost is below 1.  \n**SELL_COMPLETE_SET:** sell prefunded YES + NO when fee-adjusted proceeds exceed 1.  \n\nNo ML, no Binance signal, no momentum and no intentional holding period. The C++ evaluator runs on the existing Polymarket book hot path with **0 ms artificial delay**. `Locked PAPER Capacity` is a paired top-of-book simulation and is **pre-gas / pre-on-chain fixed cost**, so it is the right metric for whether the price dislocation exists, not a claim of realized cash PnL."
+      }
+    },
+    {
+      "id": 25,
+      "title": "OPPORTUNITY FUNNEL",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "targets": [],
+      "collapsed": false
+    },
+    {
+      "id": 26,
+      "title": "Arbitrage Funnel — cumulative evaluations",
+      "type": "bargauge",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_pure_arb_funnel_total",
+          "legendFormat": "{{stage}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 27,
+      "title": "Receive → Decision Tail (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_pure_arb_latency_ns{kind=\"receive_to_decision\"} / 1e6",
+          "legendFormat": "{{percentile}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
+    },
+    {
+      "id": 28,
+      "title": "FREQUENCY EXPANSION — ZERO AUTHORITY PAPER",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "targets": [],
+      "collapsed": false
+    },
+    {
+      "id": 29,
+      "title": "Maker Cycles",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_complete_set_maker_cycles_total",
+          "legendFormat": "",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 30,
+      "title": "Maker Paired-fill %",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_complete_set_maker_paired_fill_probability * 100",
+          "legendFormat": "",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 31,
+      "title": "Maker One-leg %",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_complete_set_maker_one_leg_probability * 100",
+          "legendFormat": "",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 32,
+      "title": "Maker Shadow PnL",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_complete_set_maker_total_shadow_pnl_usd",
+          "legendFormat": "",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 33,
+      "title": "Post-fix Locked Arbs",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_settlement_source_arb_locked_total",
+          "legendFormat": "",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 34,
+      "title": "Post-fix Locked PnL",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_settlement_source_arb_locked_pnl_usd_total",
+          "legendFormat": "",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 35,
+      "title": "Maker Joint Fill States",
+      "type": "bargauge",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 62
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_complete_set_maker_state_total",
+          "legendFormat": "{{state}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 36,
+      "title": "Post-fix Arbitrage by Kind",
+      "type": "bargauge",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 62
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_settlement_source_arb_kind_locked_total",
+          "legendFormat": "{{kind}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 37,
+      "title": "Decision Compute Tail (µs)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 69
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-v7"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-v7"
+          },
+          "editorMode": "code",
+          "expr": "polymarket_pure_arb_latency_ns{kind=\"decision_compute\"} / 1e3",
+          "legendFormat": "{{percentile}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "µs"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        }
       }
     }
   ],
@@ -1007,7 +1444,7 @@
   "timezone": "browser",
   "title": "Polymarket V7 Crypto — Pure Arbitrage PAPER",
   "uid": "polymarket-v7-pure-arb",
-  "version": 1,
+  "version": 2,
   "templating": {
     "list": [
       {
