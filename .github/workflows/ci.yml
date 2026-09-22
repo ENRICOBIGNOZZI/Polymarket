@@ -417,13 +417,16 @@ jobs:
           cmake --build build-pure-arb-Release --parallel "$(nproc)" --target \
             polymarket_v7_native_clob_full_prewire_bench \
             polymarket_v7_crypto_to_oms_bench \
-            polymarket_v7_pure_arb_handoff_bench
+            polymarket_v7_pure_arb_handoff_bench \
+            polymarket_v7_paired_sign_bench
           build-pure-arb-Release/polymarket_v7_native_clob_full_prewire_bench 100000 \
             > build-pure-arb-Release/pure-arb-prewire-bench.json
           build-pure-arb-Release/polymarket_v7_crypto_to_oms_bench --samples 100000 \
             > build-pure-arb-Release/pure-arb-signal-to-oms-bench.json
           build-pure-arb-Release/polymarket_v7_pure_arb_handoff_bench --samples 50000 \
             > build-pure-arb-Release/pure-arb-handoff-bench.json
+          build-pure-arb-Release/polymarket_v7_paired_sign_bench --samples 20000 \
+            > build-pure-arb-Release/pure-arb-paired-sign-bench.json
           python3 scripts/v7_pure_arb_performance_gate.py \
             --config config/v7_pure_arb_performance_slo.json \
             --prewire build-pure-arb-Release/pure-arb-prewire-bench.json \
@@ -432,6 +435,7 @@ jobs:
           cat build-pure-arb-Release/pure-arb-prewire-bench.json
           cat build-pure-arb-Release/pure-arb-signal-to-oms-bench.json
           cat build-pure-arb-Release/pure-arb-handoff-bench.json
+          cat build-pure-arb-Release/pure-arb-paired-sign-bench.json
           cat build-pure-arb-Release/pure-arb-performance-gate.json
 
   pure-arb-sota-sanitizer:
