@@ -2,6 +2,10 @@
 """Run the zero-authority Maker challenger on active London PAPER evidence."""
 from __future__ import annotations
 
+import os
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
+
 import io
 import json
 from pathlib import Path
