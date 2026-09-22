@@ -61,9 +61,10 @@ def first_visible(locator):
     return None
 
 def wait_for_human_2sv(page, timeout_s: int = 420) -> bool:
-    """Wait for a human-approved Google 2SV challenge without bypassing MFA."""
+    """Trigger a normal Google Prompt when offered, then wait for human approval."""
     deadline = time.monotonic() + timeout_s
     last_url = ""
+    prompt_triggered = False
     while time.monotonic() < deadline:
         try:
             url = page.url
@@ -76,6 +77,27 @@ def wait_for_human_2sv(page, timeout_s: int = 420) -> bool:
         lowered = body.lower()
         if "accounts.google.com" not in url:
             return True
+
+        # Google's challenge/selection page can require choosing the normal
+        # phone prompt before any notification is sent. This does not bypass
+        # MFA; it only selects the standard user-approval path.
+        if not prompt_triggered and "/challenge/selection" in url:
+            candidates = [
+                r"Google Prompt", r"Tap Yes", r"Check your phone",
+                r"Use your phone", r"Get a prompt",
+            ]
+            chosen = None
+            for pattern in candidates:
+                chosen = first_visible(page.get_by_text(re.compile(pattern, re.I)))
+                if chosen is not None:
+                    break
+            if chosen is not None:
+                chosen.click()
+                prompt_triggered = True
+                print("tailnet_auth_google_prompt_triggered=true", flush=True)
+                page.wait_for_timeout(1500)
+                continue
+
         if any(marker.lower() in lowered for marker in (
             "2-step verification", "verify it's you", "confirm it's you",
             "check your phone", "tap yes", "google prompt", "passkey",
