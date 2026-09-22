@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# quota-direct-log-2sv
+# quota-google-identifier-wait
   actions: read
 
 jobs:
