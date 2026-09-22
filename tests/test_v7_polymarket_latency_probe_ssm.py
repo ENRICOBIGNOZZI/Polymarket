@@ -39,7 +39,7 @@ def test_latency_profiler_source_contains_no_order_mutation():
     assert "clob.polymarket.com" in source
     for forbidden in (
         "post_order", "create_order", "submit_order", "cancel_order",
-        "real_order_submission": True", "authenticated_execution": True",
+        '"real_order_submission": True', '"authenticated_execution": True',
     ):
         assert forbidden not in source
 
