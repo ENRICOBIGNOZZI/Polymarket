@@ -1028,6 +1028,7 @@ int main(int argc, char** argv) {
             std::array<std::int64_t, 8> candidate_trigger_ns{};
             std::array<std::uint8_t, 8> candidate_is_taker{};
             std::size_t alpha_candidate_count = 0;
+            bool pure_arb_claimed_cut = false;
             const auto append_candidate = [&](const ExecutionPlan& plan,
                                               std::int64_t trigger_ns,
                                               bool is_taker) noexcept {
@@ -1171,28 +1172,142 @@ int main(int argc, char** argv) {
                             ++pure_arb_shadow_latency_overflow;
                         }
 
+                        std::uint64_t arb_trace_id = 0;
                         if (latency_trace_writer) {
-                            LatencyTraceRecord trace{};
-                            trace.trace_id = ++pure_arb_trace_sequence;
-                            if (trace.trace_id == 0)
-                                trace.trace_id = ++pure_arb_trace_sequence;
-                            trace.market_handle = kMarket;
-                            trace.instrument_handle = event.instrument_handle;
-                            trace.frame_receive_monotonic_ns =
-                                arb_input.trigger_receive_monotonic_ns;
-                            trace.decode_complete_monotonic_ns =
-                                arb_input.decode_complete_monotonic_ns;
-                            trace.arb_decision_monotonic_ns =
-                                arb_finished_ns;
-                            if (trace.frame_receive_monotonic_ns > 0)
-                                trace.valid_mask |= TraceFrameReceive;
-                            if (trace.decode_complete_monotonic_ns
-                                >= trace.frame_receive_monotonic_ns
-                                && trace.decode_complete_monotonic_ns > 0)
-                                trace.valid_mask |= TraceDecodeComplete;
-                            trace.valid_mask |= TraceArbDecision;
-                            if (!latency_trace_writer->publish(trace))
-                                ++pure_arb_shadow_latency_overflow;
+                            arb_trace_id = ++pure_arb_trace_sequence;
+                            if (arb_trace_id == 0)
+                                arb_trace_id = ++pure_arb_trace_sequence;
+                            for (const auto instrument : {kYes, kNo}) {
+                                LatencyTraceRecord trace{};
+                                trace.trace_id = arb_trace_id;
+                                trace.market_handle = kMarket;
+                                trace.instrument_handle = instrument;
+                                trace.frame_receive_monotonic_ns =
+                                    arb_input.trigger_receive_monotonic_ns;
+                                trace.decode_complete_monotonic_ns =
+                                    arb_input.decode_complete_monotonic_ns;
+                                trace.arb_decision_monotonic_ns =
+                                    arb_finished_ns;
+                                if (trace.frame_receive_monotonic_ns > 0)
+                                    trace.valid_mask |= TraceFrameReceive;
+                                if (trace.decode_complete_monotonic_ns
+                                    >= trace.frame_receive_monotonic_ns
+                                    && trace.decode_complete_monotonic_ns > 0)
+                                    trace.valid_mask |= TraceDecodeComplete;
+                                trace.valid_mask |= TraceArbDecision;
+                                if (!latency_trace_writer->publish(trace))
+                                    ++pure_arb_shadow_latency_overflow;
+                            }
+                        }
+
+                        if (options.pure_arb_native_paper_execution
+                            && arb_plan.accepted != 0) {
+                            ++pure_arb_pair_attempts;
+                            const bool pair_plane_free =
+                                authority.active_orders() == 0
+                                && paper_execution.pending_arrivals() == 0
+                                && pure_arb_pair_execution.pending_arrivals() == 0;
+                            if (!pair_plane_free) {
+                                ++pure_arb_pair_blocked_other_orders;
+                            } else {
+                                ExecutionPlan yes_plan{}, no_plan{};
+                                ++pure_arb_intent_sequence;
+                                const auto yes_intent_id =
+                                    pure_arb_intent_sequence;
+                                ++pure_arb_intent_sequence;
+                                const auto no_intent_id =
+                                    pure_arb_intent_sequence;
+                                if (pure_arb_intent_sequence == 0
+                                    || !pure_arb::make_execution_plan(
+                                        arb_plan, true, yes_intent_id, yes_plan)
+                                    || !pure_arb::make_execution_plan(
+                                        arb_plan, false, no_intent_id, no_plan)) {
+                                    ++pure_arb_pair_lifecycle_failures;
+                                    ++adapter_handoff_failures;
+                                } else {
+                                    const auto risk_now =
+                                        monotonic_now_ns();
+                                    const auto admitted =
+                                        authority.submit_pair(
+                                            yes_plan, no_plan,
+                                            options.min_order_microunits,
+                                            risk_now);
+                                    if (admitted.accepted == 0) {
+                                        ++authority_rejections;
+                                        if (admitted.reason
+                                            == NativeSettlementPairReason::RollbackFailed) {
+                                            ++pure_arb_pair_lifecycle_failures;
+                                            ++adapter_handoff_failures;
+                                        }
+                                    } else {
+                                        ++pure_arb_pair_admitted;
+                                        pure_arb_claimed_cut = true;
+                                        if (!publish_order(
+                                                admitted.yes.tx.command,
+                                                ExecutionPolicyId::PureArbFok,
+                                                yes_book.exchange_event_ns,
+                                                yes_book.receive_monotonic_ns)
+                                            || !publish_order(
+                                                admitted.no.tx.command,
+                                                ExecutionPolicyId::PureArbFok,
+                                                no_book.exchange_event_ns,
+                                                no_book.receive_monotonic_ns)) {
+                                            ++adapter_handoff_failures;
+                                        }
+                                        if (latency_trace_writer
+                                            && arb_trace_id != 0) {
+                                            const std::array<
+                                                const NativeOrderCommand*, 2>
+                                                commands{
+                                                    &admitted.yes.tx.command,
+                                                    &admitted.no.tx.command};
+                                            for (const auto* command : commands) {
+                                                LatencyTraceRecord trace{};
+                                                trace.trace_id = arb_trace_id;
+                                                trace.market_handle = kMarket;
+                                                trace.instrument_handle =
+                                                    command->instrument_handle;
+                                                trace.client_order_id =
+                                                    command->client_order_id;
+                                                trace.risk_admitted_monotonic_ns =
+                                                    admitted.risk_admitted_monotonic_ns;
+                                                trace.valid_mask =
+                                                    TraceRiskAdmitted;
+                                                if (!latency_trace_writer->publish(trace))
+                                                    ++pure_arb_shadow_latency_overflow;
+                                            }
+                                        }
+                                        const auto pair_result =
+                                            pure_arb_pair_execution.submit(
+                                                admitted.yes.tx.command,
+                                                admitted.no.tx.command,
+                                                yes_book, no_book,
+                                                monotonic_now_ns());
+                                        if (pair_result.pending_arrival != 0) {
+                                            // Final state/fill evidence is emitted
+                                            // by consume_pure_arb_pair_arrivals.
+                                        } else {
+                                            if (pair_result.accepted != 0) {
+                                                ++pure_arb_pair_complete;
+                                                paper_fill_events += 2;
+                                            } else {
+                                                ++pure_arb_pair_rejected;
+                                            }
+                                            if (pair_result.censored != 0) {
+                                                ++pure_arb_pair_censored;
+                                                paper_arrival_censored += 2;
+                                            }
+                                            if (pair_result.reason
+                                                == NativePaperPairReason::LifecycleFailure) {
+                                                ++pure_arb_pair_lifecycle_failures;
+                                                ++adapter_handoff_failures;
+                                            }
+                                            if (!publish_pair_result(pair_result))
+                                                ++adapter_handoff_failures;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
