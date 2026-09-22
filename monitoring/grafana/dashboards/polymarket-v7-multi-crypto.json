@@ -2856,7 +2856,7 @@
           "unit": "currencyUSD",
           "decimals": 4,
           "custom": {
-            "spanNulls": true
+            "spanNulls": false
           }
         },
         "overrides": []
@@ -2903,7 +2903,7 @@
           "unit": "none",
           "decimals": 2,
           "custom": {
-            "spanNulls": true
+            "spanNulls": false
           }
         },
         "overrides": []
@@ -3144,7 +3144,7 @@
         "defaults": {
           "decimals": 4,
           "custom": {
-            "spanNulls": true
+            "spanNulls": false
           }
         },
         "overrides": []
@@ -3206,7 +3206,7 @@
           "unit": "ms",
           "decimals": 4,
           "custom": {
-            "spanNulls": true
+            "spanNulls": false
           }
         },
         "overrides": []
