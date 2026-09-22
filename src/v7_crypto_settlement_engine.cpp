@@ -1523,6 +1523,10 @@ int main(int argc, char** argv) {
         slow_feed.stop();
         if (bybit_thread.joinable()) bybit_thread.join();
         evidence_writer.stop();
+        if (latency_trace_writer) latency_trace_writer->stop();
+        const auto latency_trace_status = latency_trace_writer
+            ? latency_trace_writer->snapshot()
+            : LatencyTraceWriterSnapshot{};
 
         const auto binance_status = binance.snapshot();
         const auto coinbase_status = coinbase ? coinbase->snapshot() : ExternalWsSnapshot{};
@@ -1641,6 +1645,13 @@ int main(int argc, char** argv) {
             {"network_orders_sent", 0},
             {"simulated_fills", paper_execution.paper_fills()},
             {"latency_sample_overflow", latency_overflow},
+            {"binary_latency_trace", json::object{
+                {"configured", static_cast<bool>(latency_trace_writer)},
+                {"healthy", latency_trace_status.healthy != 0},
+                {"published", latency_trace_status.published},
+                {"written", latency_trace_status.written},
+                {"dropped", latency_trace_status.dropped},
+                {"queued", latency_trace_status.queued}}},
             {"accepted_signal_to_admission", latency_distribution(std::move(accepted_signal_to_admission))},
             {"accepted_signal_to_adapter", latency_distribution(std::move(accepted_signal_to_adapter))},
             {"first_signal_to_decision", latency_distribution(std::move(first_signal_to_decision))},
