@@ -118,6 +118,9 @@ class Shadow:
 
     def evaluate(self,row:dict[str,Any])->dict[str,Any]|None:
         if row.get("state")!="COMPLETE_PAIRED":return None
+        # BUY_COMPLETE_SET creates new equal YES+NO inventory. SELL_COMPLETE_SET
+        # consumes prefunded inventory and therefore leaves nothing to merge.
+        if str(row.get("kind") or "")!="BUY_COMPLETE_SET":return None
         scenario=str(row.get("scenario_id") or "")
         if not scenario or scenario in self.seen:return None
         self.seen.add(scenario)
