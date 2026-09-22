@@ -1,0 +1,46 @@
+name: V7 rich-history source check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-rich-history-source-check.json
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+      - name: Fetch exact research SHA and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-source-check.json"))["sha"])')"
+          branch="$(python3 -c 'import json;print(json.load(open("deploy/v7-rich-history-source-check.json"))["branch"])')"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          git fetch origin "$branch" --depth=50
+          git cat-file -e "$sha^{commit}"
+          git merge-base --is-ancestor "$sha" FETCH_HEAD
+          git checkout --detach "$sha"
+          python3 -m py_compile \
+            research/walk_forward_v3/rich_history_information.py \
+            ops/v7_rich_history_information_ssm.py
+          python3 - <<'PY'
+          from pathlib import Path
+          text=Path('research/walk_forward_v3/rich_history_information.py').read_text()
+          required=[
+            'ONE_ENTRY_PER_SHOCK',
+            'WHOLE_MARKET_START_CHRONOLOGICAL_60_20_20',
+            'MIN_VALIDATION_MSE_ON_OBSERVED_NET_CASH_PNL',
+            'training_states_per_shock_cap',
+            'split_by_rows',
+          ]
+          for token in required:
+              assert token in text, token
+          PY
