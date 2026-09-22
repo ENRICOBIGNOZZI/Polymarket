@@ -1613,6 +1613,7 @@ public:
             {"receive_wall_ms", row.receive_wall_ms},
             {"capture_origin_wall_ms", row.capture_origin_wall_ms},
             {"candidate_decision_snapshot", row.evaluate_candidate != 0},
+            {"snapshot_sequence", pure_arb_deep_snapshots_written_ + 1},
             {"market_id", market.market_id},
             {"yes_token", by_handle_[market.yes_handle]->token_id},
             {"no_token", by_handle_[market.no_handle]->token_id},
@@ -1997,6 +1998,8 @@ public:
         root["state_only"] = state_only_;
         root["pure_arb_paper_enabled"] = pure_arb_paper_;
         root["pure_arb_deep_snapshots_written"] = pure_arb_deep_snapshots_written_;
+        root["pure_arb_deep_queue_drops"] = pure_arb_deep_queue_drops_;
+        root["pure_arb_deep_snapshot_rejections"] = pure_arb_deep_snapshot_rejections_;
         root["pure_arb_deep_evidence_horizon_ms"] = kPureArbDeepEvidenceArmsMs.back();
         root["pure_arb_deep_evidence_sparse_event_time"] = true;
         root["state_publish_ms"] = state_publish_ms_;
