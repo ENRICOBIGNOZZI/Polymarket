@@ -61,28 +61,24 @@ def test_explicit_cross_market_basket_requires_exact_statewise_proof(monkeypatch
              "payout_vector":[0.0,1.0]},
         ],
     }
-    original=cross.fetch_book
-    cross.fetch_book=lambda _base,token,_timeout: {
-        "bid":0.39,"bid_q":10.0,
-        "ask":0.40 if token=="ay" else 0.50,"ask_q":10.0,
+    args=SimpleNamespace(clob_url="unused",timeout_seconds=1.0,
+                         maximum_shares=100.0,minimum_shares=1.0,
+                         reserve_per_share=0.001,
+                         minimum_locked_edge_per_share=0.001)
+    books={
+        "ay":{"bid":0.39,"bid_q":10.0,"ask":0.40,"ask_q":10.0},
+        "bn":{"bid":0.49,"bid_q":10.0,"ask":0.50,"ask_q":10.0},
     }
-    try:
-        args=SimpleNamespace(clob_url="unused",timeout_seconds=1.0,
-                             maximum_shares=100.0,minimum_shares=1.0,
-                             reserve_per_share=0.001,
-                             minimum_locked_edge_per_share=0.001)
-        rows,checked,invalid=cross.explicit_relation_opportunities(
-            [relation],markets,{},args)
-        assert checked==1 and invalid==0 and len(rows)==1
-        assert rows[0]["kind"]=="EXPLICIT_EXACT_PAYOUT_BASKET"
-        assert rows[0]["locked_pnl_capacity"]>0
-        bad=json.loads(json.dumps(relation))
-        bad["legs"][1]["payout_vector"]=[1.0,0.0]
-        rows,checked,invalid=cross.explicit_relation_opportunities(
-            [bad],markets,{},args)
-        assert checked==1 and invalid==1 and rows==[]
-    finally:
-        cross.fetch_book=original
+    rows,checked,invalid=cross.explicit_relation_opportunities(
+        [relation],markets,books,args)
+    assert checked==1 and invalid==0 and len(rows)==1
+    assert rows[0]["kind"]=="EXPLICIT_EXACT_PAYOUT_BASKET"
+    assert rows[0]["locked_pnl_capacity"]>0
+    bad=json.loads(json.dumps(relation))
+    bad["legs"][1]["payout_vector"]=[1.0,0.0]
+    rows,checked,invalid=cross.explicit_relation_opportunities(
+        [bad],markets,books,args)
+    assert checked==1 and invalid==1 and rows==[]
 
 
 def test_cpp_hot_path_contract_contains_new_frequency_guards():
