@@ -115,6 +115,15 @@ def test_london_runtime_staging_and_ci_receipts_are_service_user_owned():
     assert 'sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP"' in bootstrap
 
 
+def test_public_transport_probe_classifies_failure_causes():
+    probe = (ROOT / "src/v7_public_paired_clob_transport_probe.cpp").read_text()
+    for key in (
+        "wire_failures", "response_failures", "http_4xx_failures",
+        "http_5xx_failures", "timing_failures",
+    ):
+        assert key in probe
+
+
 def test_latency_failure_surfaces_bounded_partial_evidence():
     ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
     assert 'latency_lab_rc=$lab_rc' in ssm
