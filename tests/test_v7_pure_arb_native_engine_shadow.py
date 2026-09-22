@@ -16,20 +16,21 @@ def test_native_shadow_is_same_process_and_zero_authority():
     assert '"authority", "ZERO_AUTHORITY_RESEARCH_ONLY"' in engine
     assert '"--observation-only"' in manifest
 
-    start=engine.index("// Zero-authority complete-set arbitrage shadow.")
+    start=engine.index("// Canonical same-process pure complete-set arbitrage lane.")
     end=engine.index("if (options.capture_native_observations",start)
     shadow=engine[start:end]
-    assert "pure_arb::fee_usdc" in shadow
-    assert "pure_arb::price" in shadow
-    assert shadow.count("pure_arb::sweep(")==2
+    assert "pure_arb::PairInput" in shadow
+    assert "pure_arb::evaluate_pair" in shadow
+    assert "latency_trace_writer->publish" in shadow
     for forbidden in (
         "authority.submit(",
+        "authority.submit_pair(",
         "append_candidate(",
-        "ExecutionPlan",
         "paper_execution.submit(",
         "NativeClobOrderLane",
         "ofstream",
         "filesystem",
+        "json::",
     ):
         assert forbidden not in shadow
 
@@ -44,8 +45,7 @@ def test_shadow_terms_match_frozen_observer_reserve_and_venue_fees():
     assert 'double pure_arb_reserve_per_share = 0.0005' in observer
     assert "options.taker_fee_rate" in engine
     assert "options.taker_fee_exponent" in engine
-    assert "pure_arb::fee_usdc" in engine
-    assert "pure_arb::sweep" in engine
+    assert "pure_arb::evaluate_pair" in engine
     assert "pure_arb_max_leg_skew_ns = 100'000'000LL" in engine
     assert '"--pure-arb-max-leg-skew-ns", "100000000"' in manager
 
