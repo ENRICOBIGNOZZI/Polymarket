@@ -3,6 +3,8 @@
 #include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <thread>
+#include <vector>
 
 using namespace pm::v7;
 
@@ -38,5 +40,34 @@ int main() {
     assert(!tape.publish(rejected));
 
     std::filesystem::remove(path, ec);
+
+    const auto multi_path = std::filesystem::temp_directory_path()
+        / "pm-v7-native-latency-tape-mpsc-test.bin";
+    std::filesystem::remove(multi_path, ec);
+    NativeLatencyTape multi(multi_path.string());
+    constexpr std::uint64_t per_thread = 500;
+    std::vector<std::thread> producers;
+    for (std::uint64_t producer = 0; producer < 4; ++producer) {
+        producers.emplace_back([&, producer] {
+            for (std::uint64_t i = 1; i <= per_thread; ++i) {
+                NativeLatencyEvent event{};
+                event.trace_id = 10'000 + producer * per_thread + i;
+                event.client_order_id = event.trace_id;
+                event.timestamp_ns = 1'000'000
+                    + static_cast<std::int64_t>(producer * per_thread + i);
+                event.stage = NativeLatencyStage::HttpAck;
+                while (!multi.publish(event)) std::this_thread::yield();
+            }
+        });
+    }
+    for (auto& thread : producers) thread.join();
+    multi.stop();
+    const auto concurrent = multi.snapshot();
+    assert(concurrent.published == 4 * per_thread);
+    assert(concurrent.written == 4 * per_thread);
+    assert(concurrent.dropped == 0);
+    assert(std::filesystem::file_size(multi_path)
+        == 4 * per_thread * sizeof(NativeLatencyEvent));
+    std::filesystem::remove(multi_path, ec);
     return 0;
 }
