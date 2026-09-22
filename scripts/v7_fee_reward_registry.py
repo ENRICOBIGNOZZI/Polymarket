@@ -19,7 +19,12 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from v7_pure_arb_economics import taker_tier
+try:
+    from v7_pure_arb_economics import taker_tier
+except ModuleNotFoundError:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from v7_pure_arb_economics import taker_tier
 
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
