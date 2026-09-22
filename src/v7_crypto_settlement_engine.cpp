@@ -1057,7 +1057,10 @@ int main(int argc, char** argv) {
                 }
                 if (pm_ready && pending_pm.event.receive_monotonic_ns == receive_ns) {
                     const auto& event = pending_pm.event;
-                    // Match against the previous consumed book, never this later update.
+                    // Match delayed arrivals against the previous consumed
+                    // causal cut, never this later update.
+                    consume_pure_arb_pair_arrivals(
+                        event.receive_monotonic_ns);
                     consume_arrivals(event.instrument_handle,
                         event.instrument_handle == kYes ? yes_book : no_book,
                         event.receive_monotonic_ns);
