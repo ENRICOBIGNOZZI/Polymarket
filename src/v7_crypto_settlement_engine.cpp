@@ -416,6 +416,20 @@ int main(int argc, char** argv) {
         // probability artifact.
         decision_policy.probability_ev_enabled = probability_model.loaded ? 1 : 0;
         NativeCryptoDecisionLane lane(decision_policy);
+        pure_arb::Context pure_arb_context{};
+        pure_arb_context.market_handle = kMarket;
+        pure_arb_context.event_handle = kEvent;
+        pure_arb_context.yes_instrument_handle = kYes;
+        pure_arb_context.no_instrument_handle = kNo;
+        pure_arb_context.fee_rate = options.taker_fee_rate;
+        pure_arb_context.fee_exponent = options.taker_fee_exponent;
+        pure_arb_context.reserve_per_share = options.pure_arb_reserve_per_share;
+        pure_arb_context.minimum_order_microunits = options.min_order_microunits;
+        pure_arb_context.maximum_leg_skew_ns = options.pure_arb_max_leg_skew_ns;
+        pure_arb_context.sell_capacity_microunits =
+            std::numeric_limits<std::int64_t>::max();
+        pure_arb_context.fee_verified = 1;
+        pure_arb::PureArbLane pure_arb_lane(pure_arb_context);
         CapitalLimits limits = options.capital_limits;
         if (!options.observation_only && (!limits.valid() || options.risk_policy_sha256.size() != 64
             || !std::all_of(options.risk_policy_sha256.begin(), options.risk_policy_sha256.end(),
@@ -507,6 +521,7 @@ int main(int argc, char** argv) {
         std::uint64_t maker_blocked_by_fast_shock = 0;
         std::uint64_t last_protective_signal = 0;
         BookHotSnapshot yes_book{}, no_book{};
+        std::uint64_t yes_book_epoch = 0, no_book_epoch = 0;
         ExternalCancelSignalSnapshot current_signal{};
         SettlementProbabilityForecast decision_probability{};
         ProbabilityEvDecision decision_economics{};
@@ -918,139 +933,69 @@ int main(int argc, char** argv) {
                         event.instrument_handle == kYes ? yes_book : no_book,
                         event.receive_monotonic_ns);
 
-                    // Zero-authority complete-set arbitrage shadow.  It runs on
-                    // the canonical in-process PM books and never constructs an
-                    // executable candidate or calls the settlement authority.
-                    if (event.instrument_handle == kYes) yes_book = event.book;
-                    else if (event.instrument_handle == kNo) no_book = event.book;
+                    // Zero-authority complete-set arbitrage shadow. The
+                    // canonical PureArbLane owns causal gating and economics.
+                    if (event.instrument_handle == kYes) {
+                        yes_book = event.book;
+                        yes_book_epoch = pending_pm.connection_epoch;
+                    } else if (event.instrument_handle == kNo) {
+                        no_book = event.book;
+                        no_book_epoch = pending_pm.connection_epoch;
+                    }
                     if (options.pure_arb_native_shadow) {
-                        const bool pair_valid =
-                            yes_book.valid != 0 && no_book.valid != 0
-                            && yes_book.lineage_continuous != 0
-                            && no_book.lineage_continuous != 0;
-                        if (pair_valid) {
-                            const auto leg_skew_ns =
-                                yes_book.receive_monotonic_ns >= no_book.receive_monotonic_ns
-                                ? yes_book.receive_monotonic_ns - no_book.receive_monotonic_ns
-                                : no_book.receive_monotonic_ns - yes_book.receive_monotonic_ns;
-                            if (leg_skew_ns <= options.pure_arb_max_leg_skew_ns) {
-                                const bool executable_book =
-                                    yes_book.best_bid_e4 > 0
-                                    && yes_book.best_ask_e4 > yes_book.best_bid_e4
-                                    && yes_book.best_ask_e4 < 10'000
-                                    && no_book.best_bid_e4 > 0
-                                    && no_book.best_ask_e4 > no_book.best_bid_e4
-                                    && no_book.best_ask_e4 < 10'000
-                                    && yes_book.best_bid_microunits > 0
-                                    && yes_book.best_ask_microunits > 0
-                                    && no_book.best_bid_microunits > 0
-                                    && no_book.best_ask_microunits > 0
-                                    && yes_book.bid_level_count > 0
-                                    && yes_book.ask_level_count > 0
-                                    && no_book.bid_level_count > 0
-                                    && no_book.ask_level_count > 0;
-                                if (executable_book) {
-                                    const double yes_ask =
-                                        pure_arb::price(yes_book.best_ask_e4);
-                                    const double no_ask =
-                                        pure_arb::price(no_book.best_ask_e4);
-                                    const double yes_bid =
-                                        pure_arb::price(yes_book.best_bid_e4);
-                                    const double no_bid =
-                                        pure_arb::price(no_book.best_bid_e4);
-                                    const double buy_shares_l1 =
-                                        static_cast<double>(std::min(
-                                            yes_book.best_ask_microunits,
-                                            no_book.best_ask_microunits))
-                                        / pure_arb::kMicrounitsPerShare;
-                                    const double sell_shares_l1 =
-                                        static_cast<double>(std::min(
-                                            yes_book.best_bid_microunits,
-                                            no_book.best_bid_microunits))
-                                        / pure_arb::kMicrounitsPerShare;
-                                    const double buy_fee =
-                                        (pure_arb::fee_usdc(
-                                             buy_shares_l1, yes_ask,
-                                             options.taker_fee_rate,
-                                             options.taker_fee_exponent)
-                                         + pure_arb::fee_usdc(
-                                             buy_shares_l1, no_ask,
-                                             options.taker_fee_rate,
-                                             options.taker_fee_exponent))
-                                        / buy_shares_l1;
-                                    const double sell_fee =
-                                        (pure_arb::fee_usdc(
-                                             sell_shares_l1, yes_bid,
-                                             options.taker_fee_rate,
-                                             options.taker_fee_exponent)
-                                         + pure_arb::fee_usdc(
-                                             sell_shares_l1, no_bid,
-                                             options.taker_fee_rate,
-                                             options.taker_fee_exponent))
-                                        / sell_shares_l1;
-                                    if (std::isfinite(buy_fee)
-                                        && std::isfinite(sell_fee)) {
-                                        const double buy_edge =
-                                            1.0 - yes_ask - no_ask - buy_fee;
-                                        const double sell_edge =
-                                            yes_bid + no_bid - 1.0 - sell_fee;
-                                        const auto buy = pure_arb::sweep(
-                                            yes_book, no_book,
-                                            options.taker_fee_rate,
-                                            options.taker_fee_exponent,
-                                            options.pure_arb_reserve_per_share,
-                                            true);
-                                        const auto sell = pure_arb::sweep(
-                                            yes_book, no_book,
-                                            options.taker_fee_rate,
-                                            options.taker_fee_exponent,
-                                            options.pure_arb_reserve_per_share,
-                                            false);
-                                        ++pure_arb_shadow_evaluations;
-                                        pure_arb_shadow_last_buy_edge = buy_edge;
-                                        pure_arb_shadow_last_sell_edge = sell_edge;
-                                        pure_arb_shadow_max_buy_edge = std::max(
-                                            pure_arb_shadow_max_buy_edge, buy_edge);
-                                        pure_arb_shadow_max_sell_edge = std::max(
-                                            pure_arb_shadow_max_sell_edge, sell_edge);
-                                        pure_arb_shadow_last_buy_shares = buy.shares();
-                                        pure_arb_shadow_last_sell_shares = sell.shares();
-                                        if (buy_edge
-                                            > options.pure_arb_reserve_per_share + 1e-12) {
-                                            ++pure_arb_shadow_buy_positive;
-                                        }
-                                        if (sell_edge
-                                            > options.pure_arb_reserve_per_share + 1e-12) {
-                                            ++pure_arb_shadow_sell_positive;
-                                        }
-                                        if (buy.shares_microunits
-                                            >= options.min_order_microunits) {
-                                            ++pure_arb_shadow_buy_executable;
-                                        }
-                                        if (sell.shares_microunits
-                                            >= options.min_order_microunits) {
-                                            ++pure_arb_shadow_sell_executable;
-                                        }
-                                        const auto arb_finished_ns = monotonic_now_ns();
-                                        pure_arb_shadow_last_receive_to_decision_ns =
-                                            std::max<std::int64_t>(
-                                                0, arb_finished_ns
-                                                    - event.receive_monotonic_ns);
-                                        pure_arb_shadow_max_receive_to_decision_ns =
-                                            std::max(
-                                                pure_arb_shadow_max_receive_to_decision_ns,
-                                                pure_arb_shadow_last_receive_to_decision_ns);
-                                        if (pure_arb_shadow_receive_to_decision.size()
-                                            < pure_arb_shadow_receive_to_decision.capacity()) {
-                                            pure_arb_shadow_receive_to_decision.push_back(
-                                                pure_arb_shadow_last_receive_to_decision_ns);
-                                        } else {
-                                            ++pure_arb_shadow_latency_overflow;
-                                        }
-                                    }
-                                }
+                        pure_arb::PairInput arb_input{};
+                        arb_input.yes = yes_book;
+                        arb_input.no = no_book;
+                        arb_input.yes_connection_epoch = yes_book_epoch;
+                        arb_input.no_connection_epoch = no_book_epoch;
+                        auto arb = pure_arb_lane.evaluate(arb_input);
+                        if (arb.reason == pure_arb::RejectReason::LegSkewExceeded) {
+                            ++pure_arb_shadow_stale_pair;
+                        }
+                        if (arb.fee_finite != 0) {
+                            ++pure_arb_shadow_evaluations;
+                            pure_arb_shadow_last_buy_edge =
+                                arb.buy_edge_per_share;
+                            pure_arb_shadow_last_sell_edge =
+                                arb.sell_edge_per_share;
+                            pure_arb_shadow_max_buy_edge = std::max(
+                                pure_arb_shadow_max_buy_edge,
+                                arb.buy_edge_per_share);
+                            pure_arb_shadow_max_sell_edge = std::max(
+                                pure_arb_shadow_max_sell_edge,
+                                arb.sell_edge_per_share);
+                            pure_arb_shadow_last_buy_shares = arb.buy.shares();
+                            pure_arb_shadow_last_sell_shares = arb.sell.shares();
+                            if (arb.buy_edge_per_share
+                                > options.pure_arb_reserve_per_share + 1e-12) {
+                                ++pure_arb_shadow_buy_positive;
+                            }
+                            if (arb.sell_edge_per_share
+                                > options.pure_arb_reserve_per_share + 1e-12) {
+                                ++pure_arb_shadow_sell_positive;
+                            }
+                            if (arb.buy_minimum_met != 0)
+                                ++pure_arb_shadow_buy_executable;
+                            if (arb.sell_minimum_met != 0)
+                                ++pure_arb_shadow_sell_executable;
+
+                            const auto arb_finished_ns = monotonic_now_ns();
+                            if (arb.plan.valid != 0)
+                                arb.plan.decision_monotonic_ns = arb_finished_ns;
+                            pure_arb_shadow_last_receive_to_decision_ns =
+                                std::max<std::int64_t>(
+                                    0, arb_finished_ns
+                                        - event.receive_monotonic_ns);
+                            pure_arb_shadow_max_receive_to_decision_ns =
+                                std::max(
+                                    pure_arb_shadow_max_receive_to_decision_ns,
+                                    pure_arb_shadow_last_receive_to_decision_ns);
+                            if (pure_arb_shadow_receive_to_decision.size()
+                                < pure_arb_shadow_receive_to_decision.capacity()) {
+                                pure_arb_shadow_receive_to_decision.push_back(
+                                    pure_arb_shadow_last_receive_to_decision_ns);
                             } else {
-                                ++pure_arb_shadow_stale_pair;
+                                ++pure_arb_shadow_latency_overflow;
                             }
                         }
                     }
