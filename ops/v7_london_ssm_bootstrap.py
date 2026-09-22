@@ -35,6 +35,10 @@ LOG="$BENCH/bootstrap.$SHA.$RUN_ID.log"
 mkdir -p "$BENCH"
 [[ -d "$APP/.git" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
+[[ ! -L "$APP" ]]
+[[ "$(realpath "$APP")" == "/home/{service_user}/polymarket" ]]
+SERVICE_GROUP="$(id -gn {service_user})"
+chown -R {service_user}:"$SERVICE_GROUP" "$APP"
 dirty_before="$(sudo -u {service_user} git -C "$APP" status --porcelain)"
 if [[ -n "$dirty_before" ]]; then
   echo "benchmark_source_checkout_dirty=1"
