@@ -44,6 +44,7 @@ constexpr double kMicrounitsPerShare = 1'000'000.0;
 // Bounded rolling window: diagnostics only; never grows the hot-path heap.
 constexpr std::size_t kPureArbLatencySamples = 4096;
 constexpr std::size_t kPureArbOutputCapacity = 4096;
+constexpr std::size_t kPureArbDeepCapacity = 64;
 constexpr std::array<double, 7> kPureArbReserveArms{
     0.0, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005
 };
@@ -541,6 +542,22 @@ struct TradeEvidence {
 };
 static_assert(std::is_trivially_copyable_v<TradeEvidence>);
 
+struct PureArbPairBinding {
+    std::uint64_t market_handle = 0;
+    std::uint64_t yes_handle = 0;
+    std::uint64_t no_handle = 0;
+};
+
+struct PureArbDeepEvidence {
+    std::uint64_t market_handle = 0;
+    std::uint64_t connection_epoch = 0;
+    std::int64_t receive_wall_ms = 0;
+    std::int64_t trigger_receive_monotonic_ns = 0;
+    pm::v7::BookDeepSnapshot yes{};
+    pm::v7::BookDeepSnapshot no{};
+};
+static_assert(std::is_trivially_copyable_v<PureArbDeepEvidence>);
+
 struct FlowSample {
     std::int64_t receive_wall_ms = 0;
     double shares = 0.0;
@@ -588,8 +605,8 @@ struct PureArbSweepResult {
     double yes_notional = 0.0;
     double no_notional = 0.0;
     double marginal_edge_per_share = 0.0;
-    std::uint8_t yes_levels_used = 0;
-    std::uint8_t no_levels_used = 0;
+    std::uint16_t yes_levels_used = 0;
+    std::uint16_t no_levels_used = 0;
 
     [[nodiscard]] double shares() const noexcept {
         return micro_shares(shares_microunits);
@@ -615,9 +632,9 @@ struct PureArbSweepResult {
 struct PureArbQueuedEvent {
     std::uint64_t market_handle = 0;
     std::uint8_t kind = 0; // 1=BUY_COMPLETE_SET, 2=SELL_COMPLETE_SET
-    std::uint8_t yes_levels_used = 0;
-    std::uint8_t no_levels_used = 0;
-    std::uint8_t reserved = 0;
+    std::uint8_t reserved0 = 0;
+    std::uint16_t yes_levels_used = 0;
+    std::uint16_t no_levels_used = 0;
     std::int64_t receive_wall_ms = 0;
     std::int64_t receive_to_decision_ns = 0;
     std::int64_t shares_microunits = 0;
