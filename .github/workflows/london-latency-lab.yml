@@ -1,0 +1,222 @@
+name: London latency lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact 40-char commit SHA. Empty uses workflow SHA.
+        required: false
+        type: string
+      samples:
+        description: Samples per latency benchmark
+        required: false
+        default: "1000"
+        type: string
+      instance_eu_west_2a:
+        description: Optional explicit EC2 instance ID for eu-west-2a
+        required: false
+        type: string
+      instance_eu_west_2b:
+        description: Optional explicit EC2 instance ID for eu-west-2b
+        required: false
+        type: string
+      instance_eu_west_2c:
+        description: Optional explicit EC2 instance ID for eu-west-2c
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/london-latency-lab.yml"
+      - "ops/v7_london_latency_lab.sh"
+      - "include/pm/v7_clob_pair_transport.hpp"
+      - "src/v7_public_paired_tls_probe.cpp"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      AWS_REGION: eu-west-2
+      AWS_ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 1
+
+      - name: Resolve exact SHA and sample count
+        id: params
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="${{ inputs.expected_sha }}"
+          [[ -n "$sha" ]] || sha="$GITHUB_SHA"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          samples="${{ inputs.samples }}"
+          [[ -n "$samples" ]] || samples=1000
+          [[ "$samples" =~ ^[1-9][0-9]*$ ]]
+          (( samples >= 100 && samples <= 20000 ))
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "samples=$samples" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS OIDC credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: polymarket-latency-${{ github.run_id }}
+          allowed-account-ids: "350769147128"
+
+      - name: Discover one SSM-online Polymarket host per AZ
+        id: discover
+        shell: bash
+        env:
+          EXPLICIT_A: ${{ inputs.instance_eu_west_2a }}
+          EXPLICIT_B: ${{ inputs.instance_eu_west_2b }}
+          EXPLICIT_C: ${{ inputs.instance_eu_west_2c }}
+        run: |
+          set -euo pipefail
+          mkdir -p latency-artifacts
+          aws ec2 describe-instances             --region "$AWS_REGION"             --filters Name=instance-state-name,Values=running             > latency-artifacts/ec2-running.json
+          aws ssm describe-instance-information             --region "$AWS_REGION"             > latency-artifacts/ssm-online.json
+          python3 - <<'PY' > latency-artifacts/selected.tsv
+          import json,os,re
+          ec2=json.load(open("latency-artifacts/ec2-running.json"))
+          ssm=json.load(open("latency-artifacts/ssm-online.json"))
+          online={x["InstanceId"] for x in ssm.get("InstanceInformationList",[])
+                  if x.get("PingStatus")=="Online"}
+          explicit={
+            "eu-west-2a":os.environ.get("EXPLICIT_A","").strip(),
+            "eu-west-2b":os.environ.get("EXPLICIT_B","").strip(),
+            "eu-west-2c":os.environ.get("EXPLICIT_C","").strip(),
+          }
+          rows=[]
+          for res in ec2.get("Reservations",[]):
+            for inst in res.get("Instances",[]):
+              iid=inst.get("InstanceId","")
+              az=(inst.get("Placement") or {}).get("AvailabilityZone","")
+              tags={t.get("Key",""):t.get("Value","") for t in inst.get("Tags",[])}
+              name=tags.get("Name","")
+              marker=" ".join([name,*tags.keys(),*tags.values()])
+              rows.append((az,iid,name,marker))
+          for az in ("eu-west-2a","eu-west-2b","eu-west-2c"):
+            requested=explicit[az]
+            if requested:
+              matches=[r for r in rows if r[0]==az and r[1]==requested and r[1] in online]
+            else:
+              matches=[r for r in rows if r[0]==az and r[1] in online
+                       and re.search(r"(polymarket|mamma|hft)",r[3],re.I)]
+            if not matches:
+              print(f"{az}\tMISSING\t")
+            else:
+              matches.sort(key=lambda r:(0 if re.search(r"latency|paper",r[3],re.I) else 1,r[2],r[1]))
+              print(f"{az}\t{matches[0][1]}\t{matches[0][2]}")
+          PY
+          cat latency-artifacts/selected.tsv
+          missing="$(awk -F '	' '$2=="MISSING"{print $1}' latency-artifacts/selected.tsv | paste -sd, -)"
+          if [[ -n "$missing" ]]; then
+            echo "missing_az=$missing" >> "$GITHUB_OUTPUT"
+            echo "::error::No unambiguous SSM-online Polymarket host for: $missing"
+            exit 2
+          fi
+
+      - name: Run exact-SHA latency lab in each AZ
+        shell: bash
+        env:
+          SHA: ${{ steps.params.outputs.sha }}
+          SAMPLES: ${{ steps.params.outputs.samples }}
+        run: |
+          set -euo pipefail
+          while IFS=$'\t' read -r az instance name; do
+            [[ "$instance" != "MISSING" ]]
+            remote_out="/tmp/polymarket-v7-latency-$SHA-$az"
+            command_file="latency-artifacts/command-$az.json"
+            python3 - "$SHA" "$SAMPLES" "$remote_out" > "$command_file" <<'PY'
+          import json,shlex,sys
+          sha,samples,out=sys.argv[1:]
+          app='"${POLYMARKET_APP_DIR:-$HOME/polymarket}"'
+          temp=f"/tmp/v7-latency-lab-{sha}.sh"
+          cmd=f"""set -euo pipefail
+          APP={app}
+          test -d "$APP/.git"
+          git -C "$APP" fetch --quiet origin {shlex.quote(sha)}
+          test "$(git -C "$APP" rev-parse {shlex.quote(sha)})" = {shlex.quote(sha)}
+          git -C "$APP" show {shlex.quote(sha)}:ops/v7_london_latency_lab.sh > {shlex.quote(temp)}
+          chmod 700 {shlex.quote(temp)}
+          bash {shlex.quote(temp)} --sha {shlex.quote(sha)} --samples {shlex.quote(samples)} --output-dir {shlex.quote(out)}
+          cat {shlex.quote(out)}/summary.json
+          """
+          print(json.dumps({"commands":[cmd]}))
+          PY
+            command_id="$(aws ssm send-command               --region "$AWS_REGION"               --instance-ids "$instance"               --document-name AWS-RunShellScript               --comment "Polymarket latency lab $SHA $az"               --parameters "file://$command_file"               --query 'Command.CommandId' --output text)"
+            aws ssm wait command-executed               --region "$AWS_REGION"               --command-id "$command_id"               --instance-id "$instance"
+            aws ssm get-command-invocation               --region "$AWS_REGION"               --command-id "$command_id"               --instance-id "$instance"               > "latency-artifacts/invocation-$az.json"
+            python3 - "$az" "latency-artifacts/invocation-$az.json"               > "latency-artifacts/summary-$az.json" <<'PY'
+          import json,sys
+          az,path=sys.argv[1:]
+          row=json.load(open(path))
+          if row.get("Status")!="Success":
+              raise SystemExit(f"{az} SSM status={row.get('Status')} stderr={row.get('StandardErrorContent','')[-1000:]}")
+          lines=[x for x in row.get("StandardOutputContent","").splitlines() if x.strip()]
+          for line in reversed(lines):
+              try:
+                  obj=json.loads(line)
+              except Exception:
+                  continue
+              if obj.get("schema")=="polymarket_v7_london_latency_lab_v1":
+                  obj["availability_zone"]=az
+                  print(json.dumps(obj,sort_keys=True))
+                  break
+          else:
+              raise SystemExit(f"{az}: summary JSON missing")
+          PY
+          done < latency-artifacts/selected.tsv
+
+      - name: Rank AZs without predicting venue behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > latency-artifacts/az-comparison.json
+          import glob,json
+          rows=[json.load(open(p)) for p in glob.glob("latency-artifacts/summary-eu-west-2?.json")]
+          if len(rows)!=3: raise SystemExit("need exactly three AZ summaries")
+          def metric(r):
+              p=r["public_transport"]["parallel_two_persistent_lanes"]["pair_completion_ns"]
+              return (p["p99"],p["p999"],r["availability_zone"])
+          ordered=sorted(rows,key=metric)
+          out={
+            "schema":"polymarket_v7_london_az_comparison_v1",
+            "paper_only":True,
+            "authenticated_execution":False,
+            "real_order_submission":False,
+            "selection_metric":"public GET /time paired TLS pair-completion p99 then p999",
+            "measurements":[{
+              "availability_zone":r["availability_zone"],
+              "pair_p99_ns":r["public_transport"]["parallel_two_persistent_lanes"]["pair_completion_ns"]["p99"],
+              "pair_p999_ns":r["public_transport"]["parallel_two_persistent_lanes"]["pair_completion_ns"]["p999"],
+              "wire_skew_p99_ns":r["public_transport"]["parallel_two_persistent_lanes"]["wire_start_skew_ns"]["p99"],
+              "ack_skew_p99_ns":r["public_transport"]["parallel_two_persistent_lanes"]["ack_skew_ns"]["p99"],
+              "direct_p99_ns":r["handoff"]["direct"]["p99"],
+              "spsc_p99_ns":r["handoff"]["spsc_decision_core"]["p99"],
+              "ipo_sign_p99_ns":r["signing"]["ipo"]["p99"],
+              "pgo_sign_p99_ns":r["signing"]["pgo"]["p99"],
+            } for r in rows],
+            "lowest_measured_transport_tail_az":ordered[0]["availability_zone"],
+            "note":"Transport-only measurement; not an election/prediction and not matching-engine order latency."
+          }
+          print(json.dumps(out,sort_keys=True))
+          PY
+          cat latency-artifacts/az-comparison.json
+
+      - name: Upload latency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: london-latency-${{ steps.params.outputs.sha }}
+          path: latency-artifacts
+          if-no-files-found: error
+          retention-days: 30
