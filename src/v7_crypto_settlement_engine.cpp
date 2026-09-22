@@ -917,6 +917,86 @@ int main(int argc, char** argv) {
                     consume_arrivals(event.instrument_handle,
                         event.instrument_handle == kYes ? yes_book : no_book,
                         event.receive_monotonic_ns);
+
+                    // Zero-authority complete-set arbitrage shadow.  It runs on
+                    // the canonical in-process PM books and never constructs an
+                    // ExecutionPlan or calls the settlement authority.
+                    if (event.instrument_handle == kYes) yes_book = event.book;
+                    else if (event.instrument_handle == kNo) no_book = event.book;
+                    if (options.pure_arb_native_shadow) {
+                        const bool pair_valid =
+                            yes_book.valid != 0 && no_book.valid != 0
+                            && yes_book.lineage_continuous != 0
+                            && no_book.lineage_continuous != 0;
+                        if (pair_valid) {
+                            const auto leg_skew_ns =
+                                yes_book.receive_monotonic_ns >= no_book.receive_monotonic_ns
+                                ? yes_book.receive_monotonic_ns - no_book.receive_monotonic_ns
+                                : no_book.receive_monotonic_ns - yes_book.receive_monotonic_ns;
+                            if (leg_skew_ns <= options.pure_arb_max_leg_skew_ns) {
+                                const pure_arb::Terms arb_terms{
+                                    options.taker_fee_rate,
+                                    options.taker_fee_exponent,
+                                    options.pure_arb_reserve_per_share};
+                                const auto l1 = pure_arb::evaluate_l1(
+                                    yes_book, no_book, arb_terms);
+                                if (l1.valid != 0) {
+                                    const auto buy = pure_arb::sweep(
+                                        yes_book, no_book, arb_terms, true);
+                                    const auto sell = pure_arb::sweep(
+                                        yes_book, no_book, arb_terms, false);
+                                    ++pure_arb_shadow_evaluations;
+                                    pure_arb_shadow_last_buy_edge =
+                                        l1.buy_edge_per_share;
+                                    pure_arb_shadow_last_sell_edge =
+                                        l1.sell_edge_per_share;
+                                    pure_arb_shadow_max_buy_edge = std::max(
+                                        pure_arb_shadow_max_buy_edge,
+                                        l1.buy_edge_per_share);
+                                    pure_arb_shadow_max_sell_edge = std::max(
+                                        pure_arb_shadow_max_sell_edge,
+                                        l1.sell_edge_per_share);
+                                    pure_arb_shadow_last_buy_shares = buy.shares();
+                                    pure_arb_shadow_last_sell_shares = sell.shares();
+                                    if (l1.buy_edge_per_share
+                                        > options.pure_arb_reserve_per_share + 1e-12) {
+                                        ++pure_arb_shadow_buy_positive;
+                                    }
+                                    if (l1.sell_edge_per_share
+                                        > options.pure_arb_reserve_per_share + 1e-12) {
+                                        ++pure_arb_shadow_sell_positive;
+                                    }
+                                    if (buy.shares_microunits
+                                        >= options.min_order_microunits) {
+                                        ++pure_arb_shadow_buy_executable;
+                                    }
+                                    if (sell.shares_microunits
+                                        >= options.min_order_microunits) {
+                                        ++pure_arb_shadow_sell_executable;
+                                    }
+                                    const auto arb_finished_ns = monotonic_now_ns();
+                                    pure_arb_shadow_last_receive_to_decision_ns =
+                                        std::max<std::int64_t>(
+                                            0, arb_finished_ns
+                                                - event.receive_monotonic_ns);
+                                    pure_arb_shadow_max_receive_to_decision_ns =
+                                        std::max(
+                                            pure_arb_shadow_max_receive_to_decision_ns,
+                                            pure_arb_shadow_last_receive_to_decision_ns);
+                                    if (pure_arb_shadow_receive_to_decision.size()
+                                        < pure_arb_shadow_receive_to_decision.capacity()) {
+                                        pure_arb_shadow_receive_to_decision.push_back(
+                                            pure_arb_shadow_last_receive_to_decision_ns);
+                                    } else {
+                                        ++pure_arb_shadow_latency_overflow;
+                                    }
+                                }
+                            } else {
+                                ++pure_arb_shadow_stale_pair;
+                            }
+                        }
+                    }
+
                     if (options.capture_native_observations
                         || (options.capture_execution_windows
                             && event.receive_monotonic_ns <= execution_window_until_ns)) {
@@ -975,11 +1055,9 @@ int main(int argc, char** argv) {
                     maker_context.risk.new_risk_frozen = maker_quantity == 0 ? 1 : 0;
                     if (maker_quantity > 0) maker_model.base_quote_shares = maker_quantity / 1'000'000.0;
                     if (event.instrument_handle == kYes) {
-                        yes_book = event.book;
                         maker_decision = yes_maker.on_market_event(event, maker_context, maker_model);
                         maker_event = true;
                     } else if (event.instrument_handle == kNo) {
-                        no_book = event.book;
                         maker_decision = no_maker.on_market_event(event, maker_context, maker_model);
                         maker_event = true;
                     }
