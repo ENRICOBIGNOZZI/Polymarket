@@ -527,6 +527,19 @@ v7_exec_class CONTROL python3 scripts/v7_clock_guard.py \
   >> "$RUN_ROOT/clock_guard.log" 2>&1 &
 v7_register_optional_child "$!"
 
+FENCING_GUARD_ARGS=()
+if [[ "${PM_V7_MULTI_AZ_FENCING_REQUIRED:-0}" == "1" ]]; then
+  FENCING_GUARD_ARGS+=(--required)
+fi
+v7_exec_class CONTROL python3 scripts/v7_multi_az_fencing_guard.py \
+  --receipt "$RUN_ROOT/control/az_fencing_lease.json" \
+  --model-sha "$SHA" --owner-id "$SERVER_ID" \
+  --output "$RUN_ROOT/control/az_fencing_guard.json" --kill-marker "$KILL" \
+  --minimum-remaining-ms 5000 --interval-ms 1000 \
+  "${FENCING_GUARD_ARGS[@]}" \
+  >> "$RUN_ROOT/az_fencing_guard.log" 2>&1 &
+v7_register_optional_child "$!"
+
 v7_exec_class COLLECTOR python3 scripts/v7_multi_crypto_oracle_hub.py \
   --output "$PURE_ARB_DIR/oracle_hub_status.json" --model-sha "$SHA" \
   --settlement-registry "$CRYPTO_SETTLEMENT_MARKET_REGISTRY" \
@@ -676,15 +689,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_capital_allocator.py \
   >> "$PURE_ARB_DIR/capital_allocator.log" 2>&1 &
 v7_register_optional_child "$!"
 
-touch "$RUN_ROOT/control/verified_maker_fill_receipts.jsonl"
-v7_exec_class COLLECTOR python3 scripts/v7_maker_queue_calibration.py \
-  --cycles "$PURE_ARB_DIR/two_sided_complete_set_cycles.jsonl" \
-  --receipts "$RUN_ROOT/control/verified_maker_fill_receipts.jsonl" \
-  --model-sha "$SHA" --output "$PURE_ARB_DIR/maker_queue_calibration.json" \
-  --minimum-samples 20 --interval-seconds 10 \
-  >> "$PURE_ARB_DIR/maker_queue_calibration.log" 2>&1 &
-v7_register_optional_child "$!"
-
+touch "$RUN_ROOT/control/verified_self_fill_evidence.jsonl"
 # Queue-model calibration is dormant until independently verified own-order
 # USER-WS fills exist. Missing evidence yields WAITING, never synthetic calibration.
 v7_exec_class COLLECTOR python3 scripts/v7_maker_self_fill_calibration.py \
@@ -795,7 +800,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 28
+v7_assert_registered_child_count 29
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
