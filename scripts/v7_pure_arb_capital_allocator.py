@@ -70,6 +70,37 @@ def complete_set_merge_cost(policy:dict[str,Any],capital:float)->float:
     return fixed+capital*bps/10_000.0
 
 
+def verified_maker_reward_rates(path:Path|None,model_sha:str,now_ms:int)->dict[str,float]:
+    v=load(path)
+    if (
+        v.get("schema")!="polymarket_v7_fee_reward_registry_v1"
+        or v.get("model_sha")!=model_sha
+        or v.get("paper_only") is not True
+        or v.get("authenticated_execution") is not False
+        or v.get("real_order_submission") is not False
+        or v.get("unknown_reward_policy")!="ZERO_EXPECTED_VALUE"
+    ):
+        return {}
+    out={}
+    for row in v.get("markets") or []:
+        if not isinstance(row,dict):
+            continue
+        reward=row.get("reward") if isinstance(row.get("reward"),dict) else {}
+        if reward.get("verified") is not True:
+            continue
+        if reward.get("source")!="verified_realized_maker_reward_rate":
+            continue
+        try:
+            rate=float(reward.get("realized_pnl_pusd_per_capital_second"))
+            expires=int(reward.get("expires_at_ms") or 0)
+        except (TypeError,ValueError,OverflowError):
+            continue
+        mid=str(row.get("market_id") or "")
+        if mid and math.isfinite(rate) and rate>=0.0 and expires>=now_ms:
+            out[mid]=rate
+    return out
+
+
 def taker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]:
     transport=int(policy["taker_transport_delay_ms_for_allocation"])
     skew=int(policy["taker_inter_leg_skew_ms_for_allocation"])
@@ -107,15 +138,21 @@ def taker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]
     return out
 
 
-def maker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]:
-    arm=f'{float(policy["maker_queue_multiplier_for_allocation"]):.3f}'
+def maker_observations(path:Path|None,policy:dict[str,Any],
+                       reward_rates:dict[str,float]|None=None)->list[dict[str,Any]]:
+    multiplier=float(policy["maker_queue_multiplier_for_allocation"])
+    cancel_relief=float(policy.get("maker_cancel_relief_fraction_for_allocation",0.0))
     minimum=float(policy["minimum_lock_seconds"])
+    reward_rates=reward_rates or {}
     out=[]
     for r in rows(path):
         if r.get("schema")!="polymarket_v7_two_sided_complete_set_cycle_v2":continue
-        scenarios={f'{float(x.get("multiplier") or 0):.3f}':x
-                   for x in r.get("queue_scenarios") or [] if isinstance(x,dict)}
-        x=scenarios.get(arm)
+        scenarios={
+            (round(float(x.get("multiplier") or 0.0),6),
+             round(float(x.get("cancel_relief_fraction") or 0.0),6)):x
+            for x in r.get("queue_scenarios") or [] if isinstance(x,dict)
+        }
+        x=scenarios.get((round(multiplier,6),round(cancel_relief,6)))
         if not isinstance(x,dict) or not isinstance(x.get("total_shadow_pnl"),(int,float)):continue
         target=float(r.get("target_shares") or 0)
         capital=target*(float(r.get("yes_price") or 0)+float(r.get("no_price") or 0))
@@ -124,11 +161,17 @@ def maker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]
         end_ms=int(r.get("market_end_ms") or 0) if paired else event_ms+int(r.get("ttl_ms") or 0)
         lock=(complete_set_lock_seconds(policy,end_ms=end_ms,event_ms=event_ms,minimum=minimum)
               if paired else capital_lock_seconds(end_ms=end_ms,event_ms=event_ms,minimum=minimum))
-        pnl=float(x["total_shadow_pnl"])-(complete_set_merge_cost(policy,capital) if paired else 0.0)
+        base_pnl=float(x["total_shadow_pnl"])-(complete_set_merge_cost(policy,capital) if paired else 0.0)
+        market_id=str(r.get("market_id") or "")
+        reward_rate=max(0.0,float(reward_rates.get(market_id,0.0)))
+        ancillary_reward_pnl=reward_rate*capital*lock if capital>0 and lock>0 else 0.0
+        pnl=base_pnl+ancillary_reward_pnl
         if capital>0 and lock>0:
-            out.append({"strategy":"MAKER_COMPLETE_SET","market_id":str(r.get("market_id") or ""),
-                        "pnl":pnl,"capital":capital,
-                        "lock_seconds":lock})
+            out.append({"strategy":"MAKER_COMPLETE_SET","market_id":market_id,
+                        "pnl":pnl,"base_pnl":base_pnl,
+                        "verified_ancillary_reward_pnl":ancillary_reward_pnl,
+                        "verified_reward_rate_pusd_per_capital_second":reward_rate,
+                        "capital":capital,"lock_seconds":lock})
     return out
 
 
@@ -276,6 +319,7 @@ def main()->int:
     ap.add_argument("--maker-cycles",type=Path)
     ap.add_argument("--postfix-cycles",type=Path)
     ap.add_argument("--cross-status",type=Path)
+    ap.add_argument("--fee-reward-registry",type=Path)
     ap.add_argument("--output",type=Path,required=True)
     ap.add_argument("--model-sha",required=True)
     ap.add_argument("--interval-seconds",type=float,default=5.0)
@@ -286,8 +330,10 @@ def main()->int:
     if len(args.model_sha)!=40:raise SystemExit("invalid sha")
     while True:
         now_ms=time.time_ns()//1_000_000
+        reward_rates=verified_maker_reward_rates(
+            args.fee_reward_registry,args.model_sha,now_ms)
         obs=(taker_observations(args.taker_cycles,policy)
-             +maker_observations(args.maker_cycles,policy)
+             +maker_observations(args.maker_cycles,policy,reward_rates)
              +postfix_observations(args.postfix_cycles,policy)
              +cross_observations(args.cross_status,policy,now_ms))
         stats=summarize(obs,policy)
@@ -305,6 +351,7 @@ def main()->int:
             "automatic_promotion":False,
             "score_semantics":policy["score"],
             "maker_rebate_policy":policy["maker_rebate_policy"],
+            "verified_maker_reward_markets":len(reward_rates),
             "strategy_statistics":stats,
             "market_statistics":market_stats,
             "recommended_market_budget_pusd":market_alloc,
