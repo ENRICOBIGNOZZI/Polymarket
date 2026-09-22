@@ -9,11 +9,23 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from v7_process_manifest import ProcessManifestError, resolve  # noqa: E402
+from v7_process_manifest import ProcessManifestError, launcher_logs, resolve  # noqa: E402
 
 
 def manifest() -> dict:
     return json.loads((ROOT / "config/v7_process_manifest.json").read_text(encoding="utf-8"))
+
+
+
+def test_launcher_logs_resolve_run_root_aliases() -> None:
+    launcher = """
+RUN_ROOT=/tmp/run
+PURE_ARB_DIR="$RUN_ROOT/research/repricing_book"
+python3 worker.py >> "$PURE_ARB_DIR/worker.log" 2>&1 &
+v7_register_optional_child "$!"
+"""
+    assert launcher_logs(launcher) == ["research/repricing_book/worker.log"]
+
 
 
 def test_manifest_matches_crypto_only_runtime_inventory() -> None:
@@ -49,6 +61,7 @@ def test_launcher_child_cannot_escape_manifest_inventory() -> None:
 
 
 if __name__ == "__main__":
+    test_launcher_logs_resolve_run_root_aliases()
     test_manifest_matches_crypto_only_runtime_inventory()
     test_feed_process_cannot_gain_authority()
     test_launcher_child_cannot_escape_manifest_inventory()
