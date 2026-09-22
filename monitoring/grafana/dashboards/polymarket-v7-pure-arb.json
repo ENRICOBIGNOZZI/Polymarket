@@ -995,7 +995,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 73
+        "y": 85
       },
       "options": {
         "mode": "markdown",
@@ -1430,6 +1430,120 @@
           "showLegend": true
         }
       }
+    },
+    {
+      "id": 38,
+      "title": "CROSS-MARKET EXACT IDENTITY",
+      "type": "row",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
+      "targets": []
+    },
+    {
+      "id": 39,
+      "title": "Exact Identity Groups",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 74
+      },
+      "targets": [
+        {
+          "expr": "polymarket_cross_market_exact_arb_identity_groups",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "title": "Cross-market Opportunities",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 74
+      },
+      "targets": [
+        {
+          "expr": "polymarket_cross_market_exact_arb_opportunities",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "title": "Cross-market Locked Capacity",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 74
+      },
+      "targets": [
+        {
+          "expr": "polymarket_cross_market_exact_arb_locked_pnl_capacity_usd",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "title": "Cross-market Shadow",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 74
+      },
+      "targets": [
+        {
+          "expr": "polymarket_cross_market_exact_arb_up",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "title": "Maker Funnel",
+      "type": "bargauge",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 78
+      },
+      "targets": [
+        {
+          "expr": "polymarket_complete_set_maker_funnel_total",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 44,
+      "title": "Maker Cancel / Reprice Reasons",
+      "type": "bargauge",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 78
+      },
+      "targets": [
+        {
+          "expr": "polymarket_complete_set_maker_cancel_total",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "2s",
@@ -1444,7 +1558,7 @@
   "timezone": "browser",
   "title": "Polymarket V7 Crypto — Pure Arbitrage PAPER",
   "uid": "polymarket-v7-pure-arb",
-  "version": 2,
+  "version": 3,
   "templating": {
     "list": [
       {
