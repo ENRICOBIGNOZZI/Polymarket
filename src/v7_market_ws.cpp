@@ -543,6 +543,7 @@ MarketWsFrameResult MarketWsShard::process_frame(
     std::span<MarketWsEvent> output) noexcept {
 
     MarketWsFrameResult result;
+    result.frame_receive_monotonic_ns = receive.monotonic_ns;
     const std::int64_t frame_start_ns = monotonic_ns();
     if (payload.empty() || receive.monotonic_ns <= 0) {
         result.invalid_frame = 1;
@@ -591,6 +592,7 @@ MarketWsFrameResult MarketWsShard::process_frame(
     }
 
     const std::int64_t book_end_ns = monotonic_ns();
+    result.decode_complete_monotonic_ns = book_end_ns;
     result.book_apply_ns = std::max<std::int64_t>(
         0, book_end_ns - frame_start_ns - result.parse_ns);
     result.receive_to_book_ns = receive.monotonic_ns > 0
@@ -602,6 +604,8 @@ MarketWsFrameResult MarketWsShard::process_frame(
         if (output[index].kind == MarketWsEventKind::LineageInvalidated) {
             output[index].receive_monotonic_ns = receive.monotonic_ns;
         }
+        output[index].frame_receive_monotonic_ns = receive.monotonic_ns;
+        output[index].decode_complete_monotonic_ns = book_end_ns;
         output[index].frame_parse_ns = result.parse_ns;
         output[index].book_apply_ns = result.book_apply_ns;
         output[index].receive_to_book_ns = result.receive_to_book_ns;
