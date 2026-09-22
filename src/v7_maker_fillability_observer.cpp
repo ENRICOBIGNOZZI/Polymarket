@@ -780,6 +780,7 @@ public:
         flow_path_ = output_dir_ / "fillability_flow_snapshot.json";
         pure_arb_status_path_ = output_dir_ / "pure_arb_status.json";
         pure_arb_trades_path_ = output_dir_ / "pure_arb_trades.jsonl";
+        pure_arb_deep_book_path_ = output_dir_ / "pure_arb_deep_book_snapshots.jsonl";
         fs::create_directories(output_dir_ / "book_features");
         if (!state_only_) {
             output_.open(evidence_path_, std::ios::app);
@@ -795,6 +796,10 @@ public:
             restore_pure_arb_status();
             pure_arb_output_.open(pure_arb_trades_path_, std::ios::app);
             if (!pure_arb_output_) throw std::runtime_error("cannot open pure arb PAPER evidence file");
+            pure_arb_deep_book_output_.open(pure_arb_deep_book_path_, std::ios::app);
+            if (!pure_arb_deep_book_output_) {
+                throw std::runtime_error("cannot open pure arb deep book evidence file");
+            }
         }
     }
 
@@ -1522,6 +1527,62 @@ public:
         }
     }
 
+    [[nodiscard]] json::array deep_levels(
+        const std::array<pm::v7::PriceLevelE4, pm::v7::kDeepDepthLevels>& levels,
+        std::uint16_t count) const {
+        json::array out;
+        out.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto& level = levels[i];
+            if (level.price_e4 <= 0 || level.quantity_microunits <= 0) continue;
+            out.emplace_back(json::object{
+                {"price", e4_price(level.price_e4)},
+                {"size", micro_shares(level.quantity_microunits)}});
+        }
+        return out;
+    }
+
+    void write_pure_arb_deep_snapshot(const PureArbDeepEvidence& row) {
+        if (!pure_arb_deep_book_output_.is_open()
+            || row.market_handle == 0 || row.market_handle >= pure_arb_markets_.size()) return;
+        const auto& market = pure_arb_markets_[row.market_handle];
+        if (market.yes_handle == 0 || market.no_handle == 0
+            || market.yes_handle >= by_handle_.size() || market.no_handle >= by_handle_.size()
+            || by_handle_[market.yes_handle] == nullptr || by_handle_[market.no_handle] == nullptr) {
+            return;
+        }
+        json::object value{
+            {"schema", "polymarket_v7_pure_arb_deep_book_snapshot_v1"},
+            {"model_sha", model_sha_},
+            {"paper_only", true},
+            {"authenticated_execution", false},
+            {"real_order_submission", false},
+            {"execution_authority", "ZERO_AUTHORITY_RESEARCH_ONLY"},
+            {"observer_session_id", session_id_},
+            {"connection_epoch", row.connection_epoch},
+            {"receive_wall_ms", row.receive_wall_ms},
+            {"market_id", market.market_id},
+            {"yes_token", by_handle_[market.yes_handle]->token_id},
+            {"no_token", by_handle_[market.no_handle]->token_id},
+            {"yes_state_version", row.yes.state_version},
+            {"no_state_version", row.no.state_version},
+            {"yes_bid_levels", deep_levels(row.yes.bid_levels, row.yes.bid_level_count)},
+            {"yes_ask_levels", deep_levels(row.yes.ask_levels, row.yes.ask_level_count)},
+            {"no_bid_levels", deep_levels(row.no.bid_levels, row.no.bid_level_count)},
+            {"no_ask_levels", deep_levels(row.no.ask_levels, row.no.ask_level_count)},
+            {"depth_limit", static_cast<std::uint64_t>(pm::v7::kDeepDepthLevels)},
+            {"yes_bid_truncated", row.yes.bid_truncated != 0},
+            {"yes_ask_truncated", row.yes.ask_truncated != 0},
+            {"no_bid_truncated", row.no.bid_truncated != 0},
+            {"no_ask_truncated", row.no.ask_truncated != 0},
+        };
+        pure_arb_deep_book_output_ << json::serialize(value) << '\n';
+        if (!pure_arb_deep_book_output_) {
+            throw std::runtime_error("cannot write pure arb deep book evidence");
+        }
+        ++pure_arb_deep_snapshots_written_;
+    }
+
     void evaluate_pure_arb_deep(const PureArbDeepEvidence& row) {
         if (!pure_arb_paper_ || row.market_handle == 0
             || row.market_handle >= pure_arb_markets_.size()) return;
@@ -1787,12 +1848,14 @@ public:
         if (!state_only_) {
             output_.flush();
             book_output_.flush();
-            if (!output_ || !book_output_) {
+            if (pure_arb_deep_book_output_.is_open()) pure_arb_deep_book_output_.flush();
+            if (!output_ || !book_output_ || (pure_arb_deep_book_output_.is_open() && !pure_arb_deep_book_output_)) {
                 throw std::runtime_error("cannot flush canonical observer evidence");
             }
         }
         flush_pure_arb_events();
         if (pure_arb_output_.is_open()) pure_arb_output_.flush();
+        if (pure_arb_deep_book_output_.is_open()) pure_arb_deep_book_output_.flush();
         if (compact_label_output_.is_open()) {
             compact_label_output_.flush();
             if (!compact_label_output_) throw std::runtime_error("cannot flush compact PM label tape");
@@ -1814,6 +1877,7 @@ public:
         }
         PureArbDeepEvidence deep{};
         while (pure_arb_deep_queue_->try_pop(deep)) {
+            write_pure_arb_deep_snapshot(deep);
             evaluate_pure_arb_deep(deep);
         }
         const auto now_wall_ms = wall_ms();
@@ -1880,6 +1944,7 @@ public:
         root["trade_events_suppressed_disk_pressure"] = trade_events_suppressed_disk_pressure_;
         root["state_only"] = state_only_;
         root["pure_arb_paper_enabled"] = pure_arb_paper_;
+        root["pure_arb_deep_snapshots_written"] = pure_arb_deep_snapshots_written_;
         root["state_publish_ms"] = state_publish_ms_;
         root["book_event_tape_enabled"] = !state_only_;
         root["compact_label_tape_enabled"] = compact_label_output_.is_open();
@@ -2153,6 +2218,26 @@ private:
             {"feature_semantics", "CANONICAL_MAKER_LANE_OBSERVED_FLOW_V1"},
             {"cancel_intensity_semantics", "L5_CONTRACTION_MINUS_OBSERVED_TRADES_NORMALIZED_EW_PROXY"},
         };
+        // A candidate-time full deep snapshot plus these incremental changes
+        // reconstructs the exact deep book at future PAPER arrival. Full book
+        // replacements / tick changes / lineage gaps explicitly invalidate replay.
+        value["book_change"] = nullptr;
+        value["deep_replay_reset"] = false;
+        if (row.kind == MarketWsEventKind::BookChanged) {
+            if (row.aggressor_side != Side::None && row.price_e4 > 0
+                && row.quantity_microunits >= 0) {
+                value["book_change"] = json::object{
+                    {"side", side_name(row.aggressor_side)},
+                    {"price", e4_price(row.price_e4)},
+                    {"size", micro_shares(row.quantity_microunits)}};
+            } else {
+                // BookChanged with no level identity is a full snapshot replace.
+                value["deep_replay_reset"] = true;
+            }
+        } else if (row.kind == MarketWsEventKind::TickSizeChanged
+                   || row.kind == MarketWsEventKind::LineageInvalidated) {
+            value["deep_replay_reset"] = true;
+        }
         value["public_trade"] = nullptr;
         if (row.kind == MarketWsEventKind::Trade) {
             value["public_trade"] = json::object{
@@ -2227,6 +2312,9 @@ private:
     fs::path pure_arb_status_path_;
     fs::path pure_arb_trades_path_;
     std::ofstream pure_arb_output_;
+    fs::path pure_arb_deep_book_path_;
+    std::ofstream pure_arb_deep_book_output_;
+    std::uint64_t pure_arb_deep_snapshots_written_ = 0;
     std::unique_ptr<pm::v7::SpscRing<PureArbQueuedEvent, kPureArbOutputCapacity>>
         pure_arb_event_queue_ =
             std::make_unique<pm::v7::SpscRing<PureArbQueuedEvent, kPureArbOutputCapacity>>();
