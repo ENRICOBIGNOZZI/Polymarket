@@ -32,9 +32,8 @@ from research.walk_forward_v3.direct_action import (
 from research.walk_forward_v3 import multi_alpha_2h as base
 
 SCHEMA = "polymarket_v7_rich_history_information_v1"
-LATENCIES = (5, 10, 25, 50, 100, 250)
-EXIT_GRID_MS = (
-    500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 7500, 10000,
+LATENCIES = (5, 10, 25, 50, 100, 250, 500, 750, 1000)
+EXIT_GRID_MS = tuple(range(500, 10001, 250)) + (
     12500, 15000, 20000, 30000, 45000, 60000, 90000,
 )
 L2_GRID = (1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 8.0)
@@ -190,7 +189,7 @@ def deterministic_cells(decision_id, count=TRAIN_ACTIONS_PER_ROW):
         return cells
     raw = hashlib.sha256(str(decision_id).encode("utf-8")).digest()
     start = int.from_bytes(raw[:4], "big") % len(cells)
-    # 37 is coprime to the current 102-cell grid.
+    # 37 is coprime to the current dense action grid.
     stride = 37
     picked = []
     seen = set()
