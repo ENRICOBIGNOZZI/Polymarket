@@ -49,6 +49,7 @@ add_library(pm_v7_common
   src/v7_oms.cpp
   src/v7_paper_queue.cpp
   src/v7_market_state.cpp
+  src/v7_pure_arb_lane.cpp
   src/v7_markout.cpp
   src/v7_market_ws.cpp
   src/v7_capital.cpp
