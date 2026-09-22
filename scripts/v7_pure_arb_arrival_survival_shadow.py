@@ -180,14 +180,25 @@ class Shadow:
             if detected<=0 or not mid or kind not in {"BUY_COMPLETE_SET","SELL_COMPLETE_SET"}:
                 continue
             base=f"{mid}:{kind}:{detected}"
-            for delay in self.args.delay_arms_ms:
+            sources={delay:{"FIXED_COUNTERFACTUAL"} for delay in self.args.delay_arms_ms}
+            terms=market_terms(self.args.market_terms_root,mid)
+            if terms:
+                venue_ms=int(terms["mandatory_taker_delay_ns"])//1_000_000
+                for transport in self.args.transport_delay_arms_ms:
+                    sources.setdefault(venue_ms+transport,set()).add(
+                        f"VENUE_DELAY_{venue_ms}MS_PLUS_TRANSPORT_{transport}MS")
+            for delay,labels in sorted(sources.items()):
                 eid=f"{base}:{delay}"
-                if eid in self.seen: continue
+                if eid in self.seen:
+                    continue
                 self.pending.append({
                     "evaluation_id":eid,
                     "candidate":row,
                     "delay_ms":delay,
                     "target_ms":detected+delay,
+                    "delay_sources":sorted(labels),
+                    "market_terms_verified":bool(terms),
+                    "mandatory_taker_delay_ns":terms.get("mandatory_taker_delay_ns") if terms else None,
                 })
                 self.seen.add(eid)
 
