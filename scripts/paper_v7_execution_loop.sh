@@ -781,6 +781,10 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engi
   --maker-share-cap-microunits 1000000 \
   --observation-only \
   --capture-native-decisions --capture-execution-windows --execution-window-ns 5000000000 \
+  --pure-arb-shadow --pure-arb-reserve-per-share 0.0005 \
+  --pure-arb-max-leg-skew-ns 100000000 \
+  --pure-arb-max-receive-to-decision-ns 50000000 \
+  --pure-arb-prefunded-complete-set-shares 1000 \
   --asynchronous-settlement \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"
