@@ -37,6 +37,7 @@ struct NativeLatencyTapeSnapshot {
     std::uint64_t written = 0;
     std::uint64_t dropped = 0;
     std::uint64_t queued = 0;
+    std::uint64_t writer_observed_max_queued = 0;
     std::uint8_t healthy = 0;
 };
 
