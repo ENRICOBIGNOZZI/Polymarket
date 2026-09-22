@@ -431,15 +431,21 @@ class Shadow:
 
         limits={"YES":float(yplan["worst_price"]),"NO":float(nplan["worst_price"])}
         if mode=="BATCH":
+            # One authenticated /orders request; both entries reach the engine
+            # together, while acceptance/fill remains independent per order.
             times={"YES":target,"NO":target}
             order_sequence=("YES","NO")
         else:
             first=item["order"].split("_")[0]
             second="NO" if first=="YES" else "YES"
             if mode=="PARALLEL":
+                # Two independent persistent lanes leave together; measured
+                # inter-leg skew is the only extra arrival separation.
                 times={first:target,second:target+skew}
             else:
-                times={first:target,second:target+skew}
+                # Sequential waits one additional transport arm before leg 2,
+                # then applies the measured/order-processing skew.
+                times={first:target,second:target+int(item["transport_ms"])+skew}
             order_sequence=(first,second)
 
         fills={}
@@ -532,7 +538,10 @@ class Shadow:
             if target is None:
                 row=self.evaluate(item)
             else:
-                needed=int(target)+int(item["skew_ms"])+self.args.unwind_delay_ms
+                extra=int(item["skew_ms"])
+                if str(item.get("execution_mode") or "SEQUENTIAL")=="SEQUENTIAL":
+                    extra+=int(item.get("transport_ms") or 0)
+                needed=int(target)+extra+self.args.unwind_delay_ms
                 if self.book.watermark_ms<needed:
                     remain.append(item);continue
                 row=self.evaluate(item)
