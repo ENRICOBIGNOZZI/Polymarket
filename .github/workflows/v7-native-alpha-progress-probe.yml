@@ -100,6 +100,24 @@ jobs:
               'baseline':[compact(r) for r in baseline],
           }
           print("GRID_SUMMARY="+json.dumps(out,separators=(',',':'),sort_keys=True))
+          libs=[]
+          for pattern in (
+              'polymarket-native-alpha-2h-*/output/20_native_alpha_library.json',
+              'polymarket-multi-alpha-2h-*/output/20_native_alpha_library.json',
+          ):
+              for q in Path('/tmp').glob(pattern):
+                  if q.is_file():
+                      libs.append((q.stat().st_mtime_ns,q))
+          if libs:
+              q=max(libs)[1]
+              j=json.load(q.open())
+              print("ALPHA_META="+json.dumps({
+                  'path':str(q),
+                  'window':j.get('window'),
+                  'thresholds':j.get('thresholds_fit_on_first_60pct'),
+                  'execution_cache_entries':j.get('execution_cache_entries'),
+                  'alpha_count':len(j.get('alphas') or {}),
+              },separators=(',',':'),sort_keys=True))
           PY
           b64="$(base64 -w0 /tmp/remote_summary.py)"
           params="$(python3 - "$b64" <<'PY'
