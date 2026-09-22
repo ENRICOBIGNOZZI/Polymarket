@@ -1,0 +1,126 @@
+name: V7 Tailscale login state diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-ts-login-state-request.json
+      - .github/workflows/v7-ts-login-state.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Validate
+        run: |
+          python3 - deploy/v7-ts-login-state-request.json <<'PY'
+          import json,sys
+          assert json.load(open(sys.argv[1]))=={"schema":"polymarket_v7_ts_login_state_v1","read_only":True}
+          PY
+      - name: Decrypt one-shot login
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/key"
+          cred="$RUNNER_TEMP/cred.json"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          chmod 600 "$key"
+          python3 scripts/v7_ssh_envelope.py --private-key "$key" --input deploy/v7-tailnet-login.envelope.json --output "$cred"
+          rm -f "$key"
+      - name: Install browser
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check playwright
+          command -v google-chrome
+          command -v Xvfb
+      - name: Diagnose login state
+        env:
+          CRED: ${{ runner.temp }}/cred.json
+        run: |
+          set -euo pipefail
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1440x1000x24 >"$RUNNER_TEMP/xvfb.log" 2>&1 &
+          xvfb=$!
+          profile="$RUNNER_TEMP/chrome-profile"
+          mkdir -p "$profile"
+          google-chrome --remote-debugging-port=9222 --user-data-dir="$profile" --no-first-run --no-default-browser-check --disable-dev-shm-usage about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
+          chrome=$!
+          trap 'kill "$chrome" "$xvfb" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 50); do curl -fsS http://127.0.0.1:9222/json/version >/dev/null 2>&1 && break; sleep .1; done
+          python3 -u - <<'PY'
+          import json,os,re,time
+          from urllib.parse import urlparse
+          from playwright.sync_api import sync_playwright
+          v=json.load(open(os.environ['CRED']))
+          email=v['email']; password=v['password']
+          def visible(loc):
+              for i in range(loc.count()):
+                  x=loc.nth(i)
+                  try:
+                      if x.is_visible(): return x
+                  except Exception: pass
+              return None
+          with sync_playwright() as pw:
+              b=pw.chromium.connect_over_cdp('http://127.0.0.1:9222')
+              ctx=b.contexts[0] if b.contexts else b.new_context()
+              page=ctx.pages[0] if ctx.pages else ctx.new_page()
+              page.goto('https://login.tailscale.com/admin/machines',wait_until='domcontentloaded',timeout=120000)
+              # Tailscale Google button if present.
+              g=visible(page.get_by_text(re.compile(r'Google',re.I)))
+              if g is not None:
+                  try: g.click()
+                  except Exception: pass
+                  page.wait_for_timeout(1000)
+              # Google identifier.
+              ident=visible(page.locator('input[type="email"]'))
+              if ident is not None:
+                  ident.fill(email)
+                  nxt=visible(page.locator('#identifierNext')) or visible(page.get_by_role('button',name=re.compile(r'Next',re.I)))
+                  if nxt is not None: nxt.click()
+                  page.wait_for_timeout(1200)
+              passwd=visible(page.locator('input[name="Passwd"]'))
+              if passwd is not None:
+                  passwd.fill(password)
+                  nxt=visible(page.locator('#passwordNext')) or visible(page.get_by_role('button',name=re.compile(r'Next',re.I)))
+                  if nxt is not None: nxt.click()
+                  page.wait_for_timeout(3500)
+              url=page.url
+              title=page.title()
+              body=''
+              try: body=page.locator('body').inner_text(timeout=5000)
+              except Exception: pass
+              low=body.lower()
+              markers=[]
+              checks={
+                'google_2sv':['2-step verification','check your phone','tap yes','verify it’s you','verify it\'s you','try another way'],
+                'google_rejected':['couldn’t sign you in',"couldn't sign you in",'browser or app may not be secure','signin/rejected'],
+                'tailscale_admin':['machines','tailscale'],
+              }
+              for k,vals in checks.items():
+                  if any(x in low or x in url.lower() for x in vals): markers.append(k)
+              print('LOGIN_STATE_URL_HOST='+urlparse(url).hostname if urlparse(url).hostname else 'LOGIN_STATE_URL_HOST=')
+              print('LOGIN_STATE_PATH='+urlparse(url).path)
+              print('LOGIN_STATE_TITLE='+title[:160].replace('\n',' '))
+              print('LOGIN_STATE_MARKERS='+','.join(markers))
+              page.screenshot(path=os.path.join(os.environ['RUNNER_TEMP'],'ts-login-state.png'),full_page=True)
+              b.close()
+          PY
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-login-state-${{ github.run_id }}
+          path: ${{ runner.temp }}/ts-login-state.png
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Destroy login
+        if: always()
+        run: rm -f "$RUNNER_TEMP/cred.json" "$RUNNER_TEMP/key"
