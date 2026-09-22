@@ -272,8 +272,11 @@ class DeepReplayTimeline:
         if any(row.get(k) is True for k in (
             "yes_bid_truncated","yes_ask_truncated","no_bid_truncated","no_ask_truncated")):
             return
+        try:origin=int(row.get("capture_origin_wall_ms") or ts)
+        except (TypeError,ValueError,OverflowError):origin=ts
         snap={
-            "market_id":mid,"receive_wall_ms":ts,"connection_epoch":epoch,
+            "market_id":mid,"receive_wall_ms":ts,"capture_origin_wall_ms":origin,
+            "connection_epoch":epoch,
             "observer_session_id":session,"yes_token":yes,"no_token":no,
             "yes_bids":self._levels(row.get("yes_bid_levels")),
             "yes_asks":self._levels(row.get("yes_ask_levels")),
@@ -305,9 +308,20 @@ class DeepReplayTimeline:
     def levels_at(self,market:str,token:str,origin_ms:int,target_ms:int,
                   side:str,book:BookTimeline)->list[tuple[float,float]]|None:
         snapshot=None
+        # Prefer the newest full deep snapshot belonging to this exact candidate
+        # episode and available no later than the queried arrival. This safely
+        # re-anchors replay after a full-book replace/tick transition.
         for row in reversed(self.snapshots.get(market,())):
-            if row["receive_wall_ms"]<=origin_ms and token in {row["yes_token"],row["no_token"]}:
+            same_episode=int(row.get("capture_origin_wall_ms") or 0)==origin_ms
+            if (same_episode and row["receive_wall_ms"]<=target_ms
+                and token in {row["yes_token"],row["no_token"]}):
                 snapshot=row;break
+        if snapshot is None:
+            # Backward-compatible exact-origin snapshot for older evidence.
+            for row in reversed(self.snapshots.get(market,())):
+                if (row["receive_wall_ms"]<=origin_ms
+                    and token in {row["yes_token"],row["no_token"]}):
+                    snapshot=row;break
         if snapshot is None:return None
         if (snapshot["observer_session_id"]!=book.session
             or snapshot["connection_epoch"]!=book.epoch):
