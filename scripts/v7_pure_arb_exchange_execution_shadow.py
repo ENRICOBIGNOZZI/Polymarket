@@ -236,16 +236,25 @@ def book_point(book:BookTimeline,mid:str,token:str,at_ms:int,side:str)->dict[str
     }
 
 
+class FillResult(dict):
+    def __bool__(self)->bool:
+        return self.get("filled") is True
+
+
 def fok_fill(point:dict[str,Any]|None,*,side:str,limit:float|None,quantity:float,
-             target_ms:int,maximum_book_age_ms:int)->dict[str,Any]:
+             target_ms:int,maximum_book_age_ms:int)->FillResult:
     if point is None or quantity<=0:
-        return {"filled":False,"quantity":0.0,"vwap":None,"notional":0.0,
-                "worst_price":None,"levels_used":0,"fills":[]}
+        return FillResult({"filled":False,"quantity":0.0,"vwap":None,"notional":0.0,
+                "worst_price":None,"levels_used":0,"fills":[]})
     age=target_ms-int(point["ts"])
     if age<0 or age>maximum_book_age_ms:
-        return {"filled":False,"quantity":0.0,"vwap":None,"notional":0.0,
-                "worst_price":None,"levels_used":0,"fills":[]}
-    return fok_sweep(point["levels"],quantity,side,limit)
+        return FillResult({"filled":False,"quantity":0.0,"vwap":None,"notional":0.0,
+                "worst_price":None,"levels_used":0,"fills":[]})
+    levels=point.get("levels")
+    if not isinstance(levels,list):
+        try:levels=[(float(point["price"]),float(point["depth"]))]
+        except (KeyError,TypeError,ValueError,OverflowError):levels=[]
+    return FillResult(fok_sweep(levels,quantity,side,limit))
 
 
 def entry_cashflow(side:str,sweep:dict[str,Any],fee_rate:float,fee_exp:float)->tuple[float,float]:
@@ -467,7 +476,7 @@ class Shadow:
             name:entry_fees*fraction for _,fraction,name in TAKER_REBATE_TIERS
         }
         rebate_verified,rebate_fraction,rebate_tier=verified_taker_rebate(
-            self.args.fee_reward_registry,self.args.model_sha,time.time_ns()//1_000_000)
+            getattr(self.args,"fee_reward_registry",None),self.args.model_sha,time.time_ns()//1_000_000)
         base["taker_rebate_verified"]=rebate_verified
         base["taker_rebate_fraction"]=rebate_fraction if rebate_verified else 0.0
         base["taker_rebate_tier"]=rebate_tier if rebate_verified else None
