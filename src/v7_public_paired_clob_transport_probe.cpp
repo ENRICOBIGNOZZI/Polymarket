@@ -132,6 +132,11 @@ struct Samples {
     std::vector<std::int64_t> second_ack_offset_ns;
     std::vector<std::int64_t> ack_skew_ns;
     std::uint64_t failures = 0;
+    std::uint64_t wire_failures = 0;
+    std::uint64_t response_failures = 0;
+    std::uint64_t http_4xx_failures = 0;
+    std::uint64_t http_5xx_failures = 0;
+    std::uint64_t timing_failures = 0;
 };
 
 void reserve(Samples& s, std::size_t n) {
@@ -151,6 +156,15 @@ void record_parallel(
         || pair.yes.http_status < 200 || pair.yes.http_status >= 400
         || pair.no.http_status < 200 || pair.no.http_status >= 400) {
         ++out.failures;
+        if (!pair.both_wire_ok) ++out.wire_failures;
+        if (!pair.both_response_ok) ++out.response_failures;
+        if ((pair.yes.http_status >= 400 && pair.yes.http_status < 500)
+            || (pair.no.http_status >= 400 && pair.no.http_status < 500)) {
+            ++out.http_4xx_failures;
+        }
+        if (pair.yes.http_status >= 500 || pair.no.http_status >= 500) {
+            ++out.http_5xx_failures;
+        }
         return;
     }
     const auto start = std::min(
@@ -161,6 +175,7 @@ void record_parallel(
         pair.no.ack_complete_monotonic_ns);
     if (start <= 0 || ack < start) {
         ++out.failures;
+        ++out.timing_failures;
         return;
     }
     const auto first_wire = std::min(
@@ -199,6 +214,19 @@ void record_serial(
         || second.ack_complete_monotonic_ns
            < first.write_start_monotonic_ns) {
         ++out.failures;
+        if (!first.wire_ok || !second.wire_ok) ++out.wire_failures;
+        if (!first.response_ok || !second.response_ok) ++out.response_failures;
+        if ((first.http_status >= 400 && first.http_status < 500)
+            || (second.http_status >= 400 && second.http_status < 500)) {
+            ++out.http_4xx_failures;
+        }
+        if (first.http_status >= 500 || second.http_status >= 500) {
+            ++out.http_5xx_failures;
+        }
+        if (first.write_start_monotonic_ns <= 0
+            || second.ack_complete_monotonic_ns < first.write_start_monotonic_ns) {
+            ++out.timing_failures;
+        }
         return;
     }
     const auto start = first.write_start_monotonic_ns;
@@ -226,6 +254,11 @@ void record_serial(
 json::object samples_json(const Samples& s) {
     return {
         {"failures", s.failures},
+        {"wire_failures", s.wire_failures},
+        {"response_failures", s.response_failures},
+        {"http_4xx_failures", s.http_4xx_failures},
+        {"http_5xx_failures", s.http_5xx_failures},
+        {"timing_failures", s.timing_failures},
         {"pair_completion_ns", dist(s.pair_completion_ns)},
         {"first_wire_offset_ns", dist(s.first_wire_offset_ns)},
         {"second_wire_offset_ns", dist(s.second_wire_offset_ns)},
