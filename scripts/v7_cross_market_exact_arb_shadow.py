@@ -205,6 +205,9 @@ def explicit_relation_opportunities(
                 "proof_type":"FINITE_STATE_PAYOUT_VECTOR",
                 "states":[str(x) for x in states],
                 "guaranteed_payout":guarantee,
+                "market_end_ms":1000*max(
+                    int(market.get("close_timestamp_unix") or 0)
+                    for market,_,_,_ in resolved),
                 "basket_cost_after_fees":basket_cost,
                 "reserve_per_basket_unit":args.reserve_per_share,
                 "locked_edge_per_basket_unit":edge,
