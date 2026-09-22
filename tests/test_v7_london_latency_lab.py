@@ -69,6 +69,14 @@ def test_three_az_bootstrap_repairs_only_disabled_benchmark_checkout():
     assert "PM_V7_CI_REPOSITORY=ENRICOBIGNOZZI/Polymarket" in bootstrap
 
 
+def test_london_bootstrap_dependencies_retrigger_latency_lab():
+    bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
+    workflow = (ROOT / ".github/workflows/v7-london-aws-provision.yml").read_text()
+    assert "python3-numpy" in bootstrap
+    assert "- ops/v7_london_bootstrap.sh" in workflow
+    assert "- ops/v7_london_ssm_bootstrap.py" in workflow
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
