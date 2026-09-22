@@ -1,0 +1,195 @@
+{
+  "schema": "polymarket_v7_rich_data_capture_proposal_v1",
+  "version": 1,
+  "status": "PROPOSAL_ONLY_NOT_DEPLOYED",
+  "research_only": true,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false,
+  "objective": "Increase statistically usable causal observations for direct E[net PnL|X,asset,action] learning without loosening execution or causality semantics.",
+  "current_evidence_constraints": {
+    "approximately_available_history_hours": 29.7,
+    "dense_native_repricing_ms": [
+      25,
+      50,
+      100,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      2000
+    ],
+    "historically_sparse_native_repricing_ms": [
+      5,
+      10,
+      3000,
+      4000,
+      5000,
+      7500,
+      10000
+    ],
+    "no_native_repricing_above_ms": 10000,
+    "note": "Sparse/absent horizons must remain censored; they cannot be backfilled as zeros."
+  },
+  "proposed_repricing_capture": {
+    "horizons_ms": [
+      5,
+      10,
+      25,
+      50,
+      100,
+      250,
+      500,
+      750,
+      1000,
+      1250,
+      1500,
+      1750,
+      2000,
+      2250,
+      2500,
+      2750,
+      3000,
+      3250,
+      3500,
+      3750,
+      4000,
+      4250,
+      4500,
+      4750,
+      5000,
+      6000,
+      7500,
+      10000,
+      12500,
+      15000,
+      20000,
+      30000,
+      45000,
+      60000,
+      90000
+    ],
+    "principle": "Emit for every eligible causal origin until contract close; no interpolation and no future-after-target observations.",
+    "minimum_goal": "Accumulate at least 100 observed executable labels per asset for the economically relevant exit region before treating asset-specific PnL as more than exploratory.",
+    "missing_policy": "CENSORED_NEVER_ZERO"
+  },
+  "proposed_feature_capture": {
+    "external_return_windows_ms": [
+      5,
+      10,
+      25,
+      50,
+      100,
+      250,
+      500,
+      750,
+      1000,
+      1500,
+      2000,
+      3000,
+      5000,
+      7500,
+      10000
+    ],
+    "retain_venue_specific_returns": true,
+    "venue_fields": [
+      "binance_return_windows",
+      "coinbase_return_windows",
+      "bybit_return_windows",
+      "composite_return_windows",
+      "composite_microprice",
+      "weighted_median_price",
+      "dispersion_bps",
+      "max_residual_bps",
+      "health_mask",
+      "outlier_mask",
+      "fresh_venue_count",
+      "aggregate_ofi",
+      "aggregate_trade_imbalance"
+    ],
+    "volatility_fields": [
+      "realized_vol_fast",
+      "realized_vol_medium",
+      "realized_vol_slow",
+      "fast_slow_vol_ratio",
+      "jump_score",
+      "dispersion_change",
+      "dispersion_slope"
+    ],
+    "polymarket_fields": [
+      "yes_bid",
+      "yes_ask",
+      "no_bid",
+      "no_ask",
+      "yes_spread",
+      "no_spread",
+      "yes_depth",
+      "no_depth",
+      "imbalance",
+      "microprice",
+      "complete_set_gap",
+      "selected_price",
+      "selected_spread",
+      "selected_depth",
+      "tte",
+      "book_age",
+      "connection_epoch"
+    ],
+    "derivatives": [
+      "mark_price",
+      "index_price",
+      "funding_rate",
+      "open_interest_native",
+      "basis_to_spot_bp"
+    ],
+    "oracle_reference": [
+      "oracle_price",
+      "oracle_age",
+      "spot_minus_oracle_bp",
+      "distance_to_reference_bp"
+    ],
+    "cross_crypto": {
+      "assets": [
+        "BTC",
+        "ETH",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "BNB"
+      ],
+      "graph": "ALL_DIRECTED_PAIRS",
+      "fields": [
+        "leader_return_windows",
+        "relative_return_windows",
+        "leader_shock_z",
+        "common_factor_return",
+        "cross_sectional_dispersion"
+      ]
+    },
+    "availability_semantics": "Every feature must carry an availability/receive timestamp no later than the decision cut."
+  },
+  "opportunity_supply": {
+    "policy": "Do not lower tau merely to hit a trade-count quota.",
+    "audit_target": "Treat legacy confirmation as a candidate predictor, not a hard research gate, if raw causal labels are available.",
+    "preferred_test_evidence_per_asset_cell": 100,
+    "minimum_test_evidence_per_asset_cell": 50
+  },
+  "learning": {
+    "target": "OBSERVED_EXECUTABLE_NET_CASH_PNL",
+    "decision_rule": "E[net PnL | X, asset, action] > tau",
+    "primary_tau": 0,
+    "model": "POOLED_RIDGE_WITH_ASSET_CONTRACT_AND_CONTROLLED_INTERACTIONS",
+    "l2_selection": "VALIDATION_MSE_ONLY",
+    "compare": [
+      "pooled",
+      "pooled_plus_asset_interactions",
+      "asset_specific_when_sample_supports"
+    ],
+    "information_value": "Report PnL(F_k)-PnL(F_{k-1}) on identical held-out cells and assets."
+  }
+}
