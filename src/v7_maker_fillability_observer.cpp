@@ -1010,6 +1010,17 @@ public:
         return rate == 0.0 ? 0.0 : rate * std::pow(price * (1.0 - price), exponent);
     }
 
+    [[nodiscard]] static double pure_arb_fee_usdc(
+        double shares, double price, double rate, double exponent) noexcept {
+        const double per_share = pure_arb_fee_per_share(price, rate, exponent);
+        if (!std::isfinite(shares) || shares <= 0.0 || !std::isfinite(per_share)) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        const double raw = shares * per_share;
+        if (raw < 0.00001 - 1e-15) return 0.0;
+        return std::round(raw * 100000.0) / 100000.0;
+    }
+
     template <std::size_t N>
     [[nodiscard]] PureArbSweepResult sweep_pure_arb_levels(
         const std::array<pm::v7::PriceLevelE4, N>& yes_levels,
@@ -1032,19 +1043,20 @@ public:
 
             const double yes_price = e4_price(yes_levels[yi].price_e4);
             const double no_price = e4_price(no_levels[ni].price_e4);
-            const double fee = pure_arb_fee_per_share(
-                yes_price, market.fee_rate, market.fee_exponent)
-                + pure_arb_fee_per_share(no_price, market.fee_rate, market.fee_exponent);
-            if (!std::isfinite(fee)) break;
+            const auto quantity = std::min({yes_remaining, no_remaining, capacity_remaining});
+            if (quantity <= 0) break;
+            const double shares = micro_shares(quantity);
+            const double fee_total = pure_arb_fee_usdc(
+                shares, yes_price, market.fee_rate, market.fee_exponent)
+                + pure_arb_fee_usdc(
+                    shares, no_price, market.fee_rate, market.fee_exponent);
+            if (!std::isfinite(fee_total)) break;
+            const double fee = fee_total / shares;
 
             const double gross_edge = buy
                 ? 1.0 - yes_price - no_price - fee
                 : yes_price + no_price - 1.0 - fee;
             if (!(gross_edge > pure_arb_reserve_per_share_ + 1e-12)) break;
-
-            const auto quantity = std::min({yes_remaining, no_remaining, capacity_remaining});
-            if (quantity <= 0) break;
-            const double shares = micro_shares(quantity);
             result.shares_microunits += quantity;
             result.gross_locked_pnl += shares * gross_edge;
             result.conservative_locked_pnl += shares * (gross_edge - pure_arb_reserve_per_share_);
@@ -1314,6 +1326,7 @@ public:
                 {"sizing_depth", "LOCAL_DEEP_BOOK_POSITIVE_MARGINAL_EDGE"},
                 {"fee_rate", market.fee_rate},
                 {"fee_exponent", market.fee_exponent},
+                {"fee_rounding", "MATCHED_QUANTITY_5DP_MIN_0.00001_USDC"},
                 {"artificial_delay_ms", 0},
                 {"paired_fok_simulation", true},
                 {"one_cycle_per_positive_episode", true},
@@ -1408,12 +1421,22 @@ public:
         const double no_ask = e4_price(no.best_ask_e4);
         const double yes_bid = e4_price(yes.best_bid_e4);
         const double no_bid = e4_price(no.best_bid_e4);
-        const double buy_fee = pure_arb_fee_per_share(
-            yes_ask, market.fee_rate, market.fee_exponent)
-            + pure_arb_fee_per_share(no_ask, market.fee_rate, market.fee_exponent);
-        const double sell_fee = pure_arb_fee_per_share(
-            yes_bid, market.fee_rate, market.fee_exponent)
-            + pure_arb_fee_per_share(no_bid, market.fee_rate, market.fee_exponent);
+        const double buy_shares_l1 = micro_shares(buy_qty_l1);
+        const double sell_shares_l1 = micro_shares(sell_qty_l1);
+        const double buy_fee = buy_shares_l1 > 0.0
+            ? (pure_arb_fee_usdc(
+                   buy_shares_l1, yes_ask, market.fee_rate, market.fee_exponent)
+               + pure_arb_fee_usdc(
+                   buy_shares_l1, no_ask, market.fee_rate, market.fee_exponent))
+                / buy_shares_l1
+            : std::numeric_limits<double>::quiet_NaN();
+        const double sell_fee = sell_shares_l1 > 0.0
+            ? (pure_arb_fee_usdc(
+                   sell_shares_l1, yes_bid, market.fee_rate, market.fee_exponent)
+               + pure_arb_fee_usdc(
+                   sell_shares_l1, no_bid, market.fee_rate, market.fee_exponent))
+                / sell_shares_l1
+            : std::numeric_limits<double>::quiet_NaN();
         if (!std::isfinite(buy_fee) || !std::isfinite(sell_fee)) {
             market.buy.active = false;
             market.sell.active = false;
