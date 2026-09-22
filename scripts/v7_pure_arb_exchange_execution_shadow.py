@@ -531,8 +531,8 @@ class Shadow:
             base["state"]="NO_TRADE_SIZE";return base
 
         base["lifecycle"]+=["SENT","ACK_PENDING","PENDING_DELAY"]
-        y0=book_point(self.book,mid,yes,target,side,deep=self.deep,origin_ms=origin)
-        n0=book_point(self.book,mid,no,target,side,deep=self.deep,origin_ms=origin)
+        y0=book_point(self.book,mid,yes,target,side,deep=getattr(self,"deep",None),origin_ms=origin)
+        n0=book_point(self.book,mid,no,target,side,deep=getattr(self,"deep",None),origin_ms=origin)
         if y0 is None or n0 is None:
             base["state"]="CENSORED_ARRIVAL_BOOK";return base
         if max(target-int(y0["ts"]),target-int(n0["ts"]))>self.args.maximum_book_age_ms:
@@ -602,7 +602,7 @@ class Shadow:
         for leg in order_sequence:
             token=yes if leg=="YES" else no
             point=book_point(
-                self.book,mid,token,times[leg],side,deep=self.deep,origin_ms=origin)
+                self.book,mid,token,times[leg],side,deep=getattr(self,"deep",None),origin_ms=origin)
             sweep=fok_fill(point,side=side,limit=limits[leg],quantity=q,
                            target_ms=times[leg],maximum_book_age_ms=self.args.maximum_book_age_ms)
             ok=bool(sweep.get("filled"))
@@ -654,7 +654,7 @@ class Shadow:
         first=filled[0];token=yes if first=="YES" else no
         unwind_at=max(times.values())+self.args.unwind_delay_ms
         point=book_point(
-            self.book,mid,token,unwind_at,side,deep=self.deep,origin_ms=origin)
+            self.book,mid,token,unwind_at,side,deep=getattr(self,"deep",None),origin_ms=origin)
         if point is None:
             base["state"]="ONE_LEG_UNWIND_CENSORED";base["paired_execution"]=False
             base["lifecycle"].append("UNWIND_CENSORED");return base
