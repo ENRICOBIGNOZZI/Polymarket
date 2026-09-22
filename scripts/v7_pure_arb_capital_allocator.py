@@ -18,7 +18,7 @@ import statistics
 import time
 from typing import Any
 
-from v7_pure_arb_economics import tail_risk_summary
+from v7_pure_arb_economics import tail_jsonl, tail_risk_summary
 
 SCHEMA="polymarket_v7_pure_arb_capital_allocator_v1"
 
@@ -30,16 +30,13 @@ def load(path:Path|None)->dict[str,Any]:
     return v if isinstance(v,dict) else {}
 
 
-def rows(path:Path|None)->list[dict[str,Any]]:
-    if path is None:return []
-    out=[]
-    try:
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            try:v=json.loads(raw)
-            except json.JSONDecodeError:continue
-            if isinstance(v,dict):out.append(v)
-    except OSError:pass
-    return out
+def rows(
+    path:Path|None,policy:dict[str,Any]|None=None
+)->list[dict[str,Any]]:
+    policy=policy or {}
+    maximum=max(1,int(policy.get("maximum_observations_per_source") or 50_000))
+    byte_cap=max(1_048_576,int(policy.get("maximum_jsonl_scan_bytes") or 67_108_864))
+    return tail_jsonl(path,max_rows=maximum,max_bytes=byte_cap)
 
 
 def conservative_mean(values:list[float],z:float)->float|None:
@@ -139,7 +136,7 @@ def taker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]
     minimum=float(policy["minimum_lock_seconds"])
     allocation_mode=str(policy.get("taker_execution_mode_for_allocation") or "WORST_ACROSS_MODES").upper()
     groups=defaultdict(list)
-    for r in rows(path):
+    for r in rows(path,policy):
         if r.get("schema")!="polymarket_v7_pure_arb_exchange_execution_cycle_v1":continue
         if int(r.get("transport_delay_ms") or -1)!=transport:continue
         mode=str(r.get("execution_mode") or "SEQUENTIAL").upper()
