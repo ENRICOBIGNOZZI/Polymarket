@@ -30,9 +30,13 @@ def remote_command(sha: str, zone_id: str, service_user: str,
     return f'''set -euo pipefail
 APP=/home/{service_user}/polymarket
 OUT=/mnt/polymarket-data/benchmarks/multipath-{zone_id}
-mkdir -p "$OUT"
+[[ "$OUT" == /mnt/polymarket-data/benchmarks/multipath-* ]]
 [[ "$(sudo -u {service_user} git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
+SERVICE_GROUP="$(id -gn {service_user})"
+rm -rf "$OUT"
+install -d -o {service_user} -g "$SERVICE_GROUP" "$OUT"
+[[ "$(stat -c '%U' "$OUT")" == "{service_user}" ]]
 sudo -u {service_user} python3 "$APP/scripts/v7_public_ws_latency_probe.py" \
   --app "$APP" --region {zone_id} --expected-sha {sha} \
   --duration {ws_duration} --handshakes 30 --output "$OUT/polymarket-ws.json"
