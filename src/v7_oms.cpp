@@ -45,6 +45,7 @@ OmsOrder::OmsOrder(const StrategyIntent& intent, std::uint64_t client_order_id) 
     record_.side = intent.side;
     record_.price_tick = intent.price_tick;
     record_.causal_trigger_receive_monotonic_ns = intent.causal_trigger_receive_monotonic_ns;
+    record_.decode_complete_monotonic_ns = intent.decode_complete_monotonic_ns;
     record_.signal_ready_monotonic_ns = intent.signal_ready_monotonic_ns;
     record_.decision_monotonic_ns = intent.decision_monotonic_ns;
     record_.original_microunits = std::max<std::int64_t>(0, intent.quantity_microunits);
@@ -61,18 +62,32 @@ OmsLatencySnapshot oms_latency_snapshot(const OmsOrderRecord& record) noexcept {
             out.valid_mask |= static_cast<std::uint32_t>(flag);
         }
     };
+    leg(record.causal_trigger_receive_monotonic_ns, record.decode_complete_monotonic_ns,
+        OmsLatencyLeg::TriggerToDecode, out.trigger_to_decode_ns);
+    leg(record.decode_complete_monotonic_ns, record.decision_monotonic_ns,
+        OmsLatencyLeg::DecodeToDecision, out.decode_to_decision_ns);
     leg(record.causal_trigger_receive_monotonic_ns, record.signal_ready_monotonic_ns,
         OmsLatencyLeg::TriggerToSignal, out.trigger_to_signal_ns);
     leg(record.signal_ready_monotonic_ns, record.decision_monotonic_ns,
         OmsLatencyLeg::SignalToDecision, out.signal_to_decision_ns);
     leg(record.causal_trigger_receive_monotonic_ns, record.decision_monotonic_ns,
         OmsLatencyLeg::TriggerToDecision, out.trigger_to_decision_ns);
+    leg(record.decision_monotonic_ns, record.risk_admitted_ns,
+        OmsLatencyLeg::DecisionToRisk, out.decision_to_risk_ns);
     leg(record.decision_monotonic_ns, record.submission_ns,
         OmsLatencyLeg::DecisionToQueue, out.decision_to_queue_ns);
+    leg(record.risk_admitted_ns, record.wire_ns,
+        OmsLatencyLeg::RiskToWire, out.risk_to_wire_ns);
     leg(record.submission_ns, record.wire_ns,
         OmsLatencyLeg::QueueToWire, out.queue_to_wire_ns);
     leg(record.wire_ns, record.ack_ns,
         OmsLatencyLeg::WireToAck, out.wire_to_ack_ns);
+    leg(record.wire_ns, record.http_ack_ns,
+        OmsLatencyLeg::WireToHttpAck, out.wire_to_http_ack_ns);
+    leg(record.http_ack_ns, record.user_ws_match_ns,
+        OmsLatencyLeg::HttpAckToUserWsMatch, out.http_ack_to_user_ws_match_ns);
+    leg(record.causal_trigger_receive_monotonic_ns, record.user_ws_match_ns,
+        OmsLatencyLeg::TriggerToUserWsMatch, out.trigger_to_user_ws_match_ns);
 
     leg(record.submission_ns, record.delay_start_ns,
         OmsLatencyLeg::QueueToDelay, out.queue_to_delay_ns);
@@ -152,6 +167,7 @@ OmsTransitionResult OmsOrder::apply(const OmsEvent& event) noexcept {
             if (record_.state == OrderState::Intent && record_.original_microunits > 0
                 && record_.client_order_id != 0) {
                 record_.state = OrderState::SendPending;
+                record_.risk_admitted_ns = event.timestamp_ns;
                 record_.submission_ns = event.timestamp_ns;
                 mark_event(event);
                 return result(true, false, false, false);
@@ -209,6 +225,8 @@ OmsTransitionResult OmsOrder::apply(const OmsEvent& event) noexcept {
                     record_.exchange_order_handle = static_cast<std::uint64_t>(event.exchange_order_handle);
                 }
                 record_.ack_ns = event.timestamp_ns;
+                if (event.source == OmsEventSource::HttpAck)
+                    record_.http_ack_ns = event.timestamp_ns;
                 record_.live_ns = event.timestamp_ns;
                 record_.state = record_.filled_microunits > 0 ? OrderState::Partial : OrderState::Live;
                 mark_event(event);
@@ -234,6 +252,10 @@ OmsTransitionResult OmsOrder::apply(const OmsEvent& event) noexcept {
                 }
                 const bool cancel_in_flight = record_.state == OrderState::CancelRequested
                                            || record_.state == OrderState::CancelPending;
+                if (event.source == OmsEventSource::UserWs
+                    && record_.user_ws_match_ns == 0) {
+                    record_.user_ws_match_ns = event.timestamp_ns;
+                }
                 record_.filled_microunits += event.fill_delta_microunits;
                 record_.remaining_microunits -= event.fill_delta_microunits;
                 if (record_.remaining_microunits == 0) {
