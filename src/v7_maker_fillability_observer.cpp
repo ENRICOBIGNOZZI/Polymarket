@@ -289,7 +289,7 @@ load_selected_pairs(const fs::path& path, bool require_selection_only = false,
     if (raw == nullptr || !raw->is_array()) throw std::runtime_error("maker selection missing markets");
     std::vector<std::pair<std::string, std::pair<std::string, std::string>>> output;
     for (const auto& item : raw->as_array()) {
-        if (!item.is_object() || output.size() >= 40) break;
+        if (!item.is_object() || output.size() >= 64) break;
         const auto& row = item.as_object();
         const std::string market = text(find_value(row, "market_id"));
         const std::string event = text(find_value(row, "event_id"));
@@ -513,6 +513,8 @@ struct PureArbMarketState {
     double fee_rate = 0.0;
     double fee_exponent = 1.0;
     std::uint8_t fee_verified = 0;
+    std::int64_t start_wall_ms = 0;
+    std::int64_t end_wall_ms = 0;
     PureArbDirectionState buy{};
     PureArbDirectionState sell{};
 };
@@ -647,6 +649,8 @@ public:
             market.fee_rate = token.fee_rate;
             market.fee_exponent = token.fee_exponent;
             market.fee_verified = token.fee_verified;
+            market.start_wall_ms = token.start_wall_ms;
+            market.end_wall_ms = token.end_wall_ms;
             if (token.is_yes != 0) market.yes_handle = token.instrument_handle;
             else market.no_handle = token.instrument_handle;
         }
@@ -977,6 +981,8 @@ public:
             market.fee_rate = token.fee_rate;
             market.fee_exponent = token.fee_exponent;
             market.fee_verified = token.fee_verified;
+            market.start_wall_ms = token.start_wall_ms;
+            market.end_wall_ms = token.end_wall_ms;
         }
     }
 
@@ -1225,12 +1231,29 @@ public:
     void write_pure_arb_status(bool stopped) {
         if (!pure_arb_paper_) return;
         json::array contexts;
+        const auto status_now_ms = wall_ms();
+        std::uint64_t active_contexts = 0;
+        std::uint64_t subscribed_contexts = 0;
+        std::uint64_t preloaded_contexts = 0;
         std::uint64_t fee_ready = 0;
+        std::uint64_t subscribed_fee_ready = 0;
         for (std::size_t i = 1; i < pure_arb_markets_.size(); ++i) {
             const auto& market = pure_arb_markets_[i];
             if (market.market_id.empty()) continue;
-            fee_ready += market.fee_verified != 0;
+            ++subscribed_contexts;
+            const bool active_window = market.start_wall_ms <= status_now_ms
+                && status_now_ms < market.end_wall_ms;
+            if (active_window) {
+                ++active_contexts;
+                fee_ready += market.fee_verified != 0;
+            } else if (market.start_wall_ms > status_now_ms) {
+                ++preloaded_contexts;
+            }
+            subscribed_fee_ready += market.fee_verified != 0;
             contexts.emplace_back(json::object{
+                {"active_window", active_window},
+                {"start_wall_ms", market.start_wall_ms},
+                {"end_wall_ms", market.end_wall_ms},
                 {"asset", market.asset},
                 {"horizon", market.horizon},
                 {"market_id", market.market_id},
@@ -1275,7 +1298,11 @@ public:
             {"assets", json::array{"BTC","ETH","SOL","XRP","DOGE","BNB"}},
             {"horizons", json::array{"M5","M15","H1","H4","D1"}},
             {"expected_contexts", 30},
+            {"active_contexts", active_contexts},
+            {"subscribed_contexts", subscribed_contexts},
+            {"preloaded_contexts", preloaded_contexts},
             {"fee_ready_contexts", fee_ready},
+            {"subscribed_fee_ready_contexts", subscribed_fee_ready},
             {"artificial_delay_ms", 0},
             {"one_cycle_per_positive_episode", true},
             {"paired_fok_simulation", true},
