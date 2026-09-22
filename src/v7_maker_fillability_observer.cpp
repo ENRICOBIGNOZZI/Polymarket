@@ -1565,7 +1565,15 @@ public:
             write_book(row);
             wrote = true;
         }
-        if (wrote && !state_only_) { output_.flush(); book_output_.flush(); }
+        const auto now_wall_ms = wall_ms();
+        if (wrote && !state_only_ && now_wall_ms - last_evidence_flush_ms_ >= 25) {
+            output_.flush();
+            book_output_.flush();
+            if (!output_ || !book_output_) {
+                throw std::runtime_error("canonical observer evidence flush failed");
+            }
+            last_evidence_flush_ms_ = now_wall_ms;
+        }
         if (!state_only_ && book_output_.tellp() >= 64 * 1024 * 1024) {
             book_output_.close();
             const auto sealed = book_path_.parent_path() / (session_id_ + ".segment-"
@@ -1574,7 +1582,6 @@ public:
             book_output_.open(book_path_, std::ios::app);
             if (!book_output_) throw std::runtime_error("cannot rotate causal book evidence");
         }
-        const auto now_wall_ms = wall_ms();
         if (compact_label_output_.is_open() && now_wall_ms - last_compact_flush_ms_ >= 1000) {
             compact_label_output_.flush();
             if (!compact_label_output_) throw std::runtime_error("compact PM label tape flush failed");
@@ -1973,6 +1980,7 @@ private:
     std::uint64_t compact_label_current_bytes_ = 0;
     std::uint64_t compact_label_segment_ = 0;
     std::int64_t last_compact_flush_ms_ = 0;
+    std::int64_t last_evidence_flush_ms_ = 0;
     std::vector<std::string> ids_;
     std::vector<const SelectedToken*> by_handle_;
     std::vector<std::unique_ptr<pm::v7::maker::MakerInstrumentLane>> lanes_;
