@@ -676,6 +676,15 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_capital_allocator.py \
   >> "$PURE_ARB_DIR/capital_allocator.log" 2>&1 &
 v7_register_optional_child "$!"
 
+touch "$RUN_ROOT/control/verified_maker_fill_receipts.jsonl"
+v7_exec_class COLLECTOR python3 scripts/v7_maker_queue_calibration.py \
+  --cycles "$PURE_ARB_DIR/two_sided_complete_set_cycles.jsonl" \
+  --receipts "$RUN_ROOT/control/verified_maker_fill_receipts.jsonl" \
+  --model-sha "$SHA" --output "$PURE_ARB_DIR/maker_queue_calibration.json" \
+  --minimum-samples 20 --interval-seconds 10 \
+  >> "$PURE_ARB_DIR/maker_queue_calibration.log" 2>&1 &
+v7_register_optional_child "$!"
+
 v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_maker_policy.py \
   --maker-status "$PURE_ARB_DIR/two_sided_complete_set_status.json" \
   --capital-status "$PURE_ARB_DIR/capital_allocator_status.json" \
@@ -777,7 +786,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 27
+v7_assert_registered_child_count 28
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
