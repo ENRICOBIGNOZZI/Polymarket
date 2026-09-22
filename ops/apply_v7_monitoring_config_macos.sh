@@ -264,6 +264,12 @@ assert source.count(marker) == 1
 Path(sys.argv[2]).write_text(source.replace(marker, replacement), encoding='utf-8')
 PY
 
+# Retire the one-off pure-arbitrage provider created during the London Grafana
+# migration. The canonical v7.yml provider owns the shared dashboard directory;
+# leaving a second file provider for the same directory can prevent Grafana from
+# loading the dashboard deterministically after restart.
+rm -f "$STATE_DIR/grafana/provisioning/dashboards/v7-pure-arb.yml"
+
 install -m 0644 "$APP_DIR/$ALERT_RULES_FILE" "$STATE_DIR/prometheus-v7-alerts.yml"
 python3 - "$APP_DIR/$PROMETHEUS_FILE" "$STATE_DIR/prometheus-v7.yml" "$STATE_DIR/prometheus-v7-alerts.yml" <<'PY'
 import sys
