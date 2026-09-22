@@ -478,6 +478,7 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           cmake --build build-pure-arb-asan --parallel "$(nproc)" --target \
             polymarket_v7_maker_fillability_observer \
+            polymarket_v7_pure_arb_multi_runtime \
             pm_v7_causal_book_observer_tests \
             pm_v7_market_state_tests \
             pm_v7_market_ws_tests \
