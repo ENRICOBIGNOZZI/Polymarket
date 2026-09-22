@@ -1,5 +1,7 @@
 #include "pm/v7_clob_http1_response.hpp"
 
+#include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace pm::v7::clob_transport {
@@ -38,6 +40,48 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool parse_signed_number(std::string_view value, double& out) noexcept {
+    value = trim_ows(value);
+    if (value.empty()) return false;
+    bool negative = false;
+    if (value.front() == '-') { negative = true; value.remove_prefix(1); }
+    if (value.empty()) return false;
+    double result = 0.0;
+    bool any = false;
+    while (!value.empty() && value.front() >= '0' && value.front() <= '9') {
+        any = true;
+        result = result * 10.0 + static_cast<double>(value.front() - '0');
+        value.remove_prefix(1);
+    }
+    if (!value.empty() && value.front() == '.') {
+        value.remove_prefix(1);
+        double place = 0.1;
+        while (!value.empty() && value.front() >= '0' && value.front() <= '9') {
+            any = true;
+            result += static_cast<double>(value.front() - '0') * place;
+            place *= 0.1;
+            value.remove_prefix(1);
+        }
+    }
+    if (!any || !value.empty() || !std::isfinite(result)) return false;
+    out = negative ? -result : result;
+    return true;
+}
+
+[[nodiscard]] bool parse_i64(std::string_view value, std::int64_t& out) noexcept {
+    value = trim_ows(value);
+    if (value.empty()) return false;
+    std::int64_t result = 0;
+    for (const unsigned char c : value) {
+        if (c < '0' || c > '9') return false;
+        const auto digit = static_cast<std::int64_t>(c - '0');
+        if (result > (std::numeric_limits<std::int64_t>::max() - digit) / 10) return false;
+        result = result * 10 + digit;
+    }
+    out = result;
+    return true;
+}
+
 [[nodiscard]] bool contains_token_ci(std::string_view value, std::string_view wanted) noexcept {
     while (!value.empty()) {
         const auto comma = value.find(',');
@@ -61,6 +105,11 @@ void FixedHttp1Response::reset() noexcept {
     headers_parsed_ = false;
     connection_close_ = false;
     retry_after_seconds_ = 0;
+    rate_limit_remaining_ = std::numeric_limits<double>::quiet_NaN();
+    rate_limit_reset_unix_seconds_ = 0;
+    rate_limit_tier_.fill(0);
+    rate_limit_tier_size_ = 0;
+    rate_limit_warning_ = false;
     state_ = Http1ResponseState::Receiving;
 }
 
@@ -148,6 +197,19 @@ Http1ResponseState FixedHttp1Response::parse_headers() noexcept {
                 && parsed <= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
                 retry_after_seconds_ = static_cast<int>(parsed);
             }
+        } else if (iequals(name, "Poly-RateLimit-Remaining")) {
+            double parsed = 0.0;
+            if (parse_signed_number(value, parsed)) rate_limit_remaining_ = parsed;
+        } else if (iequals(name, "Poly-RateLimit-Reset")) {
+            std::int64_t parsed = 0;
+            if (parse_i64(value, parsed)) rate_limit_reset_unix_seconds_ = parsed;
+        } else if (iequals(name, "Poly-RateLimit-Tier")) {
+            if (!value.empty() && value.size() <= rate_limit_tier_.size()) {
+                std::memcpy(rate_limit_tier_.data(), value.data(), value.size());
+                rate_limit_tier_size_ = static_cast<std::uint8_t>(value.size());
+            }
+        } else if (iequals(name, "Poly-RateLimit-Warning")) {
+            rate_limit_warning_ = iequals(value, "true");
         }
         pos = line_end + 2;
     }
