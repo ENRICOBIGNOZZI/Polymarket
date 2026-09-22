@@ -185,6 +185,23 @@ def verified_taker_rebate(path:Path|None,sha:str,now_ms:int)->tuple[bool,float,s
     return True,fraction,str(row.get("tier") or "") or None
 
 
+def leg_arrival_times(
+    mode:str,order:str,target_ms:int,transport_ms:int,skew_ms:int
+)->tuple[dict[str,int],tuple[str,str]]:
+    mode=str(mode or "SEQUENTIAL").upper()
+    if mode=="BATCH":
+        return {"YES":target_ms,"NO":target_ms},("YES","NO")
+    first=str(order or "YES_FIRST").split("_")[0]
+    if first not in {"YES","NO"}:first="YES"
+    second="NO" if first=="YES" else "YES"
+    extra=max(0,int(skew_ms))
+    if mode=="SEQUENTIAL":
+        extra+=max(0,int(transport_ms))
+    elif mode!="PARALLEL":
+        raise ValueError("unsupported execution mode")
+    return {first:int(target_ms),second:int(target_ms)+extra},(first,second)
+
+
 class Tail:
     def __init__(self,path:Path,sha:str):
         self.path,self.sha,self.handle=path,sha,None
@@ -430,23 +447,10 @@ class Shadow:
         base["lifecycle"].append("ARRIVAL_REVALIDATED")
 
         limits={"YES":float(yplan["worst_price"]),"NO":float(nplan["worst_price"])}
-        if mode=="BATCH":
-            # One authenticated /orders request; both entries reach the engine
-            # together, while acceptance/fill remains independent per order.
-            times={"YES":target,"NO":target}
-            order_sequence=("YES","NO")
-        else:
-            first=item["order"].split("_")[0]
-            second="NO" if first=="YES" else "YES"
-            if mode=="PARALLEL":
-                # Two independent persistent lanes leave together; measured
-                # inter-leg skew is the only extra arrival separation.
-                times={first:target,second:target+skew}
-            else:
-                # Sequential waits one additional transport arm before leg 2,
-                # then applies the measured/order-processing skew.
-                times={first:target,second:target+int(item["transport_ms"])+skew}
-            order_sequence=(first,second)
+        # Batch shares one request timestamp; parallel uses only measured
+        # inter-leg skew; sequential pays one additional transport arm.
+        times,order_sequence=leg_arrival_times(
+            mode,item["order"],target,int(item["transport_ms"]),skew)
 
         fills={}
         entry_cash=0.0
@@ -538,10 +542,11 @@ class Shadow:
             if target is None:
                 row=self.evaluate(item)
             else:
-                extra=int(item["skew_ms"])
-                if str(item.get("execution_mode") or "SEQUENTIAL")=="SEQUENTIAL":
-                    extra+=int(item.get("transport_ms") or 0)
-                needed=int(target)+extra+self.args.unwind_delay_ms
+                times,_=leg_arrival_times(
+                    str(item.get("execution_mode") or "SEQUENTIAL"),
+                    str(item.get("order") or "YES_FIRST"),
+                    int(target),int(item.get("transport_ms") or 0),int(item.get("skew_ms") or 0))
+                needed=max(times.values())+self.args.unwind_delay_ms
                 if self.book.watermark_ms<needed:
                     remain.append(item);continue
                 row=self.evaluate(item)
