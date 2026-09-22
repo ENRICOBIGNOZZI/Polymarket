@@ -155,12 +155,14 @@ def gross_buy_quantity_for_net(
     return math.nan
 
 
-def venue_policy(v:dict[str,Any])->dict[str,bool]:
+def venue_policy(v:dict[str,Any], field:str="simulation_policy")->dict[str,bool]:
     if (v.get("schema")!=VENUE_SCHEMA or v.get("paper_only") is not True
         or v.get("authenticated_execution") is not False
         or v.get("real_order_submission") is not False):
         return {"new_taker":False,"new_maker":False,"cancel":True}
-    p=v.get("simulation_policy")
+    if field not in {"observed_policy","simulation_policy"}:
+        return {"new_taker":False,"new_maker":False,"cancel":True}
+    p=v.get(field)
     if not isinstance(p,dict):return {"new_taker":False,"new_maker":False,"cancel":True}
     return {k:p.get(k) is True for k in ("new_taker","new_maker","cancel")}
 
@@ -266,7 +268,11 @@ class Shadow:
     def ingest(self):
         selection=selection_map(load(self.args.selection),self.args.model_sha)
         venue=load(self.args.venue_mode)
-        can_taker=venue_policy(venue)["new_taker"]
+        observed_can_taker=venue_policy(venue,"observed_policy")["new_taker"]
+        simulation_can_taker=venue_policy(venue,"simulation_policy")["new_taker"]
+        observed_mode=str(venue.get("observed_mode") or "DEGRADED")
+        simulation_mode=str(venue.get("simulation_mode") or "DEGRADED")
+        counterfactual=venue.get("paper_counterfactual") is True
         for c in self.tail.poll():
             mid=str(c.get("market_id") or "");kind=str(c.get("kind") or "")
             try:detected=int(c.get("receive_wall_ms") or 0)
@@ -286,7 +292,11 @@ class Shadow:
                         self.pending.append({
                             "scenario_id":sid,"candidate":c,"market":market,
                             "fingerprint":fingerprint(market),"terms":terms,
-                            "venue_taker_allowed":can_taker,
+                            "observed_venue_taker_allowed":observed_can_taker,
+                            "simulation_taker_allowed":simulation_can_taker,
+                            "observed_venue_mode":observed_mode,
+                            "simulation_venue_mode":simulation_mode,
+                            "paper_counterfactual":counterfactual,
                             "transport_ms":transport,"skew_ms":skew,"order":order,
                             "total_delay_ms":total_delay,
                             "target_ms":detected+total_delay if total_delay is not None else None,
@@ -314,8 +324,14 @@ class Shadow:
             "inter_leg_skew_ms":item["skew_ms"],"leg_order":item["order"],
             "target_shares":q,"state":"CENSORED",
             "lifecycle":["CREATED"],"semantic_fingerprint":item["fingerprint"],
+            "observed_venue_mode":item.get("observed_venue_mode","DEGRADED"),
+            "simulation_venue_mode":item.get("simulation_venue_mode","DEGRADED"),
+            "observed_venue_taker_allowed":item.get("observed_venue_taker_allowed") is True,
+            "simulation_taker_allowed":item.get("simulation_taker_allowed") is True,
+            "paper_counterfactual":item.get("paper_counterfactual") is True,
+            "allocation_eligible":False,
         }
-        if not item["venue_taker_allowed"]:
+        if not item.get("simulation_taker_allowed"):
             base["state"]="BLOCKED_VENUE_MODE";return base
         if not item["terms"]:
             base["state"]="CENSORED_TERMS_UNVERIFIED";return base
@@ -420,7 +436,8 @@ class Shadow:
                         entry_cashflow=entry_cash,redemption_cashflow=redemption,
                         execution_pnl_pre_reserve=pnl,
                         execution_pnl_after_reserve=pnl-q*self.args.reserve_per_share,
-                        unwind_pnl=0.0)
+                        unwind_pnl=0.0,
+                        allocation_eligible=bool(item.get("observed_venue_taker_allowed")))
             base["lifecycle"].append("COMPLETE")
             return base
         if len(filled)==0:
@@ -445,7 +462,8 @@ class Shadow:
             first_filled_leg=first,unwind_wall_ms=unwind_at,
             unwind_price=unwind_price,entry_cashflow=entry_cash,
             unwind_pnl=u,execution_pnl_pre_reserve=total,
-            execution_pnl_after_reserve=total-q*self.args.reserve_per_share)
+            execution_pnl_after_reserve=total-q*self.args.reserve_per_share,
+            allocation_eligible=bool(item.get("observed_venue_taker_allowed")))
         base["lifecycle"]+=["UNWIND_SENT","UNWIND_FILLED","COMPLETE_WITH_LEGGING"]
         return base
 
