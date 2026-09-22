@@ -31,6 +31,7 @@
     "scripts/v7_crypto_universe.py",
     "scripts/v7_exact_sha_ci_gate.py",
     "scripts/v7_external_source_registry.py",
+    "scripts/v7_fee_reward_registry.py",
     "scripts/v7_ledger_spool.py",
     "scripts/v7_legacy_native_claims.py",
     "scripts/v7_legacy_native_reconciler.py",
