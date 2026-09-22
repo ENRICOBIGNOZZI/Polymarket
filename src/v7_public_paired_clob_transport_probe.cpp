@@ -28,6 +28,7 @@ struct Options {
     std::size_t samples = 200;
     std::size_t warmup = 8;
     int interval_ms = 50;
+    int socket_busy_poll_us = 0;
     bool validate_only = false;
 };
 
@@ -77,6 +78,11 @@ struct Options {
             if (!parse_u64(next(), value) || value > 5'000)
                 throw std::invalid_argument("invalid interval");
             out.interval_ms = static_cast<int>(value);
+        } else if (arg == "--socket-busy-poll-us") {
+            std::uint64_t value = 0;
+            if (!parse_u64(next(), value) || value > 2'000)
+                throw std::invalid_argument("invalid socket busy poll");
+            out.socket_busy_poll_us = static_cast<int>(value);
         } else if (arg == "--validate-only") out.validate_only = true;
         else throw std::invalid_argument("unknown argument");
     }
@@ -131,6 +137,12 @@ struct Samples {
     std::vector<std::int64_t> first_ack_offset_ns;
     std::vector<std::int64_t> second_ack_offset_ns;
     std::vector<std::int64_t> ack_skew_ns;
+    int last_yes_cpu = -1;
+    int last_no_cpu = -1;
+    int last_yes_napi = -1;
+    int last_no_napi = -1;
+    std::uint64_t incoming_cpu_changes = 0;
+    std::uint64_t incoming_napi_changes = 0;
     std::uint64_t failures = 0;
     std::uint64_t wire_failures = 0;
     std::uint64_t response_failures = 0;
@@ -200,6 +212,16 @@ void record_parallel(
     out.first_ack_offset_ns.push_back(first_ack - start);
     out.second_ack_offset_ns.push_back(second_ack - start);
     out.ack_skew_ns.push_back(pair.ack_skew_ns);
+    const auto observe = [&](int current, int& previous,
+                             std::uint64_t& changes) {
+        if (current < 0) return;
+        if (previous >= 0 && current != previous) ++changes;
+        previous = current;
+    };
+    observe(pair.yes.incoming_cpu, out.last_yes_cpu, out.incoming_cpu_changes);
+    observe(pair.no.incoming_cpu, out.last_no_cpu, out.incoming_cpu_changes);
+    observe(pair.yes.incoming_napi_id, out.last_yes_napi, out.incoming_napi_changes);
+    observe(pair.no.incoming_napi_id, out.last_no_napi, out.incoming_napi_changes);
 }
 
 void record_serial(
@@ -267,6 +289,12 @@ json::object samples_json(const Samples& s) {
         {"first_ack_offset_ns", dist(s.first_ack_offset_ns)},
         {"second_ack_offset_ns", dist(s.second_ack_offset_ns)},
         {"ack_skew_ns", dist(s.ack_skew_ns)},
+        {"last_yes_incoming_cpu", s.last_yes_cpu},
+        {"last_no_incoming_cpu", s.last_no_cpu},
+        {"last_yes_incoming_napi_id", s.last_yes_napi},
+        {"last_no_incoming_napi_id", s.last_no_napi},
+        {"incoming_cpu_changes", s.incoming_cpu_changes},
+        {"incoming_napi_changes", s.incoming_napi_changes},
     };
 }
 
@@ -281,7 +309,8 @@ int main(int argc, char** argv) {
         }
 
         clob::PairPersistentTlsTransport transport(
-            options.host, options.port, options.timeout_ms);
+            options.host, options.port, options.timeout_ms,
+            options.socket_busy_poll_us);
         const auto connected = transport.connect(options.ca_file);
         if (!connected.ready || !transport.ready()) {
             std::cerr << "paired transport connect failed\n";
@@ -344,6 +373,7 @@ int main(int argc, char** argv) {
             {"endpoint", options.host + options.target},
             {"samples", options.samples},
             {"interval_ms", options.interval_ms},
+            {"socket_busy_poll_us", options.socket_busy_poll_us},
             {"transport_reconnects", reconnects},
             {"transport_reconnect_failures", reconnect_failures},
             {"scope", "PUBLIC_GET_TIME_TRANSPORT_ONLY_NOT_MATCHING_ENGINE"},
