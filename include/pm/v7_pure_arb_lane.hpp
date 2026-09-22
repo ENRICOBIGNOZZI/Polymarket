@@ -252,6 +252,8 @@ struct PureArbExecutionPlan {
     LegPlan yes{};
     LegPlan no{};
     SweepResult economics{};
+    SweepResult buy_economics{};
+    SweepResult sell_economics{};
     double buy_raw_edge_per_share = 0.0;
     double sell_raw_edge_per_share = 0.0;
     double buy_fee_per_share = 0.0;
@@ -359,10 +361,10 @@ struct PureArbExecutionPlan {
     out.sell_edge_per_share =
         out.sell_raw_edge_per_share - out.sell_fee_per_share;
 
-    const auto buy = sweep(
+    out.buy_economics = sweep(
         input.yes, input.no, input.fee_rate, input.fee_exponent,
         input.reserve_per_share, true);
-    const auto sell = sweep(
+    out.sell_economics = sweep(
         input.yes, input.no, input.fee_rate, input.fee_exponent,
         input.reserve_per_share, false,
         std::max<std::int64_t>(0, input.sell_available_microunits));
@@ -370,12 +372,12 @@ struct PureArbExecutionPlan {
     const SweepResult* selected = nullptr;
     Direction direction = Direction::None;
     Side side = Side::None;
-    if (buy.shares_microunits > 0) {
-        selected = &buy;
+    if (out.buy_economics.shares_microunits > 0) {
+        selected = &out.buy_economics;
         direction = Direction::BuyCompleteSet;
         side = Side::Buy;
-    } else if (sell.shares_microunits > 0) {
-        selected = &sell;
+    } else if (out.sell_economics.shares_microunits > 0) {
+        selected = &out.sell_economics;
         direction = Direction::SellCompleteSet;
         side = Side::Sell;
     } else {
