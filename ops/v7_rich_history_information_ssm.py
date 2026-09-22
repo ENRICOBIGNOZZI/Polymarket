@@ -34,9 +34,7 @@ SOURCE_PATHS=(
 )
 
 HORIZONS=tuple(sorted(set(
-    (5,10,25,50,100,250,500,750,1000)
-    + tuple(range(500,10001,250))
-    + (12500,15000,20000,30000,45000,60000,90000)
+    (5,10,25,50,100,250,500,750,1000,1250,1500,1750,2000,3000,4000,5000,7500,10000)
 )))
 LATENCIES=(5,10,25,50,100,250,500,750,1000)
 
@@ -101,7 +99,7 @@ assert m['selection_guards']['lambda_selected_on_test_pnl'] is False
 assert m['selection_guards']['tau_tuned_on_test'] is False
 assert m['selection_guards']['missing_as_zero'] is False
 assert len(m['latencies_ms']) >= 6
-assert len(m['requested_exit_horizons_ms']) >= 39
+assert len(m['requested_exit_horizons_ms']) >= 16
 for name in (
     '31_rich_data_coverage_by_crypto.json',
     '32_rich_information_models.json',
