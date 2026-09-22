@@ -426,10 +426,12 @@ def test_http_parser_exposes_retry_after():
 
 
 def test_cpp_detector_uses_venue_fee_precision():
-    source=(ROOT/"src/v7_maker_fillability_observer.cpp").read_text()
-    assert "pure_arb_fee_usdc" in source
-    assert "raw < 0.00001" in source
-    assert "std::round(raw * 100000.0) / 100000.0" in source
+    observer=(ROOT/"src/v7_maker_fillability_observer.cpp").read_text()
+    lane=(ROOT/"src/v7_pure_arb_lane.cpp").read_text()
+    assert "pure_arb_fee_usdc" not in observer
+    assert "pm::v7::pure_arb::evaluate_l1" in observer
+    assert "raw < 0.00001" in lane
+    assert "std::round(raw * 100000.0) / 100000.0" in lane
 
 
 def test_cross_market_registry_remains_empty_until_proof_exists():
