@@ -103,13 +103,20 @@ def login(page,email,password):
     page.wait_for_timeout(1200)
     print("tailnet_cleanup_post_click_url="+page.url.split("?")[0][:180], flush=True)
     if "accounts.google.com" in page.url:
-        email_box=first_visible(page.locator('input[name="identifier"], input[type="email"]'))
-        if email_box is not None:
-            email_box.fill(email)
-            nxt=first_visible(page.locator("#identifierNext")) or first_visible(page.get_by_role("button",name=re.compile(r"Next",re.I)))
-            if nxt is None:
-                raise RuntimeError("google_email_next_missing")
-            nxt.click()
+        email_locator=page.locator('input[name="identifier"], input[type="email"]')
+        try:
+            email_locator.first.wait_for(state="visible",timeout=20000)
+        except Exception:
+            raise RuntimeError("google_email_field_missing")
+        email_box=first_visible(email_locator)
+        if email_box is None:
+            raise RuntimeError("google_email_field_missing")
+        email_box.fill(email)
+        nxt=first_visible(page.locator("#identifierNext")) or first_visible(page.get_by_role("button",name=re.compile(r"Next",re.I)))
+        if nxt is None:
+            raise RuntimeError("google_email_next_missing")
+        nxt.click()
+        page.wait_for_timeout(1500)
         password_box=page.locator('input[name="Passwd"]')
         try:
             password_box.wait_for(state="visible",timeout=20000)
