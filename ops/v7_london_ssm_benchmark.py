@@ -178,9 +178,23 @@ OUT=/mnt/polymarket-data/benchmarks/latency-{zone_id}-{sha}
 ! systemctl is-active --quiet polymarket-v7-paper.service
 rm -rf "$OUT"
 install -d -o {service_user} -g {service_user} "$OUT"
+set +e
 sudo -u {service_user} env POLYMARKET_APP_DIR="$APP" \
   bash "$APP/ops/v7_london_latency_lab.sh" \
     --sha "{sha}" --samples "{samples}" --output-dir "$OUT"
+lab_rc=$?
+set -e
+if (( lab_rc != 0 )); then
+  echo "latency_lab_rc=$lab_rc" >&2
+  for name in host.json sign-noipo.json sign-ipo.json sign-pgo-use.json handoff.json public-paired-clob.json summary.json; do
+    if [[ -s "$OUT/$name" ]]; then
+      echo "===== $name =====" >&2
+      tail -c 12000 "$OUT/$name" >&2 || true
+      echo >&2
+    fi
+  done
+  exit "$lab_rc"
+fi
 python3 - "$OUT/summary.json" <<'PY'
 import json,sys
 v=json.load(open(sys.argv[1],encoding='utf-8'))
