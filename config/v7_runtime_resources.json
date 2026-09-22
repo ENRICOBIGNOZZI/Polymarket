@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_runtime_resources_v1",
-  "version": 2,
+  "version": 3,
   "paper_only": true,
   "minimum_visible_cpus": 8,
   "require_disjoint_cpu_classes": true,
@@ -25,5 +25,9 @@
     "retrospective_analytics",
     "report_generation",
     "hyperparameter_search"
-  ]
+  ],
+  "latency_observer": {
+    "prefer_spare_core": true,
+    "nice": 0
+  }
 }
