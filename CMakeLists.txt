@@ -314,6 +314,10 @@ if(BUILD_TESTING)
 
   add_test(NAME pm_v7_crypto_settlement_native_candidate_validate
     COMMAND polymarket_v7_crypto_settlement_engine --validate-only)
+  add_test(NAME pm_v7_pure_arb_multi_runtime_validate
+    COMMAND polymarket_v7_pure_arb_multi_runtime
+      --config ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/v7_pure_arb_multi_runtime.json
+      --validate-only)
   add_test(NAME pm_v7_crypto_settlement_native_candidate_10k_limits
     COMMAND polymarket_v7_crypto_settlement_engine
       --sleeve-budget-microdollars 10000000000
