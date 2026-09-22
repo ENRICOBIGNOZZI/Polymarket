@@ -56,6 +56,11 @@ public:
         std::uint64_t connection_epoch,
         std::int64_t now_wall_ms) noexcept;
 
+    [[nodiscard]] bool current_books(
+        std::size_t context_index,
+        BookHotSnapshot& yes,
+        BookHotSnapshot& no) const noexcept;
+
     void invalidate_all() noexcept;
 
 private:
@@ -81,6 +86,7 @@ private:
     [[nodiscard]] std::uint64_t next_intent_id() noexcept;
     void publish_prefix(
         std::uint64_t client_order_id,
+        std::uint64_t instrument_handle,
         const PureArbExecutionPlan& plan,
         std::int64_t risk_admitted_ns) noexcept;
 
