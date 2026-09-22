@@ -198,8 +198,8 @@ def test_runtime_remains_zero_authority():
     ):
         assert loop.count(worker)==1
     assert "v7_assert_registered_child_count 18" in loop
-    assert "authenticated_execution":false" in loop
-    assert "real_order_submission":false" in loop
+    assert '"authenticated_execution":false' in loop.replace(" ", "")
+    assert '"real_order_submission":false' in loop.replace(" ", "")
 
 
 if __name__=="__main__":
