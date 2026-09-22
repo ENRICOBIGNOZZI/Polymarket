@@ -1,5 +1,6 @@
 #include "pm/v7_clob_eip712.hpp"
 #include "pm/v7_poly1271.hpp"
+#include <boost/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@
 #include <vector>
 
 using namespace pm::v7;
+namespace json = boost::json;
 
 namespace {
 using Clock=std::chrono::steady_clock;
@@ -28,13 +30,14 @@ std::int64_t q(std::vector<std::int64_t> values,double p) {
         std::llround(std::clamp(p,0.0,1.0)*static_cast<double>(values.size()-1)));
     return values[i];
 }
-void print_dist(std::string_view name,const std::vector<std::int64_t>& v) {
-    std::cout << '"' << name << "":{"
-              << ""p50":" << q(v,.50) << ','
-              << ""p95":" << q(v,.95) << ','
-              << ""p99":" << q(v,.99) << ','
-              << ""p999":" << q(v,.999) << ','
-              << ""max":" << q(v,1.0) << '}';
+json::object dist(const std::vector<std::int64_t>& v) {
+    return {
+        {"p50",q(v,.50)},
+        {"p95",q(v,.95)},
+        {"p99",q(v,.99)},
+        {"p999",q(v,.999)},
+        {"max",q(v,1.0)},
+    };
 }
 std::size_t samples(int argc,char**argv) {
     std::size_t n=100'000;
@@ -154,15 +157,19 @@ int main(int argc,char**argv) {
     stop.store(true,std::memory_order_release);
     worker.join();
 
-    std::cout << "{"schema":"polymarket_v7_paired_sign_bench_v1","
-              << ""paper_only":true,"authenticated_execution":false,"
-              << ""real_order_submission":false,"samples":" << n
-              << ","latency_ns":{";
-    print_dist("serial_pair_completion",serial_pair); std::cout << ',';
-    print_dist("serial_leg_completion_skew",serial_skew); std::cout << ',';
-    print_dist("parallel_pair_completion",parallel_pair); std::cout << ',';
-    print_dist("parallel_leg_completion_skew",parallel_skew);
-    std::cout << "}}
-";
+    json::object out{
+        {"schema","polymarket_v7_paired_sign_bench_v1"},
+        {"paper_only",true},
+        {"authenticated_execution",false},
+        {"real_order_submission",false},
+        {"samples",n},
+        {"latency_ns",json::object{
+            {"serial_pair_completion",dist(serial_pair)},
+            {"serial_leg_completion_skew",dist(serial_skew)},
+            {"parallel_pair_completion",dist(parallel_pair)},
+            {"parallel_leg_completion_skew",dist(parallel_skew)},
+        }},
+    };
+    std::cout << json::serialize(out) << '\n';
     return 0;
 }
