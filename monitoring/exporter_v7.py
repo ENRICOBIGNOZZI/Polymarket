@@ -315,6 +315,14 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
         _metric("polymarket_pure_arb_preloaded_contexts", status.get("preloaded_contexts")),
         _metric("polymarket_pure_arb_subscribed_fee_ready_contexts",
                 status.get("subscribed_fee_ready_contexts")),
+        _metric("polymarket_pure_arb_last_receive_to_decode_ns",
+                status.get("last_receive_to_decode_ns")),
+        _metric("polymarket_pure_arb_last_decode_to_enqueue_ns",
+                status.get("last_decode_to_enqueue_ns")),
+        _metric("polymarket_pure_arb_last_receive_to_enqueue_ns",
+                status.get("last_receive_to_enqueue_ns")),
+        _metric("polymarket_pure_arb_last_queue_wait_ns",
+                status.get("last_queue_wait_ns")),
         _metric("polymarket_pure_arb_last_decision_compute_ns",
                 status.get("last_decision_compute_ns")),
         _metric("polymarket_pure_arb_max_decision_compute_ns",
@@ -330,6 +338,10 @@ def _render_pure_arb_metrics(status: dict[str, Any]) -> list[str]:
     for stage, value in sorted(funnel.items()):
         lines.append(_metric("polymarket_pure_arb_funnel_total", value, {"stage": stage}))
     for kind, field in (
+        ("receive_to_decode", "receive_to_decode_ns"),
+        ("decode_to_enqueue", "decode_to_enqueue_ns"),
+        ("receive_to_enqueue", "receive_to_enqueue_ns"),
+        ("queue_wait", "queue_wait_ns"),
         ("receive_to_decision", "receive_to_decision_ns"),
         ("decision_compute", "decision_compute_ns"),
     ):
