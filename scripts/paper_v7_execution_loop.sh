@@ -511,7 +511,8 @@ v7_exec_class COLLECTOR python3 scripts/v7_two_sided_complete_set_shadow.py \
   --output "$PURE_ARB_DIR/two_sided_complete_set_cycles.jsonl" \
   --status "$PURE_ARB_DIR/two_sided_complete_set_status.json" \
   --minimum-quote-shares 1 --maximum-quote-shares 20 --depth-fraction 0.25 \
-  --queue-ahead-multiplier 1.25 --reserve-per-share 0.0005 \
+  --queue-ahead-multiplier 1.25 --queue-ahead-arms 1.0,1.25,1.5,2.0 \
+  --crypto-maker-rebate-fraction 0.20 --reserve-per-share 0.0005 \
   --minimum-locked-edge-per-share 0.0005 --maximum-leg-skew-ms 100 \
   --ttl-arms-ms 250,500,1000 --quote-refresh-ms 25 --interval-ms 5 \
   >> "$PURE_ARB_DIR/two_sided_complete_set.log" 2>&1 &
@@ -534,7 +535,9 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_arrival_survival_shadow.py \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/pure_arb_arrival_survival_cycles.jsonl" \
   --status "$PURE_ARB_DIR/pure_arb_arrival_survival_status.json" \
-  --delay-arms-ms 1,2,5,10,25,50 \
+  --delay-arms-ms 1,2,5,10,25,50,100,200,250,275,300,400,500,750,1000 \
+  --transport-delay-arms-ms 1,2,5,10 \
+  --market-terms-root "$RUN_ROOT/control/market_execution_terms" \
   --reserve-per-share 0.0005 \
   --reserve-arms 0,0.0001,0.00025,0.0005,0.001,0.0025,0.005 \
   --minimum-fill-shares 1 --maximum-leg-skew-ms 100 \
@@ -552,6 +555,42 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_deep_sizing_shadow.py \
   --prefunded-complete-set-shares 1000 \
   --timeout-seconds 2 --interval-seconds 0.25 \
   >> "$PURE_ARB_DIR/pure_arb_deep_sizing.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Venue mode is a safety gate. Until a live public mode observer is available,
+# observed mode remains DEGRADED while PAPER can run an explicitly labeled
+# NORMAL counterfactual. This can never grant authenticated execution.
+v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_venue_mode.py \
+  --output "$PURE_ARB_DIR/venue_mode_status.json" --model-sha "$SHA" \
+  --paper-counterfactual-mode NORMAL --maximum-age-ms 5000 --interval-ms 1000 \
+  >> "$PURE_ARB_DIR/venue_mode.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_exchange_execution_shadow.py \
+  --candidates "$PURE_ARB_DIR/pure_arb_trades.jsonl" \
+  --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --market-terms-root "$RUN_ROOT/control/market_execution_terms" \
+  --venue-mode "$PURE_ARB_DIR/venue_mode_status.json" \
+  --exchange-semantics "$ROOT/config/v7_exchange_semantics.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/exchange_execution_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/exchange_execution_status.json" \
+  --transport-delay-ms 1,2,5,10 --inter-leg-skew-ms 0,1,2,5,10 \
+  --unwind-delay-ms 2 --maximum-book-age-ms 100 --maximum-leg-skew-ms 100 \
+  --reserve-per-share 0.0005 --minimum-shares 1 --maximum-shares 1000 --interval-ms 5 \
+  >> "$PURE_ARB_DIR/exchange_execution.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_capital_allocator.py \
+  --policy "$ROOT/config/v7_pure_arb_capital_policy.json" \
+  --taker-cycles "$PURE_ARB_DIR/exchange_execution_cycles.jsonl" \
+  --maker-cycles "$PURE_ARB_DIR/two_sided_complete_set_cycles.jsonl" \
+  --postfix-cycles "$PURE_ARB_DIR/settlement_source_arb_cycles.jsonl" \
+  --cross-status "$PURE_ARB_DIR/cross_market_exact_arb_status.json" \
+  --output "$PURE_ARB_DIR/capital_allocator_status.json" \
+  --model-sha "$SHA" --interval-seconds 5 \
+  >> "$PURE_ARB_DIR/capital_allocator.log" 2>&1 &
 v7_register_optional_child "$!"
 read -r HOT_MARKET_BUDGET ACTIVE_SCAN_MARKET_BUDGET MAKER_FLOW_LOOKBACK_SECONDS MAKER_SELECTOR_REFRESH_SECONDS MAKER_ROTATION_INTERVAL_SECONDS MAKER_CANDIDATE_CONFIRMATIONS MAKER_ROTATION_MIN_FILL MAKER_ROTATION_MIN_ABSOLUTE_IMPROVEMENT MAKER_ROTATION_MIN_RELATIVE_MULTIPLIER < <(python3 - "$RUN_ROOT/universe/status.json" "$MAKER_POLICY" <<'PY'
 import json,sys
@@ -646,7 +685,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 15
+v7_assert_registered_child_count 18
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
