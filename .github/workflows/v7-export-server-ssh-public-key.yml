@@ -31,6 +31,41 @@ jobs:
           key_type="$(awk '{print $1}' "$RUNNER_TEMP/server-ssh.pub")"
           test "$key_type" = ssh-ed25519
           echo "public_key_type=$key_type"
+      - name: Derive envelope recipient public material
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/deploy-key"
+          python3 - "$RUNNER_TEMP/deploy-key" "$RUNNER_TEMP/envelope-recipient.json" <<'PY'
+          import base64,hashlib,json,sys
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric import ed25519,x25519
+          key=serialization.load_ssh_private_key(open(sys.argv[1],'rb').read(),password=None)
+          assert isinstance(key,ed25519.Ed25519PrivateKey)
+          public_line=key.public_key().public_bytes(serialization.Encoding.OpenSSH,serialization.PublicFormat.OpenSSH).strip()
+          seed=key.private_bytes(serialization.Encoding.Raw,serialization.PrivateFormat.Raw,serialization.NoEncryption())
+          h=hashlib.sha512(seed).digest()
+          scalar=bytearray(h[:32]); scalar[0]&=248; scalar[31]&=127; scalar[31]|=64
+          xpriv=x25519.X25519PrivateKey.from_private_bytes(bytes(scalar))
+          xpub=xpriv.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)
+          value={
+            'recipient_fingerprint':hashlib.sha256(public_line).hexdigest(),
+            'x25519_public_b64':base64.b64encode(xpub).decode(),
+          }
+          open(sys.argv[2],'w').write(json.dumps(value,sort_keys=True)+'\n')
+          PY
+          rm -f "$RUNNER_TEMP/deploy-key"
+
+      - name: Upload envelope recipient material
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-envelope-recipient
+          path: ${{ runner.temp }}/envelope-recipient.json
+          retention-days: 1
+
       - name: Upload public key
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
