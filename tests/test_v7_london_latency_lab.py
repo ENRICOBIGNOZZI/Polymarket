@@ -52,6 +52,21 @@ def test_no_duplicate_latency_workflow_is_added():
     assert not (ROOT / ".github/workflows/london-latency-lab.yml").exists()
 
 
+def test_final_latency_evidence_has_zero_direct_queue_and_replay_parity():
+    lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
+    runtime = (ROOT / "src/v7_pure_arb_multi_runtime.cpp").read_text()
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    parity = (ROOT / "tests/test_v7_pure_arb_replay_parity.cpp").read_text()
+    assert '"direct_decision_queue_depth":0' in lab
+    assert '{"direct_decision_queue_depth",0}' in runtime
+    assert '{"latency_queue_depth",tape_status.queued}' in runtime
+    assert "pm_v7_pure_arb_replay_parity_tests" in cmake
+    assert "pure_arb_replay_parity_tests" in ci
+    assert "reference_evaluate" in parity
+    assert "std::bit_cast<std::uint64_t>" in parity
+
+
 if __name__ == "__main__":
     tests = [
         v for k, v in sorted(globals().items())
