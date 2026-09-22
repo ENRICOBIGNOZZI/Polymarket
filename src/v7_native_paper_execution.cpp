@@ -111,6 +111,160 @@ NativePaperSubmitResult NativePaperExecutionAdapter::submit(
     return out;
 }
 
+NativePaperPairResult NativePaperExecutionAdapter::submit_pair_fok(
+    const NativeOrderCommand& yes_command,
+    const BookHotSnapshot& yes_book,
+    const NativeOrderCommand& no_command,
+    const BookHotSnapshot& no_book,
+    std::int64_t now_monotonic_ns) noexcept {
+    NativePaperPairResult out{};
+    out.yes.client_order_id = yes_command.client_order_id;
+    out.no.client_order_id = no_command.client_order_id;
+
+    const auto executable = [](const NativeOrderCommand& command,
+                               const BookHotSnapshot& book,
+                               std::int32_t& price_e4) noexcept {
+        price_e4 = 0;
+        if (command.time_in_force != AdapterTimeInForce::Fok
+            || command.client_order_id == 0
+            || command.quantity_microunits <= 0
+            || command.tick_size_e4 <= 0
+            || (command.side != Side::Buy && command.side != Side::Sell)
+            || book.valid == 0 || book.lineage_continuous == 0
+            || book.tick_size_e4 != command.tick_size_e4) return false;
+        const auto limit = command.price_tick
+            * static_cast<std::int64_t>(command.tick_size_e4);
+        const bool buy = command.side == Side::Buy;
+        const auto price = buy ? book.best_ask_e4 : book.best_bid_e4;
+        const auto depth = buy ? book.best_ask_microunits
+                               : book.best_bid_microunits;
+        if (price <= 0 || price % command.tick_size_e4 != 0
+            || depth < command.quantity_microunits
+            || !(buy ? price <= limit : price >= limit)) return false;
+        price_e4 = price;
+        return true;
+    };
+
+    const bool pair_semantics =
+        now_monotonic_ns > 0
+        && yes_command.market_handle != 0
+        && yes_command.market_handle == no_command.market_handle
+        && yes_command.event_handle == no_command.event_handle
+        && yes_command.instrument_handle != 0
+        && no_command.instrument_handle != 0
+        && yes_command.instrument_handle != no_command.instrument_handle
+        && yes_command.side == no_command.side
+        && yes_command.quantity_microunits == no_command.quantity_microunits
+        && endpoint_.matches_pending_command(yes_command)
+        && endpoint_.matches_pending_command(no_command);
+    std::int32_t yes_price = 0, no_price = 0;
+    const bool yes_full = pair_semantics
+        && executable(yes_command, yes_book, yes_price);
+    const bool no_full = pair_semantics
+        && executable(no_command, no_book, no_price);
+
+    if (!pair_semantics || !yes_full || !no_full) {
+        const auto reason = !pair_semantics
+            ? NativePaperReason::InvalidCommand
+            : (!yes_full || !no_full)
+                ? NativePaperReason::InsufficientDepth
+                : NativePaperReason::NotMarketable;
+        const bool ry = endpoint_.observe_unsent(
+            yes_command, now_monotonic_ns);
+        const bool rn = endpoint_.observe_unsent(
+            no_command, now_monotonic_ns);
+        out.yes.reason = reason;
+        out.no.reason = reason;
+        out.yes.final_state = ry ? OrderState::Rejected : OrderState::Unknown;
+        out.no.final_state = rn ? OrderState::Rejected : OrderState::Unknown;
+        out.invalid = (ry && rn) ? 0 : 1;
+        return out;
+    }
+
+    if (!live_locally(yes_command, now_monotonic_ns)
+        || !live_locally(no_command, now_monotonic_ns + 1)) {
+        out.invalid = 1;
+        out.yes.reason = NativePaperReason::LifecycleFailure;
+        out.no.reason = NativePaperReason::LifecycleFailure;
+        return out;
+    }
+
+    OmsEvent yes_fill{};
+    yes_fill.type = OmsEventType::FillDelta;
+    yes_fill.timestamp_ns = now_monotonic_ns + 2;
+    yes_fill.fill_delta_microunits = yes_command.quantity_microunits;
+    yes_fill.fill_price_e4 = yes_price;
+    const auto yes_result = endpoint_.apply_owned(
+        yes_command.client_order_id, yes_fill);
+
+    OmsEvent no_fill{};
+    no_fill.type = OmsEventType::FillDelta;
+    no_fill.timestamp_ns = now_monotonic_ns + 3;
+    no_fill.fill_delta_microunits = no_command.quantity_microunits;
+    no_fill.fill_price_e4 = no_price;
+    const auto no_result = endpoint_.apply_owned(
+        no_command.client_order_id, no_fill);
+
+    const bool yes_ok = yes_result.applied != 0
+        && yes_result.invariant_violation == 0
+        && yes_result.state == OrderState::Filled;
+    const bool no_ok = no_result.applied != 0
+        && no_result.invariant_violation == 0
+        && no_result.state == OrderState::Filled;
+    out.one_leg_fill = static_cast<std::uint8_t>(yes_ok != no_ok);
+    if (!yes_ok || !no_ok) {
+        out.invalid = 1;
+        out.yes.reason = NativePaperReason::LifecycleFailure;
+        out.no.reason = NativePaperReason::LifecycleFailure;
+        out.yes.final_state = yes_result.state;
+        out.no.final_state = no_result.state;
+        return out;
+    }
+
+    const auto fill_record = [](const NativeOrderCommand& command,
+                                const BookHotSnapshot& book,
+                                std::int32_t execution_e4,
+                                std::int64_t fill_ns) noexcept {
+        NativePaperFillRecord fill{};
+        fill.command = command;
+        fill.strategy_id = StrategyId::HardArbitrage;
+        fill.client_order_id = command.client_order_id;
+        fill.command_id = command.command_id;
+        fill.instrument_handle = command.instrument_handle;
+        fill.side = command.side;
+        fill.price_tick = execution_e4 / command.tick_size_e4;
+        fill.tick_size_e4 = command.tick_size_e4;
+        fill.fill_microunits = command.quantity_microunits;
+        fill.exchange_event_ns = book.exchange_event_ns;
+        fill.receive_monotonic_ns = fill_ns;
+        fill.order_state = OrderState::Filled;
+        fill.taker = 1;
+        fill.arrival_book_receive_ns = book.receive_monotonic_ns;
+        fill.arrival_book_version = book.state_version;
+        fill.causal_arrival_modelled = 0;
+        return fill;
+    };
+
+    out.yes.reason = NativePaperReason::Accepted;
+    out.yes.final_state = OrderState::Filled;
+    out.yes.filled_microunits = yes_command.quantity_microunits;
+    out.yes.fill = fill_record(
+        yes_command, yes_book, yes_price, now_monotonic_ns + 2);
+    out.yes.accepted = 1;
+
+    out.no.reason = NativePaperReason::Accepted;
+    out.no.final_state = OrderState::Filled;
+    out.no.filled_microunits = no_command.quantity_microunits;
+    out.no.fill = fill_record(
+        no_command, no_book, no_price, now_monotonic_ns + 3);
+    out.no.accepted = 1;
+
+    paper_fills_ += 2;
+    out.paired_fill = 1;
+    out.accepted = 1;
+    return out;
+}
+
 void NativePaperExecutionAdapter::invalidate_arrivals() noexcept {
     for (auto& pending : pending_) if (pending.command.client_order_id) pending.invalidated = 1;
 }
