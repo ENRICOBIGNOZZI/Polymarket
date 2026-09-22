@@ -203,7 +203,10 @@ def login(page, email: str, password: str) -> None:
         except Exception:
             body = ""
         if any(marker.lower() in body.lower() for marker in INTERACTIVE_MARKERS):
-            raise RuntimeError("interactive_auth_required")
+            if not wait_for_human_2sv(page, timeout_s=900):
+                raise RuntimeError("interactive_auth_timeout")
+            if "/admin/machines" in page.url and "login.tailscale.com" in page.url:
+                return
         page.wait_for_timeout(1000)
     raise RuntimeError("tailscale_admin_login_timeout")
 
