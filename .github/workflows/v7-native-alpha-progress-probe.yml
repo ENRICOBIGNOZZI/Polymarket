@@ -35,7 +35,7 @@ jobs:
             --instance-ids "$instance" \
             --document-name AWS-RunShellScript \
             --parameters commands='[
-              "set -euo pipefail",
+              "set -eu",
               "echo ===PROCESSES===",
               "ps -eo pid,etime,pcpu,pmem,args | grep -E \"native_2h_alpha|multi_alpha_2h|polymarket-native-alpha-2h\" | grep -v grep || true",
               "echo ===OUTPUTS===",
