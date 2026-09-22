@@ -211,6 +211,7 @@ def test_merge_shadow_prepares_exact_atomic_operation_without_authority():
         owner.seen=set()
         row={
             "scenario_id":"s","market_id":"m1","state":"COMPLETE_PAIRED",
+            "kind":"BUY_COMPLETE_SET",
             "target_shares":12.5,"revalidation_yes_price":0.4,
             "revalidation_no_price":0.5,
         }
@@ -220,6 +221,49 @@ def test_merge_shadow_prepares_exact_atomic_operation_without_authority():
         assert out["partition"]==[1,2]
         assert out["prepared_amount_base_units"]==12_500_000
         assert out["real_order_submission"] is False
+
+
+def test_sell_pair_is_not_mergeable_and_maker_gets_no_early_merge_credit():
+    with tempfile.TemporaryDirectory() as d:
+        root=Path(d)
+        selection={
+            "schema":"polymarket_v7_multi_crypto_book_selection_v1",
+            "model_sha":SHA,"paper_only":True,"authenticated_execution":False,
+            "real_order_submission":False,"execution_authority":False,
+            "markets":[{"market_id":"m1","condition_id":"0x"+"1"*64,
+                        "yes_token":"y","no_token":"n","neg_risk":False}],
+        }
+        write(root/"selection.json",selection)
+        owner=merge_shadow.Shadow.__new__(merge_shadow.Shadow)
+        owner.args=SimpleNamespace(
+            model_sha=SHA,selection=root/"selection.json",evidence=root/"none.json")
+        owner.seen=set()
+        sell={
+            "scenario_id":"sell","market_id":"m1","state":"COMPLETE_PAIRED",
+            "kind":"SELL_COMPLETE_SET","target_shares":5,
+        }
+        assert owner.evaluate(sell) is None
+
+        maker_path=root/"maker.jsonl"
+        maker_path.write_text(json.dumps({
+            "schema":"polymarket_v7_two_sided_complete_set_cycle_v2",
+            "market_id":"m1","cycle_id":"c1","origin_ms":1_000,
+            "ttl_ms":1_000,"market_end_ms":100_000,"target_shares":10,
+            "yes_price":0.4,"no_price":0.5,
+            "queue_scenarios":[{
+                "multiplier":1.5,"cancel_relief_fraction":0.0,
+                "state":"BOTH_PARTIAL","yes_filled_shares":4,
+                "no_filled_shares":3,"matched_shares":3,
+                "total_shadow_pnl":0.25,
+            }],
+        })+"\n",encoding="utf-8")
+        policy=json.loads((ROOT/"config/v7_pure_arb_capital_policy.json").read_text())
+        policy={**policy,"complete_set_merge_verified":True,
+                "complete_set_merge_latency_ms":100.0}
+        obs=allocator.maker_observations(maker_path,policy,{})
+        assert len(obs)==1
+        assert math.isclose(obs[0]["lock_seconds"],1.0)
+        assert obs[0]["merge_credit_applied"] is False
 
 
 def test_capital_statistics_include_tail_risk_and_market_clustering():
