@@ -91,7 +91,10 @@ jobs:
             test -n "${AWS_SESSION_TOKEN:-}"
             aws sts get-caller-identity --region eu-west-2 --output json >/dev/null
           fi
-          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
+          if [[ "$PHASE" != "latency-lab" ]]; then
+            python3 scripts/v7_cutover_contract.py \
+              --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
+          fi
           python3 - <<'PY'
           import json
           from pathlib import Path
