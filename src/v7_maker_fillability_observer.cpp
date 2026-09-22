@@ -695,6 +695,8 @@ struct PureArbFunnelState {
     std::uint64_t sell_fresh_decision = 0;
     std::uint64_t buy_cycles_recorded = 0;
     std::uint64_t sell_cycles_recorded = 0;
+    std::uint64_t buy_below_min_order_rejections = 0;
+    std::uint64_t sell_below_min_order_rejections = 0;
     std::uint64_t stale_decision_rejections = 0;
     std::array<std::uint64_t, kPureArbReserveArms.size()> buy_reserve_positive{};
     std::array<std::uint64_t, kPureArbReserveArms.size()> sell_reserve_positive{};
@@ -1719,6 +1721,10 @@ public:
                     row.trigger_receive_monotonic_ns, decision_ns);
             }
         } else {
+            if (buy_sweep.shares_microunits > 0
+                && buy_sweep.shares() + 1e-12 < market.minimum_order_shares) {
+                ++pure_arb_funnel_.buy_below_min_order_rejections;
+            }
             market.buy.active = false;
         }
 
@@ -1734,6 +1740,10 @@ public:
                     market.prefunded_complete_set_shares_remaining - sell_sweep.shares());
             }
         } else {
+            if (sell_sweep.shares_microunits > 0
+                && sell_sweep.shares() + 1e-12 < market.minimum_order_shares) {
+                ++pure_arb_funnel_.sell_below_min_order_rejections;
+            }
             market.sell.active = false;
         }
     }
@@ -1868,6 +1878,10 @@ public:
                 {"sell_fresh_decision", pure_arb_funnel_.sell_fresh_decision},
                 {"buy_cycles_recorded", pure_arb_funnel_.buy_cycles_recorded},
                 {"sell_cycles_recorded", pure_arb_funnel_.sell_cycles_recorded},
+                {"buy_below_min_order_rejections",
+                    pure_arb_funnel_.buy_below_min_order_rejections},
+                {"sell_below_min_order_rejections",
+                    pure_arb_funnel_.sell_below_min_order_rejections},
                 {"stale_decision_rejections", pure_arb_funnel_.stale_decision_rejections}}},
             {"latency_window_samples", static_cast<std::uint64_t>(pure_arb_receive_latency_.size())},
             {"receive_to_enqueue_ns", json::object{
