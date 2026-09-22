@@ -5,9 +5,16 @@ on:
     branches: [main]
     paths:
       - CMakeLists.txt
+      - include/pm/socket_tuning.hpp
+      - include/pm/v7_clob_tls.hpp
+      - include/pm/v7_clob_pair_transport.hpp
+      - src/v7_clob_tls.cpp
+      - src/v7_clob_pair_transport.cpp
+      - src/v7_public_paired_clob_transport_probe.cpp
+      - ops/v7_host_latency_ab.py
+      - ops/v7_london_bootstrap.sh
       - ops/v7_london_latency_lab.sh
       - ops/v7_london_ssm_benchmark.py
-      - src/v7_public_paired_clob_transport_probe.cpp
       - .github/workflows/v7-london-aws-provision.yml
   workflow_dispatch:
     inputs:
@@ -100,6 +107,7 @@ jobs:
             test -f ops/v7_london_latency_lab.sh
             bash -n ops/v7_london_latency_lab.sh
             python3 -m py_compile \
+              ops/v7_host_latency_ab.py \
               ops/v7_london_ssm_benchmark.py \
               ops/v7_london_ssm_bootstrap.py \
               ops/v7_london_multipath_ssm.py
