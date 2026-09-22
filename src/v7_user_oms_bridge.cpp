@@ -122,6 +122,7 @@ struct UserOmsBridge::Impl {
 
     [[nodiscard]] bool emit(std::uint64_t client_order_id,
                             OmsEventType type,
+                            OmsEventSource source,
                             std::int64_t timestamp_ns,
                             std::int64_t fill_delta,
                             std::span<RoutedOmsEvent> output,
@@ -135,6 +136,7 @@ struct UserOmsBridge::Impl {
         routed.event = {};
         routed.event.event_id = 0; // Canonical OMS owner assigns the local event id.
         routed.event.type = type;
+        routed.event.source = source;
         routed.event.timestamp_ns = timestamp_ns;
         routed.event.fill_delta_microunits = fill_delta;
         return true;
@@ -283,7 +285,8 @@ struct UserOmsBridge::Impl {
             ++pending_overflow;
             return;
         }
-        if (emit(identity.client_order_id, OmsEventType::FillDelta, receive_ns,
+        if (emit(identity.client_order_id, OmsEventType::FillDelta,
+                 OmsEventSource::UserWs, receive_ns,
                  microunits, output, result)) ++routed_fills;
     }
 
@@ -302,10 +305,10 @@ struct UserOmsBridge::Impl {
         }
         if (type == user_ws::OrderEventType::Placement) {
             (void)emit(identity.client_order_id, OmsEventType::AckLive,
-                       receive_ns, 0, output, result);
+                       OmsEventSource::UserWs, receive_ns, 0, output, result);
         } else if (type == user_ws::OrderEventType::Cancellation) {
             (void)emit(identity.client_order_id, OmsEventType::AckCancel,
-                       receive_ns, 0, output, result);
+                       OmsEventSource::UserWs, receive_ns, 0, output, result);
         }
     }
 
@@ -387,6 +390,7 @@ UserOmsBridgeResult UserOmsBridge::on_post_order_ack(
     }
     if (!ack.success) {
         (void)impl_->emit(client_order_id, OmsEventType::Reject,
+                          OmsEventSource::HttpAck,
                           response_complete_monotonic_ns, 0, output, result);
         return result;
     }
@@ -395,6 +399,7 @@ UserOmsBridgeResult UserOmsBridge::on_post_order_ack(
         return result;
     }
     (void)impl_->emit(client_order_id, OmsEventType::AckLive,
+                      OmsEventSource::HttpAck,
                       response_complete_monotonic_ns, 0, output, result);
     impl_->flush_pending(ack.exchange_order_id.view(), output, result);
     return result;
