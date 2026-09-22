@@ -17,12 +17,11 @@ import math
 import os
 from pathlib import Path
 import time
-import urllib.parse
-import urllib.request
 from typing import Any
 
 from v7_pm_repricing_common import atomic_json
 from v7_pure_arb_economics import raw_fee_per_share, rounded_fee_usdc
+from v7_clob_public_batch import fetch_books, full_book as parse_full_book
 
 CYCLE_SCHEMAS={
     "polymarket_v7_pure_arb_paper_cycle_v2",
@@ -62,25 +61,6 @@ def fee_params(row:dict[str,Any])->tuple[float,float]|None:
     if row.get("fees_enabled_explicit") is True and row.get("fees_enabled") is False:
         return 0.0,1.0
     return None
-
-
-def full_book(base:str,token:str,timeout:float)->dict[str,list[tuple[float,float]]]|None:
-    url=base.rstrip("/")+"/book?"+urllib.parse.urlencode({"token_id":token})
-    req=urllib.request.Request(url,headers={"User-Agent":"polymarket-v7-deep-sizing-shadow"})
-    try:
-        with urllib.request.urlopen(req,timeout=timeout) as resp:v=json.load(resp)
-    except (OSError,TimeoutError,json.JSONDecodeError):return None
-    if not isinstance(v,dict):return None
-    def parse(rows,reverse):
-        out=[]
-        for row in rows if isinstance(rows,list) else []:
-            if not isinstance(row,dict):continue
-            try:p=float(row["price"]);q=float(row["size"])
-            except (KeyError,TypeError,ValueError):continue
-            if math.isfinite(p) and math.isfinite(q) and 0<p<1 and q>0:out.append((p,q))
-        return sorted(out,key=lambda x:x[0],reverse=reverse)
-    bids=parse(v.get("bids"),True);asks=parse(v.get("asks"),False)
-    return {"bids":bids,"asks":asks} if bids and asks else None
 
 
 def sweep(a:list[tuple[float,float]],b:list[tuple[float,float]],rate:float,exponent:float,
@@ -167,8 +147,10 @@ class Shadow:
         if fp is None:base["state"]="CENSORED_FEE";return base
         yes,no=str(m.get("yes_token") or ""),str(m.get("no_token") or "")
         started=time.time_ns()//1_000_000
-        y=full_book(self.args.clob_url,yes,self.args.timeout_seconds)
-        n=full_book(self.args.clob_url,no,self.args.timeout_seconds)
+        batch=fetch_books(
+            self.args.clob_url,[yes,no],self.args.timeout_seconds,
+            chunk_size=2,user_agent="polymarket-v7-deep-sizing-shadow")
+        y=parse_full_book(batch.get(yes));n=parse_full_book(batch.get(no))
         fetched=time.time_ns()//1_000_000
         base["fetch_complete_wall_ms"]=fetched;base["fetch_delay_from_detection_ms"]=max(0,fetched-detected)
         if y is None or n is None:base["state"]="CENSORED_BOOK";return base
