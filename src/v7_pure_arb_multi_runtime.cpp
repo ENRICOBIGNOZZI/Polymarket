@@ -313,6 +313,8 @@ int main(int argc,char**argv){
             {"pm_messages",feed_status.messages},
             {"pm_reconnects",feed_status.reconnects},
             {"pm_errors",feed_status.errors},
+            {"direct_decision_queue_depth",0},
+            {"latency_queue_depth",tape_status.queued},
             {"latency_published",tape_status.published},
             {"latency_written",tape_status.written},
             {"latency_dropped",tape_status.dropped},
