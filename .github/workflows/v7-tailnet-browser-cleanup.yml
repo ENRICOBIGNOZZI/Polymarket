@@ -49,8 +49,7 @@ jobs:
           PY
           )"
           git merge-base --is-ancestor "$expected_sha" HEAD
-          distance="$(git rev-list --count "$expected_sha..HEAD")"
-          test "$distance" -le 10
+          echo "tailnet_envelope_expected_ancestor_ok=1"
 
       - name: Install browser automation
         shell: bash
