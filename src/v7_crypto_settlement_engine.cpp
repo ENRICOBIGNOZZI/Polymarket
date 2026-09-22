@@ -573,6 +573,14 @@ int main(int argc, char** argv) {
         std::uint64_t pure_arb_shadow_sell_executable = 0;
         std::uint64_t pure_arb_shadow_stale_pair = 0;
         std::uint64_t pure_arb_shadow_latency_overflow = 0;
+        std::uint64_t pure_arb_pair_attempts = 0;
+        std::uint64_t pure_arb_pair_admitted = 0;
+        std::uint64_t pure_arb_pair_complete = 0;
+        std::uint64_t pure_arb_pair_rejected = 0;
+        std::uint64_t pure_arb_pair_censored = 0;
+        std::uint64_t pure_arb_pair_blocked_other_orders = 0;
+        std::uint64_t pure_arb_pair_lifecycle_failures = 0;
+        std::uint64_t pure_arb_intent_sequence = (1ULL << 62);
         double pure_arb_shadow_last_buy_edge = 0.0;
         double pure_arb_shadow_last_sell_edge = 0.0;
         double pure_arb_shadow_max_buy_edge = 0.0;
