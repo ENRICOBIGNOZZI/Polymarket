@@ -495,6 +495,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_settlement_source_arb_shadow.py \
   --oracle-status "$PURE_ARB_DIR/oracle_hub_status.json" \
   --selection "$RUN_ROOT/universe/book_selection.json" \
   --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --deep-book-snapshots "$PURE_ARB_DIR/pure_arb_deep_book_snapshots.jsonl" \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/settlement_source_arb_cycles.jsonl" \
   --status "$PURE_ARB_DIR/settlement_source_arb_status.json" \
@@ -569,8 +570,10 @@ v7_register_optional_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_venue_mode.py \
   --source "$RUN_ROOT/control/venue_mode_source.json" \
+  --account-source "$RUN_ROOT/control/account_execution_mode.json" \
   --output "$PURE_ARB_DIR/venue_mode_status.json" --model-sha "$SHA" \
-  --paper-counterfactual-mode NORMAL --maximum-age-ms 5000 --interval-ms 1000 \
+  --paper-counterfactual-mode NORMAL --paper-account-counterfactual OPEN \
+  --maximum-age-ms 5000 --interval-ms 1000 \
   >> "$PURE_ARB_DIR/venue_mode.log" 2>&1 &
 v7_register_optional_child "$!"
 
@@ -581,10 +584,12 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_exchange_execution_shadow.py
   --market-terms-root "$RUN_ROOT/control/market_execution_terms" \
   --venue-mode "$PURE_ARB_DIR/venue_mode_status.json" \
   --exchange-semantics "$ROOT/config/v7_exchange_semantics.json" \
+  --fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json" \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/exchange_execution_cycles.jsonl" \
   --status "$PURE_ARB_DIR/exchange_execution_status.json" \
   --transport-delay-ms 1,2,5,10 --inter-leg-skew-ms 0,1,2,5,10 \
+  --transport-modes SEQUENTIAL,PARALLEL,BATCH \
   --unwind-delay-ms 2 --maximum-book-age-ms 100 --maximum-leg-skew-ms 100 \
   --reserve-per-share 0.0005 --minimum-shares 1 --maximum-shares 1000 --interval-ms 5 \
   >> "$PURE_ARB_DIR/exchange_execution.log" 2>&1 &
@@ -594,9 +599,24 @@ v7_exec_class COLLECTOR python3 scripts/v7_fee_reward_registry.py \
   --universe "$RUN_ROOT/universe/current.json" \
   --rewards "$RUN_ROOT/control/verified_maker_rewards.json" \
   --exchange-semantics "$ROOT/config/v7_exchange_semantics.json" \
+  --taker-tier-snapshot "$RUN_ROOT/control/verified_taker_tier.json" \
   --output "$PURE_ARB_DIR/fee_reward_registry.json" \
   --model-sha "$SHA" --interval 5 \
   >> "$PURE_ARB_DIR/fee_reward_registry.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Complete-set merge is modeled as a separate zero-authority operation.
+# No signing or submission occurs here.  Capital is released early only when
+# a fresh independently verified merge-latency/cost receipt exists.
+v7_exec_class COLLECTOR python3 scripts/v7_complete_set_merge_shadow.py \
+  --cycles "$PURE_ARB_DIR/exchange_execution_cycles.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --evidence "$RUN_ROOT/control/verified_complete_set_merge_evidence.json" \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/complete_set_merge_cycles.jsonl" \
+  --status "$PURE_ARB_DIR/complete_set_merge_status.json" \
+  --interval-ms 100 \
+  >> "$PURE_ARB_DIR/complete_set_merge.log" 2>&1 &
 v7_register_optional_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_capital_allocator.py \
@@ -606,6 +626,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_capital_allocator.py \
   --postfix-cycles "$PURE_ARB_DIR/settlement_source_arb_cycles.jsonl" \
   --cross-status "$PURE_ARB_DIR/cross_market_exact_arb_status.json" \
   --fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json" \
+  --merge-evidence "$RUN_ROOT/control/verified_complete_set_merge_evidence.json" \
   --output "$PURE_ARB_DIR/capital_allocator_status.json" \
   --model-sha "$SHA" --interval-seconds 5 \
   >> "$PURE_ARB_DIR/capital_allocator.log" 2>&1 &
@@ -712,7 +733,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 21
+v7_assert_registered_child_count 22
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

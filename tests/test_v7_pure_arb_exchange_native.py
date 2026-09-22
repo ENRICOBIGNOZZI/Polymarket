@@ -103,7 +103,8 @@ def exchange_owner(tmp:Path,points):
 def base_item(row,*,allowed=True,skew=2,order="YES_FIRST",target=1250):
     candidate={
         "market_id":"m1","kind":"BUY_COMPLETE_SET","receive_wall_ms":1000,
-        "asset":"BTC","horizon":"M5","executable_shares_local_deep":5.0,
+        "asset":"BTC","horizon":"M5",
+        "executable_shares_local_deep":5.0,"executable_shares_l10":5.0,
     }
     return {
         "scenario_id":"s","candidate":candidate,"market":row,
@@ -342,11 +343,12 @@ def test_runtime_remains_zero_authority():
         "v7_pure_arb_venue_mode.py",
         "v7_pure_arb_exchange_execution_shadow.py",
         "v7_fee_reward_registry.py",
+        "v7_complete_set_merge_shadow.py",
         "v7_pure_arb_capital_allocator.py",
         "v7_pure_arb_maker_policy.py",
     ):
         assert loop.count(worker)==1
-    assert "v7_assert_registered_child_count 21" in loop
+    assert "v7_assert_registered_child_count 22" in loop
     assert '--fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json"' in loop
     assert '"authenticated_execution":false' in loop.replace(" ", "")
     assert '"real_order_submission":false' in loop.replace(" ", "")

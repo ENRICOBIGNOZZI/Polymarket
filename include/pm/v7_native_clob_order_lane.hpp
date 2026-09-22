@@ -21,6 +21,9 @@ enum class NativeClobSubmitReason : std::uint8_t {
     ResponseFailure = 6,
     AckFailure = 7,
     OmsFailure = 8,
+    MatchingEngineRestart = 9,
+    RestrictedTradingMode = 10,
+    RateLimited = 11,
 };
 
 struct NativeClobLaneConfig {
@@ -44,6 +47,7 @@ struct NativeClobSubmitResult {
     OrderState final_state = OrderState::Unknown;
     std::uint64_t client_order_id = 0;
     int http_status = 0;
+    int retry_after_seconds = 0;
     std::int64_t wire_monotonic_ns = 0;
     std::int64_t response_complete_monotonic_ns = 0;
     std::uint8_t accepted = 0;

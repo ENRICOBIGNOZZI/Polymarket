@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_exchange_semantics_v1",
-  "version": 1,
+  "version": 2,
   "as_of": "2026-09-22",
   "production_clob_version": "V2",
   "production_clob_url": "https://clob.polymarket.com",
@@ -19,7 +19,10 @@
     ],
     "buy_collection_mode_source": "POLYMARKET_EXCHANGE_V2_UPGRADE_20260428",
     "public_documentation_conflict_observed": true,
-    "alternative_buy_collection_mode_for_sensitivity": "SHARES_ON_BUY"
+    "alternative_buy_collection_mode_for_sensitivity": "SHARES_ON_BUY",
+    "fee_precision_decimals": 5,
+    "minimum_charged_fee_usdc": 0.00001,
+    "fee_rounding_scope": "MATCHED_QUANTITY_USDC"
   },
   "maker_rebates": {
     "crypto_reference_fraction": 0.2,
@@ -47,6 +50,106 @@
     "unknown_fee_policy": "NON_EXECUTABLE",
     "unknown_delay_policy": "NON_EXECUTABLE_TAKER",
     "unknown_venue_mode_policy": "NO_NEW_RISK",
-    "unverified_buy_collection_mode_policy": "NON_EXECUTABLE_TAKER"
-  }
+    "unverified_buy_collection_mode_policy": "NON_EXECUTABLE_TAKER",
+    "unknown_account_mode_policy": "NO_NEW_RISK",
+    "closed_only_account_policy": "NO_NEW_PURE_ARB_EXPOSURE"
+  },
+  "order_submission": {
+    "single_endpoint": "POST /order",
+    "batch_endpoint": "POST /orders",
+    "batch_max_orders": 15,
+    "batch_atomic": false,
+    "batch_result_semantics": "PER_ORDER_INDEPENDENT_ACCEPT_REJECT",
+    "taker_modes": [
+      "SEQUENTIAL",
+      "PARALLEL",
+      "BATCH"
+    ]
+  },
+  "taker_rebates": {
+    "program_live_since": "2026-05-28",
+    "use_in_entry_gate": false,
+    "account_as_ancillary_realized_pnl_only": true,
+    "unknown_tier_policy": "ZERO_EXPECTED_VALUE",
+    "category": "CRYPTO",
+    "category_weight": 2.3,
+    "tier_update_cadence": "DAILY_MIDNIGHT_UTC",
+    "tiers": [
+      {
+        "name": "NONE",
+        "minimum_weighted_volume_30d": 0,
+        "rebate_fraction": 0
+      },
+      {
+        "name": "BRONZE",
+        "minimum_weighted_volume_30d": 2000,
+        "rebate_fraction": 0.03
+      },
+      {
+        "name": "SILVER",
+        "minimum_weighted_volume_30d": 20000,
+        "rebate_fraction": 0.08
+      },
+      {
+        "name": "GOLD",
+        "minimum_weighted_volume_30d": 200000,
+        "rebate_fraction": 0.18
+      },
+      {
+        "name": "PLATINUM",
+        "minimum_weighted_volume_30d": 1000000,
+        "rebate_fraction": 0.32
+      },
+      {
+        "name": "DIAMOND",
+        "minimum_weighted_volume_30d": 4000000,
+        "rebate_fraction": 0.44
+      },
+      {
+        "name": "OBSIDIAN",
+        "minimum_weighted_volume_30d": 10000000,
+        "rebate_fraction": 0.5
+      }
+    ]
+  },
+  "position_operations": {
+    "complete_set_merge": {
+      "supported": true,
+      "result": "EQUAL_YES_NO_TO_PUSD_ATOMIC",
+      "amount_unit": "PUSD_BASE_UNITS",
+      "standard_adapter": "0xAdA100Db00Ca00073811820692005400218FcE1f",
+      "neg_risk_adapter": "0xadA2005600Dec949baf300f4C6120000bDB6eAab",
+      "collateral_token": "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",
+      "runtime_verification_required": true
+    }
+  },
+  "matching_engine_restrictions": {
+    "restart_http_status": 425,
+    "restart_backoff_seconds": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      30
+    ],
+    "post_restart_post_only_seconds": 120,
+    "restricted_http_status": 503,
+    "retry_after_supported": true,
+    "taker_policy": "NO_BLIND_RETRY"
+  },
+  "order_heartbeat": {
+    "required_for_resting_orders": true,
+    "endpoint": "POST /v1/heartbeats",
+    "send_interval_seconds": 5,
+    "venue_cancel_timeout_seconds": 10,
+    "current_native_taker_lane_requires_heartbeat": false,
+    "maker_promotion_requires_native_heartbeat": true,
+    "failure_policy": "NO_NEW_MAKER_RISK_AND_CANCEL_RESTING_IF_HEARTBEAT_UNHEALTHY"
+  },
+  "account_execution_modes": [
+    "OPEN",
+    "CLOSED_ONLY",
+    "UNKNOWN"
+  ]
 }

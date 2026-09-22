@@ -19,6 +19,14 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+try:
+    from v7_pure_arb_economics import taker_tier
+except ModuleNotFoundError:
+    # Direct importlib-based tests do not add scripts/ to sys.path.
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from v7_pure_arb_economics import taker_tier
+
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
@@ -233,7 +241,8 @@ def _reward(row: dict[str, Any] | None, snapshot: dict[str, Any], now_ms: int,
 def build(universe: dict[str, Any], rewards: dict[str, Any], *, model_sha: str,
           now_ms: int, fee_ttl_seconds: int = 300,
           reward_ttl_seconds: int = 120,
-          exchange_semantics: dict[str, Any] | None = None) -> dict[str, Any]:
+          exchange_semantics: dict[str, Any] | None = None,
+          taker_tier_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     if not SHA40.fullmatch(model_sha):
         raise ValueError("model_sha:not_exact")
     if universe.get("schema") != "polymarket_v7_crypto_universe_snapshot_v1":
@@ -268,8 +277,58 @@ def build(universe: dict[str, Any], rewards: dict[str, Any], *, model_sha: str,
                 "MARKET_INACTIVE" if not active else "UNKNOWN_FEE"
             ),
         })
+    semantics = exchange_semantics if isinstance(exchange_semantics, dict) else {}
+    taker_semantics = semantics.get("taker_rebates") if isinstance(semantics.get("taker_rebates"), dict) else {}
+    tier_snapshot = taker_tier_snapshot if isinstance(taker_tier_snapshot, dict) else {}
+    taker = {
+        "verified": False,
+        "source": "UNVERIFIED_TIER_ZERO_EXPECTED_VALUE",
+        "weighted_volume_30d": None,
+        "tier": None,
+        "rebate_fraction": 0.0,
+        "used_in_entry_gate": False,
+        "category": "CRYPTO",
+        "category_weight": float(taker_semantics.get("category_weight") or 2.3),
+        "program_live_since": str(taker_semantics.get("program_live_since") or ""),
+        "tier_schedule": taker_semantics.get("tiers") if isinstance(taker_semantics.get("tiers"), list) else [],
+    }
+    if (
+        tier_snapshot.get("schema") == "polymarket_v7_verified_taker_tier_snapshot_v1"
+        and tier_snapshot.get("model_sha") == model_sha
+        and tier_snapshot.get("paper_only") is True
+        and tier_snapshot.get("authenticated_execution") is False
+        and tier_snapshot.get("real_order_submission") is False
+    ):
+        try:
+            weighted = float(tier_snapshot.get("weighted_volume_30d"))
+            observed = int(tier_snapshot.get("observed_at_ms") or 0)
+            expires = int(tier_snapshot.get("expires_at_ms") or 0)
+        except (TypeError, ValueError, OverflowError):
+            weighted, observed, expires = math.nan, 0, 0
+        derived = taker_tier(weighted) if math.isfinite(weighted) and weighted >= 0 else {}
+        try:
+            claimed_fraction = float(tier_snapshot.get("rebate_fraction"))
+        except (TypeError, ValueError, OverflowError):
+            claimed_fraction = math.nan
+        if (
+            observed > 0 and observed <= now_ms <= expires
+            and derived
+            and math.isfinite(claimed_fraction)
+            and abs(claimed_fraction - float(derived["rebate_fraction"])) <= 1e-12
+            and str(tier_snapshot.get("tier") or "").upper() == str(derived["tier"])
+        ):
+            taker.update({
+                "verified": True,
+                "source": "VERIFIED_DAILY_TIER_SNAPSHOT",
+                "weighted_volume_30d": weighted,
+                "tier": derived["tier"],
+                "rebate_fraction": claimed_fraction,
+                "observed_at_ms": observed,
+                "expires_at_ms": expires,
+            })
+
     return {
-        "schema": "polymarket_v7_fee_reward_registry_v1", "version": 7,
+        "schema": "polymarket_v7_fee_reward_registry_v1", "version": 8,
         "timestamp": datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat(),
         "timestamp_ms": now_ms, "model_sha": model_sha,
         "paper_only": True, "authenticated_execution": False,
@@ -280,6 +339,7 @@ def build(universe: dict[str, Any], rewards: dict[str, Any], *, model_sha: str,
         "verified_fee_market_count": sum(1 for row in entries if row["fee"]["verified"]),
         "verified_reward_market_count": sum(1 for row in entries if row["reward"]["verified"]),
         "executable_market_count": sum(1 for row in entries if row["executable_under_registry"]),
+        "taker_rebate": taker,
         "markets": entries,
     }
 
@@ -293,6 +353,7 @@ def main() -> int:
     parser.add_argument("--exchange-semantics", type=Path)
     parser.add_argument("--data-api-url", default="https://data-api.polymarket.com")
     parser.add_argument("--wallet-reward-timeout-seconds", type=float, default=3.0)
+    parser.add_argument("--taker-tier-snapshot", type=Path)
     parser.add_argument("--interval", type=float, default=0.0)
     args = parser.parse_args()
     while True:
@@ -301,7 +362,8 @@ def main() -> int:
             result = build(
                 load(args.universe), load(args.rewards), model_sha=args.model_sha,
                 now_ms=now_ms,
-                exchange_semantics=load(args.exchange_semantics) if args.exchange_semantics else None)
+                exchange_semantics=load(args.exchange_semantics) if args.exchange_semantics else None,
+                taker_tier_snapshot=load(args.taker_tier_snapshot) if args.taker_tier_snapshot else None)
             proxy_wallet = str(os.environ.get("POLYMARKET_PROXY_WALLET") or "").strip()
             result["wallet_reward_audit"] = fetch_wallet_reward_audit(
                 args.data_api_url, proxy_wallet, now_ms=now_ms,
@@ -309,7 +371,7 @@ def main() -> int:
             atomic_json(args.output, result)
         except Exception as exc:
             atomic_json(args.output, {
-                "schema": "polymarket_v7_fee_reward_registry_v1", "version": 7,
+                "schema": "polymarket_v7_fee_reward_registry_v1", "version": 8,
                 "timestamp_ms": int(time.time() * 1000), "model_sha": args.model_sha,
                 "paper_only": True, "authenticated_execution": False,
                 "real_order_submission": False, "execution_authority": False,

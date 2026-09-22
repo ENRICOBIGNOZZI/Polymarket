@@ -125,13 +125,14 @@ def test_runtime_wires_all_zero_authority_frequency_workers_once():
         "v7_pure_arb_venue_mode.py",
         "v7_pure_arb_exchange_execution_shadow.py",
         "v7_fee_reward_registry.py",
+        "v7_complete_set_merge_shadow.py",
         "v7_pure_arb_capital_allocator.py",
         "v7_pure_arb_maker_policy.py",
     ]
     for worker in workers:
         assert loop.count(worker)==1,worker
     assert "--pure-arb-prefunded-complete-set-shares 1000" in loop
-    assert "v7_assert_registered_child_count 21" in loop
+    assert "v7_assert_registered_child_count 22" in loop
 
 
 
@@ -184,6 +185,7 @@ def test_london_runtime_bundle_contains_all_pure_arb_workers():
         "scripts/v7_pure_arb_venue_mode.py",
         "scripts/v7_pure_arb_exchange_execution_shadow.py",
         "scripts/v7_fee_reward_registry.py",
+        "scripts/v7_complete_set_merge_shadow.py",
         "scripts/v7_pure_arb_capital_allocator.py",
         "scripts/v7_pure_arb_maker_policy.py",
     }

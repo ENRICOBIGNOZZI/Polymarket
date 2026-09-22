@@ -30,6 +30,7 @@ public:
     [[nodiscard]] bool complete() const noexcept { return state_ == Http1ResponseState::Complete; }
     [[nodiscard]] int status_code() const noexcept { return status_code_; }
     [[nodiscard]] bool connection_close() const noexcept { return connection_close_; }
+    [[nodiscard]] int retry_after_seconds() const noexcept { return retry_after_seconds_; }
     [[nodiscard]] std::size_t message_size() const noexcept { return message_size_; }
     [[nodiscard]] std::string_view body() const noexcept;
 
@@ -45,6 +46,7 @@ private:
     int status_code_ = 0;
     bool headers_parsed_ = false;
     bool connection_close_ = false;
+    int retry_after_seconds_ = 0;
     Http1ResponseState state_ = Http1ResponseState::Receiving;
 };
 

@@ -60,6 +60,7 @@ void FixedHttp1Response::reset() noexcept {
     status_code_ = 0;
     headers_parsed_ = false;
     connection_close_ = false;
+    retry_after_seconds_ = 0;
     state_ = Http1ResponseState::Receiving;
 }
 
@@ -141,6 +142,12 @@ Http1ResponseState FixedHttp1Response::parse_headers() noexcept {
             if (!value.empty() && !iequals(value, "identity")) unsupported_transfer = true;
         } else if (iequals(name, "Connection")) {
             connection_close_ = contains_token_ci(value, "close");
+        } else if (iequals(name, "Retry-After")) {
+            std::size_t parsed = 0;
+            if (parse_decimal(value, parsed)
+                && parsed <= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+                retry_after_seconds_ = static_cast<int>(parsed);
+            }
         }
         pos = line_end + 2;
     }

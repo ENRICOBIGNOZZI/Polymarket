@@ -22,12 +22,22 @@ def test_ci_preflight_precedes_every_live_generation_mutation():
 @pytest.mark.parametrize('ci_returncode', [0, 2, 3])
 def test_real_shell_preflight_failure_cannot_reach_mutation(tmp_path, ci_returncode):
     source = (ROOT / "ops/v7_london_cutover.sh").read_text()
-    # Execute the complete real preflight. Replace the subsequent deployment
-    # with a harmless marker so this test cannot ever call host service tools.
-    prefix = source.split('# Capture the run root currently bound to systemd')[0]
+    # Exercise the production exact-SHA CI gate in isolation. Earlier model
+    # and artifact gates have their own tests; they must not mask whether a
+    # failed/pending CI gate can reach the first runtime mutation.
+    ci_start = source.index('# Check the same exact-SHA CI contract')
+    mutation = source.index('# Capture the run root currently bound to systemd')
+    ci_section = source[ci_start:mutation]
     entry = tmp_path / 'preflight.sh'
     marker = tmp_path / 'mutation-reached'
-    entry.write_text(prefix + '\nprintf reached > "$TEST_MUTATION_MARKER"\n')
+    entry.write_text(
+        'set -euo pipefail\n'
+        'EXPECTED_SHA="${POLYMARKET_EXPECTED_SHA:?}"\n'
+        'RUNTIME_ROOT="${POLYMARKET_RUNTIME_ROOT:?}"\n'
+        'TARGET_RUNTIME="$RUNTIME_ROOT/by-sha/$EXPECTED_SHA"\n'
+        + ci_section
+        + '\nprintf reached > "$TEST_MUTATION_MARKER"\n'
+    )
     sha = 'a' * 40
     runtime = tmp_path / 'runtime'
     (runtime / 'by-sha' / sha / 'deploy/london').mkdir(parents=True)

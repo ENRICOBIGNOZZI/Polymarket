@@ -309,7 +309,14 @@ def render_svg(report: dict[str, Any], path: Path) -> None:
 def write_csv(report: dict[str, Any], path: Path) -> None:
     rows = report.get("trade_path") or []
     path.parent.mkdir(parents=True, exist_ok=True)
-    fields = sorted({key for row in rows for key in row})
+    available = {key for row in rows for key in row}
+    preferred = [
+        "asset", "market_id", "side", "decision_ns", "decision_time_utc",
+        "size", "notional", "exit_horizon_ms", "latency_ms",
+        "effective_action_age_ms", "observed", "realized_pnl",
+    ]
+    fields = [key for key in preferred if key in available]
+    fields += sorted(available - set(fields))
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()

@@ -28,10 +28,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
           test "$changed" = "deploy/v7-tailscale-cleanup-request.json"
-          python3 - deploy/v7-tailscale-cleanup-request.json "$GITHUB_OUTPUT" <<'PY'
+          parent_sha="${{ github.event.before }}"
+          [[ "$parent_sha" =~ ^[0-9a-f]{40}$ ]]
+          python3 - deploy/v7-tailscale-cleanup-request.json "$GITHUB_OUTPUT" "$parent_sha" <<'PY'
           import json,sys
           v=json.load(open(sys.argv[1],encoding='utf-8'))
+          expected_parent_sha=sys.argv[3]
           assert v.get('schema')=='polymarket_v7_tailscale_cleanup_request_v1'
+          assert v.get('expected_parent_sha')==expected_parent_sha
           assert v.get('version')==1
           client=v.get('client_id'); audience=v.get('audience')
           assert isinstance(client,str) and len(client)>=8

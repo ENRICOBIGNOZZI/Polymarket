@@ -198,7 +198,7 @@ def _transport_target_sha(command: dict[str, Any]) -> str | None:
     # literal space.  Keep punctuation boundaries explicit to avoid matching a
     # SHA embedded inside an unrelated variable name.
     matches = set(re.findall(
-        r"(?:^|[\\s;'\"])(?:SHA|POLYMARKET_EXPECTED_SHA)=([0-9a-f]{40})(?:$|[\\s;'\"])",
+        r"(?:^|[\s;'\"])(?:SHA|POLYMARKET_EXPECTED_SHA)=([0-9a-f]{40})(?:$|[\s;'\"])",
         text,
     ))
     if len(matches) != 1:

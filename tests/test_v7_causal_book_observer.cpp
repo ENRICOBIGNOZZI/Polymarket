@@ -28,8 +28,8 @@ int main() {
         };
         send(snapshot(1'700'000'000'000), 0);
         send(snapshot(1'700'000'001'100), 1100);
-        send(R"({"event_type":"last_trade_price","asset_id":"yes","timestamp":1700000001200,"side":"SELL","price":"0.48","size":"2"})", 1200);
-        observer.write_flow_snapshot(1'700'000'001'200);
+        send(R"({"event_type":"last_trade_price","asset_id":"yes","timestamp":1700000002200,"side":"SELL","price":"0.48","size":"2"})", 2200);
+        observer.write_flow_snapshot(1'700'000'002'200);
         auto read_last = [&](const fs::path& path) {
             std::ifstream stream(path); std::string line, last;
             while (std::getline(stream, line)) last = line;
@@ -44,7 +44,7 @@ int main() {
         const auto& print = row.at("public_trade").as_object();
         assert(print.at("aggressor_side").as_string() == "SELL");
         assert(print.at("size").as_double() == 2.0);
-        assert(print.at("exchange_event_ns").as_int64() == 1'700'000'001'200'000'000LL);
+        assert(print.at("exchange_event_ns").as_int64() == 1'700'000'002'200'000'000LL);
         const auto& features = row.at("placement_features").as_object();
         assert(std::abs(features.at("spread_ticks").as_double() - 4.0) < 1e-12);
         assert(std::abs(features.at("imbalance").as_double() + 1.0/3.0) < 1e-12);
@@ -60,7 +60,7 @@ int main() {
         assert(std::abs(flow_row.at("sell_shares_120s").as_double() - 2.0) < 1e-12);
         // A token-local crossed delta invalidates only that token. It never
         // requests a process-global reload and a fresh full snapshot heals it.
-        send(R"({"event_type":"price_change","timestamp":1700000001250,"price_changes":[{"asset_id":"yes","side":"SELL","price":"0.47","size":"1"}]})", 1250);
+        send(R"({"event_type":"price_change","timestamp":1700000002250,"price_changes":[{"asset_id":"yes","side":"SELL","price":"0.47","size":"1"}]})", 2250);
         assert(observer.lineage_recovery_requested());
         assert(!observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 1);
@@ -68,7 +68,7 @@ int main() {
         assert(!reset.at("features_valid").as_bool());
         assert(reset.at("public_trade").is_null());
         assert(reset.at("connection_epoch").as_int64() == 1);
-        send(snapshot(1'700'000'001'260), 1260);
+        send(snapshot(1'700'000'002'260), 2260);
         assert(!observer.lineage_recovery_requested());
         assert(!observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 1);
@@ -77,23 +77,23 @@ int main() {
         // while disconnected, so the outer loop must rebuild cold-start books.
         observer.on_reconnect();
         observer.write_status();
-        observer.write_flow_snapshot(1'700'000'001'300);
+        observer.write_flow_snapshot(1'700'000'002'300);
         const auto reset_flow = json::parse(read_file(directory / "fillability_flow_snapshot.json")).as_object();
         assert(u64(reset_flow.at("connection_epoch")) == 2);
         assert(u64(reset_flow.at("rows").as_array().front().as_object().at("sell_prints_120s")) == 0);
         assert(observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 2);
-        send(snapshot(1'700'000'001'300), 1300);
+        send(snapshot(1'700'000'002'300), 2300);
         assert(!observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 2);
         // Self-healing a token cannot clear a latched global bootstrap request.
-        send("{invalid-json", 1700);
+        send("{invalid-json", 2700);
         assert(observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
         assert(observer.lineage_recovery_requests() == 3);
-        send(snapshot(1'700'000'001'800), 1800);
+        send(snapshot(1'700'000'002'800), 2800);
         assert(observer.lineage_recovery_requested());
         assert(observer.root_lineage_recovery_requested());
         observer.stop();
