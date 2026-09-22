@@ -351,7 +351,7 @@ def test_causal_observer_persists_l10_ladders_and_runtime_wires_all_modes():
     assert "5000, 5500" in observer
     assert "capture_origin_wall_ms" in observer
     assert runtime.count("v7_complete_set_merge_shadow.py")==1
-    assert "v7_assert_registered_child_count 27" in runtime
+    assert "v7_assert_registered_child_count 28" in runtime
     assert '--merge-evidence "$RUN_ROOT/control/verified_complete_set_merge_evidence.json"' in runtime
     assert '--taker-tier-snapshot "$RUN_ROOT/control/verified_taker_tier.json"' in runtime
     assert '--account-source "$RUN_ROOT/control/account_execution_mode.json"' in runtime
