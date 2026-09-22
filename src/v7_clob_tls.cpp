@@ -1,4 +1,5 @@
 #include "pm/v7_clob_tls.hpp"
+#include "pm/socket_tuning.hpp"
 
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -83,8 +84,10 @@ void openssl_error(char* output, std::size_t capacity, const char* prefix) noexc
 
 PersistentTlsSession::PersistentTlsSession(std::string_view host,
                                            std::uint16_t port,
-                                           int timeout_ms) noexcept
-    : port_(port), timeout_ms_(timeout_ms) {
+                                           int timeout_ms,
+                                           int socket_busy_poll_us) noexcept
+    : port_(port), timeout_ms_(timeout_ms),
+      socket_busy_poll_us_(socket_busy_poll_us) {
     if (!host.empty() && host.size() < host_.size()) {
         host_size_ = host.size();
         std::memcpy(host_.data(), host.data(), host.size());
@@ -176,6 +179,14 @@ TlsConnectResult PersistentTlsSession::connect(std::string_view ca_file) noexcep
     if (fd_ < 0) {
         out.error = TlsTransportError::ConnectFailed;
         set_error(out.error, "TCP connect failed");
+        return out;
+    }
+    if (const int tuning_error =
+            pm::network::apply_busy_poll(fd_, socket_busy_poll_us_);
+        tuning_error != 0) {
+        out.error = TlsTransportError::ConnectFailed;
+        set_error(out.error, "SO_BUSY_POLL setup failed");
+        abort_connection();
         return out;
     }
 
@@ -294,6 +305,8 @@ TlsReadResult PersistentTlsSession::read_some(std::span<char> output) noexcept {
     std::size_t received = 0;
     const int rc = SSL_read_ex(connection, output.data(), output.size(), &received);
     out.completed_monotonic_ns = now_ns();
+    out.incoming_cpu = pm::network::incoming_cpu(fd_);
+    out.incoming_napi_id = pm::network::incoming_napi_id(fd_);
     if (rc == 1 && received > 0) {
         out.bytes = received;
         out.ok = 1;
