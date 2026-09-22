@@ -602,6 +602,7 @@ MarketWsFrameResult MarketWsShard::process_frame(
         if (output[index].kind == MarketWsEventKind::LineageInvalidated) {
             output[index].receive_monotonic_ns = receive.monotonic_ns;
         }
+        output[index].decode_complete_monotonic_ns = book_end_ns;
         output[index].frame_parse_ns = result.parse_ns;
         output[index].book_apply_ns = result.book_apply_ns;
         output[index].receive_to_book_ns = result.receive_to_book_ns;
