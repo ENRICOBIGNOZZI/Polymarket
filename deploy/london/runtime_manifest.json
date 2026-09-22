@@ -46,6 +46,7 @@
     "scripts/v7_model_runtime_approval.py",
     "scripts/v7_multi_asset_external_collector.py",
     "scripts/v7_multi_az_fencing_guard.py",
+    "scripts/v7_multi_az_fencing_supervisor.py",
     "scripts/v7_multi_crypto_oracle_hub.py",
     "scripts/v7_native_crypto_engine_manager.py",
     "scripts/v7_native_paper_settlement.py",
