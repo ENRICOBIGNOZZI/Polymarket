@@ -77,18 +77,77 @@ ASSET_INTERACTION_TOKENS = (
 )
 
 
+def shock_identity(row):
+    """Causal independent-entry identity; repeated reevaluations are one shock."""
+    market = str(row.get("market_id") or "")
+    version = int(
+        row.get("repricing_origin_signal_version")
+        or row.get("signal_version")
+        or 0
+    )
+    # Fail closed when producer shock identity is missing: all unidentified
+    # reevaluations in one market collapse to one opportunity rather than
+    # masquerading as independent trades.
+    return (market, version if version > 0 else "MISSING_SHOCK")
+
+
+def bounded_shock_rows(rows, maximum_states=3):
+    """Limit correlated training snapshots without using outcomes."""
+    groups = defaultdict(list)
+    for row in sorted(rows, key=lambda r: (int(r["decision_ns"]), str(r["decision_id"]))):
+        groups[shock_identity(row)].append(row)
+    out = []
+    for key in sorted(groups, key=lambda k: (int(groups[k][0]["decision_ns"]), str(k))):
+        out.extend(groups[key][:maximum_states])
+    return out
+
+
 def chronological_split(rows):
+    """Whole-market chronological 60/20/20 split with causal label embargo."""
     ordered = sorted(rows, key=lambda r: (int(r["decision_ns"]), str(r["decision_id"])))
-    n = len(ordered)
-    if n < 20:
-        raise ValueError("INSUFFICIENT_HISTORY_ROWS")
-    a = max(1, int(n * .60))
-    b = max(a + 1, int(n * .80))
-    b = min(b, n - 1)
+    starts = {}
+    for row in ordered:
+        market = str(row["market_id"])
+        starts[market] = min(starts.get(market, int(row["decision_ns"])), int(row["decision_ns"]))
+    markets = sorted(starts, key=lambda m: (starts[m], m))
+    if len(markets) < 15:
+        raise ValueError("INSUFFICIENT_HISTORY_MARKETS")
+    a = max(1, int(len(markets) * .60))
+    b = max(a + 1, int(len(markets) * .80))
+    b = min(b, len(markets) - 1)
+    train_markets = set(markets[:a])
+    validation_markets = set(markets[a:b])
+    test_markets = set(markets[b:])
+    validation_cutoff = min(starts[m] for m in validation_markets)
+    test_cutoff = min(starts[m] for m in test_markets)
+
+    train = [
+        row for row in ordered
+        if str(row["market_id"]) in train_markets
+        and int(row.get("information_end_ns") or row["decision_ns"]) < validation_cutoff
+    ]
+    validation = [
+        row for row in ordered
+        if str(row["market_id"]) in validation_markets
+        and int(row.get("information_end_ns") or row["decision_ns"]) < test_cutoff
+    ]
+    test = [row for row in ordered if str(row["market_id"]) in test_markets]
+    if not train or not validation or not test:
+        raise ValueError("EMPTY_PURGED_MARKET_SPLIT")
     return {
-        "TRAIN": ordered[:a],
-        "VALIDATION": ordered[a:b],
-        "TEST": ordered[b:],
+        "TRAIN": train,
+        "VALIDATION": validation,
+        "TEST": test,
+        "_receipt": {
+            "policy": "WHOLE_MARKET_START_CHRONOLOGICAL_60_20_20",
+            "validation_cutoff_ns": validation_cutoff,
+            "test_cutoff_ns": test_cutoff,
+            "train_markets": len(train_markets),
+            "validation_markets": len(validation_markets),
+            "test_markets": len(test_markets),
+            "market_overlap": 0,
+            "label_embargo": "information_end_ns_strictly_before_next_split_cutoff",
+        },
     }
 
 
@@ -225,6 +284,7 @@ def compact_economics(row, side, latency, horizon, cache):
 def sampled_examples(rows, info_keys, tape_index, economics_cache):
     records, targets = [], []
     states = Counter()
+    rows = bounded_shock_rows(rows, maximum_states=3)
     for row in rows:
         for latency, horizon in deterministic_cells(row["decision_id"]):
             for side in decision_action_sides(row):
@@ -331,8 +391,14 @@ def evaluate_policy(model, rows, info_keys, tape_index, economics_cache, tau=0.0
             asset_trades = Counter()
             asset_no_trade = Counter()
             asset_censored = defaultdict(Counter)
-            for row in rows:
+            used_shocks = set()
+            duplicate_shock_rows = 0
+            for row in sorted(rows, key=lambda r: (int(r["decision_ns"]), str(r["decision_id"]))):
                 asset = str(row.get("asset") or "UNKNOWN")
+                shock = shock_identity(row)
+                if shock in used_shocks:
+                    duplicate_shock_rows += 1
+                    continue
                 candidates, sides = [], []
                 for side in decision_action_sides(row):
                     rec = rich_design_record(
@@ -351,6 +417,10 @@ def evaluate_policy(model, rows, info_keys, tape_index, economics_cache, tau=0.0
                     no_trade += 1
                     asset_no_trade[asset] += 1
                     continue
+                # The first state of an independent shock that clears tau owns
+                # the attempted entry. Later reevaluations cannot create fake
+                # extra trades or rescue a censored outcome.
+                used_shocks.add(shock)
                 side = sides[best]
                 cash, filled, state = compact_economics(
                     row, side, latency, horizon, economics_cache)
@@ -381,6 +451,9 @@ def evaluate_policy(model, rows, info_keys, tape_index, economics_cache, tau=0.0
                 "censored": int(sum(censored.values())),
                 "censoring_reasons": dict(censored),
                 "tau": float(tau),
+                "entry_policy": "ONE_ENTRY_PER_SHOCK_FIRST_POSITIVE_STATE",
+                "independent_shocks_attempted": len(used_shocks),
+                "duplicate_shock_rows_skipped": duplicate_shock_rows,
             })
             pooled[key] = cell
             events_by_cell[key] = sorted(
@@ -421,8 +494,15 @@ def evaluate_baseline(rows, economics_cache):
             asset_events = defaultdict(list)
             asset_observed = Counter()
             asset_censored = defaultdict(Counter)
-            for row in rows:
+            used_shocks = set()
+            duplicate_shock_rows = 0
+            for row in sorted(rows, key=lambda r: (int(r["decision_ns"]), str(r["decision_id"]))):
                 asset = str(row.get("asset") or "UNKNOWN")
+                shock = shock_identity(row)
+                if shock in used_shocks:
+                    duplicate_shock_rows += 1
+                    continue
+                used_shocks.add(shock)
                 side = selected_action_side(row)
                 cash, filled, state = compact_economics(
                     row, side, latency, horizon, economics_cache)
@@ -447,6 +527,9 @@ def evaluate_baseline(rows, economics_cache):
                 "opportunities": len(rows),
                 "censored": int(sum(censored.values())),
                 "censoring_reasons": dict(censored),
+                "entry_policy": "ONE_ENTRY_PER_SHOCK_FIRST_STATE",
+                "independent_shocks_attempted": len(used_shocks),
+                "duplicate_shock_rows_skipped": duplicate_shock_rows,
             })
             pooled[key] = cell
             events_by_cell[key] = sorted(
@@ -625,6 +708,7 @@ def main(argv=None):
     gc.collect()
     window, rows = history_window(rows, a.maximum_history_hours)
     splits = chronological_split(rows)
+    split_receipt = splits.pop("_receipt")
     start_ns, end_ns = int(window["start_ns"]), int(window["end_ns"])
 
     tape_index, feature_diag = base.load_feature_tape(a.root, start_ns, end_ns)
@@ -692,6 +776,7 @@ def main(argv=None):
         "automatic_promotion": False,
         "window": window,
         "split_rows": {k: len(v) for k, v in splits.items()},
+        "split_receipt": split_receipt,
         "latencies_ms": list(LATENCIES),
         "requested_exit_horizons_ms": list(EXIT_GRID_MS),
         "future_long_exit_horizons_requiring_new_capture_ms": list(FUTURE_LONG_EXIT_GRID_MS),
@@ -714,6 +799,9 @@ def main(argv=None):
             "lambda_objective": "VALIDATION_MSE",
             "tau_tuned_on_test": False,
             "missing_as_zero": False,
+            "test_entry_policy": "ONE_ENTRY_PER_SHOCK",
+            "training_states_per_shock_cap": 3,
+            "split_by_rows": False,
         },
     }
     atomic_json(a.output_dir / "30_rich_history_manifest.json", manifest)
