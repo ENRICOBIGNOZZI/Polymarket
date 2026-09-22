@@ -140,7 +140,11 @@ class Tail:
 class Shadow:
     def __init__(self,args:argparse.Namespace)->None:
         self.args=args
-        self.book=BookTimeline(args.book_tape,args.model_sha,retention_ms=max(args.delay_arms_ms)+5000)
+        maximum_delay=max(
+            max(args.delay_arms_ms),
+            5000 + max(args.transport_delay_arms_ms, default=0),
+        )
+        self.book=BookTimeline(args.book_tape,args.model_sha,retention_ms=maximum_delay+5000)
         self.tail=Tail(args.candidates,args.model_sha)
         self.pending:list[dict[str,Any]]=[]
         self.rows:list[dict[str,Any]]=[]
