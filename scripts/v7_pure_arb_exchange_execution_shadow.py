@@ -500,6 +500,17 @@ class Shadow:
                 "sum_pnl_after_reserve":sum(pnl) if pnl else 0.0,
                 "states":dict(Counter(str(r.get("state")) for r in rows)),
             }
+        observed_admitted=[
+            r for r in self.rows
+            if r.get("observed_venue_taker_allowed") is True
+            and r.get("allocation_eligible") is True
+        ]
+        counterfactual_only=[
+            r for r in self.rows
+            if r.get("paper_counterfactual") is True
+            and r.get("simulation_taker_allowed") is True
+            and r.get("observed_venue_taker_allowed") is not True
+        ]
         atomic_json(self.args.status,{
             "schema":STATUS_SCHEMA,"model_sha":self.args.model_sha,"paper_only":True,
             "authenticated_execution":False,"real_order_submission":False,
@@ -507,6 +518,11 @@ class Shadow:
             "execution_authority":"ZERO_AUTHORITY_EXCHANGE_EXECUTION_SHADOW",
             "state":"COLLECTING","timestamp_ms":time.time_ns()//1_000_000,
             "pending":len(self.pending),"evaluated":len(self.rows),"states":dict(states),
+            "observed_admitted_scenarios":len(observed_admitted),
+            "counterfactual_only_scenarios":len(counterfactual_only),
+            "counterfactual_only_pnl_after_reserve":sum(
+                float(r.get("execution_pnl_after_reserve") or 0.0)
+                for r in counterfactual_only),
             "by_mandatory_delay_ns":{k:summary(v) for k,v in sorted(by_delay.items())},
             "by_inter_leg_skew_ms":{k:summary(v) for k,v in sorted(by_skew.items(),key=lambda x:int(x[0]))},
             "fee_semantics":"CLOB_V2_MATCH_TIME_USDC_VALUE",
