@@ -869,6 +869,34 @@ int main(int argc, char** argv) {
             }
         };
 
+        const auto consume_pure_arb_pair_arrivals =
+            [&](std::int64_t watermark) {
+                if (!options.pure_arb_native_paper_execution) return;
+                const auto batch = pure_arb_pair_execution.advance_arrivals(
+                    yes_book, no_book, watermark);
+                adapter_handoff_failures += batch.invalid;
+                for (std::size_t i = 0; i < batch.count; ++i) {
+                    const auto& result = batch.records[i];
+                    if (result.accepted != 0) {
+                        ++pure_arb_pair_complete;
+                        paper_fill_events += 2;
+                    } else {
+                        ++pure_arb_pair_rejected;
+                    }
+                    if (result.censored != 0) {
+                        ++pure_arb_pair_censored;
+                        paper_arrival_censored += 2;
+                    }
+                    if (result.reason
+                        == NativePaperPairReason::LifecycleFailure) {
+                        ++pure_arb_pair_lifecycle_failures;
+                        ++adapter_handoff_failures;
+                    }
+                    if (!publish_pair_result(result))
+                        ++adapter_handoff_failures;
+                }
+            };
+
 #if defined(__APPLE__)
         std::atomic<bool> stopping{false};
         ExternalStopToken stop_token(stopping);
