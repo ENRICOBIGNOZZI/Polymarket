@@ -261,7 +261,7 @@ def test_maker_policy_requires_mature_state_positive_arm_budget_and_venue():
     maker={
         "schema":"polymarket_v7_two_sided_complete_set_shadow_status_v2",
         "model_sha":SHA,"paper_only":True,"authenticated_execution":False,
-        "real_order_submission":False,"research_mature":True,
+        "real_order_submission":False,"research_mature":True,"timestamp_ms":1_000,
         "policy_matrix":{
             "ttl=250|queue=1.250|cancel_relief=0.000":{
                 "deployment_candidate":True,"ttl_ms":250,
@@ -284,13 +284,13 @@ def test_maker_policy_requires_mature_state_positive_arm_budget_and_venue():
     capital={
         "schema":"polymarket_v7_pure_arb_capital_allocator_v1",
         "model_sha":SHA,"paper_only":True,"authenticated_execution":False,
-        "real_order_submission":False,
+        "real_order_submission":False,"timestamp_ms":1_000,
         "recommended_market_budget_pusd":{"MAKER_COMPLETE_SET|m1":5.0},
     }
     venue_status={
         "schema":"polymarket_v7_pure_arb_venue_mode_v1",
         "model_sha":SHA,"paper_only":True,"authenticated_execution":False,
-        "real_order_submission":False,
+        "real_order_submission":False,"timestamp_ms":1_000,
         "observed_policy":{"new_maker":True},
         "simulation_policy":{"new_maker":True},
     }
@@ -304,6 +304,10 @@ def test_maker_policy_requires_mature_state_positive_arm_budget_and_venue():
     blocked=maker_policy.build(maker,capital,venue_status,model_sha=SHA,now_ms=1_000)
     assert blocked["observed_admitted_count"]==0
     assert blocked["paper_admitted_count"]==1
+    stale=maker_policy.build(maker,capital,venue_status,model_sha=SHA,now_ms=10_000,
+                             maximum_age_ms=5_000)
+    assert stale["paper_admitted_count"]==0
+    assert "MAKER_STATUS_INVALID" in stale["blockers"]
 
 
 def test_maker_shadow_is_state_conditioned():
