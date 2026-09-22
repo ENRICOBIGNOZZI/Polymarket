@@ -312,19 +312,62 @@ v7_register_child "$!"
 # Grafana reads only zero-authority pure-arb status emitted by this observer; it never controls execution.
 # Pure complete-set PAPER arbitrage is evaluated inside this same observer
 # on every drained WS book event: no second feed, no ML, no artificial hold/delay.
-# Continuous receive-time PM book evidence for every currently traded
-# crypto asset×horizon context. The universe collector atomically maintains the
-# exact 30-market / 60-token zero-authority selection and this observer reloads
-# at rollover. Model fitting and retrospective shadows remain off London.
-v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA"   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only   --output-dir "$RUN_ROOT/research/repricing_book"   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" --pure-arb-paper   --pure-arb-reserve-per-share 0.0005 --pure-arb-max-leg-skew-ms 100   --pure-arb-max-receive-to-decision-ms 50   >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
+# The universe keeps 30 active contexts and may preload future M5/M15 books.
+# Future books are warm data only: the arb evaluator still requires start<=now<end.
+v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
+  --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA" \
+  --selection "$RUN_ROOT/universe/book_selection.json" --selection-only \
+  --output-dir "$RUN_ROOT/research/repricing_book" \
+  --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" --pure-arb-paper \
+  --pure-arb-reserve-per-share 0.0005 --pure-arb-max-leg-skew-ms 100 \
+  --pure-arb-max-receive-to-decision-ms 50 \
+  >> "$RUN_ROOT/research/repricing_book_observer.log" 2>&1 &
 # Zero-authority PM book evidence is diagnostically important but reconstructible.
 # It must not stop the native execution owner if it rolls or exits during market refresh.
 v7_register_optional_child "$!"
 
+# Deterministic frequency expansion. These are PAPER/research workers only.
+# They cannot submit orders, allocate capital, promote models or alter the
+# canonical CRYPTO_SETTLEMENT_ENGINE decision owner.
+mkdir -p "$RUN_ROOT/research/pure_arb"
 
+v7_exec_class COLLECTOR python3 scripts/v7_multi_crypto_oracle_hub.py \
+  --output "$RUN_ROOT/research/pure_arb/oracle_hub_status.json" \
+  --model-sha "$SHA" \
+  --settlement-registry "$CRYPTO_SETTLEMENT_MARKET_REGISTRY" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  >> "$RUN_ROOT/research/pure_arb/oracle_hub.log" 2>&1 &
+v7_register_optional_child "$!"
 
-# PM repricing and two-sided complete-set shadows are reconstructible from the
-# causal tapes above, so those computations run only on the research worker.
+v7_exec_class COLLECTOR python3 scripts/v7_settlement_source_arb_shadow.py \
+  --oracle-status "$RUN_ROOT/research/pure_arb/oracle_hub_status.json" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
+  --model-sha "$SHA" \
+  --output "$RUN_ROOT/research/pure_arb/settlement_source_cycles.jsonl" \
+  --status "$RUN_ROOT/research/pure_arb/settlement_source_status.json" \
+  --target-shares 1000 --minimum-fill-shares 1 \
+  --redemption-reserve-per-share 0.0005 --minimum-locked-edge-per-share 0.0005 \
+  --paper-arrival-delay-ms 50 --maximum-book-age-ms 100 --interval-ms 5 \
+  >> "$RUN_ROOT/research/pure_arb/settlement_source.log" 2>&1 &
+v7_register_optional_child "$!"
+
+v7_exec_class COLLECTOR python3 scripts/v7_two_sided_complete_set_shadow.py \
+  --book-tape "$RUN_ROOT/research/repricing_book/book_observations/current.jsonl" \
+  --trade-tape "$RUN_ROOT/research/repricing_book/fillability_ws.jsonl" \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --model-sha "$SHA" \
+  --output "$RUN_ROOT/research/pure_arb/two_sided_maker_cycles.jsonl" \
+  --status "$RUN_ROOT/research/pure_arb/two_sided_maker_status.json" \
+  --minimum-quote-shares 1 --maximum-quote-shares 5 --depth-fraction 0.25 \
+  --queue-ahead-multiplier 1.25 --reserve-per-share 0.0005 \
+  --minimum-locked-edge-per-share 0.0005 --maximum-leg-skew-ms 100 \
+  --ttl-arms-ms 250,500,1000 --quote-refresh-ms 25 --interval-ms 5 \
+  >> "$RUN_ROOT/research/pure_arb/two_sided_maker.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Retrospective model fitting remains off London. These live shadows only
+# collect causally replayable PAPER evidence.
 
 CONFIG_HASH="$(v7_blob_hash "$CONFIG")"
 POLICY_HASH="$(v7_blob_hash "$MAKER_POLICY")"
