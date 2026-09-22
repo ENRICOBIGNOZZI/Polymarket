@@ -81,7 +81,20 @@ jobs:
             sleep 0.1
           done
           test "$ready" = 1
-          PYTHONUNBUFFERED=1 python3 -u ops/v7_tailscale_browser_cleanup.py             --credentials "$RUNNER_TEMP/tailnet-login.json"             --repository "$GITHUB_REPOSITORY"             --github-token "$GH_TOKEN"             --chrome "$chrome"             --cdp-url http://127.0.0.1:9222
+          python3 -m py_compile ops/v7_tailscale_browser_cleanup.py
+          set +e
+          PYTHONUNBUFFERED=1 python3 -u ops/v7_tailscale_browser_cleanup.py \
+            --credentials "$RUNNER_TEMP/tailnet-login.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --github-token "$GH_TOKEN" \
+            --chrome "$chrome" \
+            --cdp-url http://127.0.0.1:9222 \
+            >"$RUNNER_TEMP/tailnet-cleanup.log" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/tailnet-cleanup.log"
+          echo "TAILNET_BROWSER_CLEANUP_RC=$rc"
+          exit "$rc"
 
       - name: Destroy plaintext login
         if: always()
