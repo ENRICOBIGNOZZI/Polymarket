@@ -82,6 +82,7 @@ struct NativeLatencyTape::Impl {
     std::atomic<std::uint64_t> published{0};
     std::atomic<std::uint64_t> written{0};
     std::atomic<std::uint64_t> dropped{0};
+    std::atomic<std::uint64_t> writer_observed_max_queued{0};
     std::ofstream output;
     std::thread writer;
 
@@ -105,6 +106,13 @@ struct NativeLatencyTape::Impl {
         NativeLatencyEvent event{};
         while (!stopping.load(std::memory_order_acquire)
                || queue.approximate_size() != 0) {
+            const auto queued_now = queue.approximate_size();
+            auto seen = writer_observed_max_queued.load(std::memory_order_relaxed);
+            while (queued_now > seen
+                   && !writer_observed_max_queued.compare_exchange_weak(
+                       seen, queued_now,
+                       std::memory_order_relaxed,
+                       std::memory_order_relaxed)) {}
             std::size_t count = 0;
             while (count < kLatencyTapeBatch && queue.try_pop(event)) {
                 output.write(
@@ -170,6 +178,8 @@ NativeLatencyTapeSnapshot NativeLatencyTape::snapshot() const noexcept {
     out.written = impl_->written.load(std::memory_order_acquire);
     out.dropped = impl_->dropped.load(std::memory_order_acquire);
     out.queued = impl_->queue.approximate_size();
+    out.writer_observed_max_queued =
+        impl_->writer_observed_max_queued.load(std::memory_order_acquire);
     out.healthy = impl_->healthy.load(std::memory_order_acquire) ? 1 : 0;
     return out;
 }
