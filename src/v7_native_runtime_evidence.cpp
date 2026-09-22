@@ -98,8 +98,9 @@ constexpr std::string_view kMakerExecutionSemantics =
 }
 
 [[nodiscard]] const char* strategy_component(StrategyId strategy) noexcept {
-    return strategy == StrategyId::ProfessionalMaker
-        ? "professional_maker" : "crypto_informed_taker";
+    if (strategy == StrategyId::ProfessionalMaker) return "professional_maker";
+    if (strategy == StrategyId::HardArbitrage) return "hard_arbitrage";
+    return "crypto_informed_taker";
 }
 
 [[nodiscard]] const char* native_decision_reason_name(std::uint8_t reason) noexcept {
@@ -276,9 +277,16 @@ struct NativeRuntimeEvidenceWriter::Impl {
                 ? json::value(nullptr) : json::value(config.signal_policy_sha256)},
             {"paper_execution_reason", static_cast<unsigned>(event.paper_reason)},
             {"execution_observation_censored", event.paper_censored != 0},
-            {"paper_simulator_semantics", maker ? "PUBLIC_PRINT_QUEUE_RESEARCH"
-                : config.paper_venue_delay_ns < 0 ? "VENUE_TERMS_UNKNOWN_NO_TAKER_FILL"
-                : "LOCAL_RECEIVE_DELAYED_ARRIVAL_PRICE_PARTIAL_FAK_V2"},
+            {"paper_simulator_semantics",
+                event.strategy_id == StrategyId::ProfessionalMaker
+                    ? "PUBLIC_PRINT_QUEUE_RESEARCH"
+                : event.strategy_id == StrategyId::HardArbitrage
+                    ? (config.paper_venue_delay_ns < 0
+                        ? "VENUE_TERMS_UNKNOWN_NO_PURE_ARB_FILL"
+                        : "PAIRED_FOK_DUAL_PREFLIGHT_CAUSAL_ARRIVAL_V1")
+                : config.paper_venue_delay_ns < 0
+                    ? "VENUE_TERMS_UNKNOWN_NO_TAKER_FILL"
+                    : "LOCAL_RECEIVE_DELAYED_ARRIVAL_PRICE_PARTIAL_FAK_V2"},
             {"economic_authority", "PAPER_EXPLORATION"},
             {"action_value_semantics", maker
                 ? "MAKER_FILL_CONDITIONED_ROBUST_EV_PER_SHARE"
