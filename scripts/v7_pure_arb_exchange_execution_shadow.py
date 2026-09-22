@@ -58,6 +58,12 @@ def fee_per_share(price:float,rate:float,exponent:float)->float:
     return raw_fee_per_share(price,rate,exponent)
 
 
+def quantize_order_shares(shares:float)->float:
+    """Mirror Exchange V2 limit-order builder: floor size to two decimals."""
+    if not math.isfinite(shares) or shares<=0:return 0.0
+    return math.floor(shares*100.0+1e-12)/100.0
+
+
 def fee_params(market:dict[str,Any])->tuple[float,float]|None:
     fs=market.get("fee_schedule")
     if isinstance(fs,dict):
@@ -521,7 +527,13 @@ class Shadow:
             c.get("executable_shares_local_deep")
             or c.get("executable_shares_l10")
             or c.get("executable_shares_l1") or 0.0))
-        q=min(requested_q,self.args.maximum_shares)
+        capped_q=min(requested_q,self.args.maximum_shares)
+        q=quantize_order_shares(capped_q)
+        try:venue_minimum=float(c.get("minimum_order_shares") or 0.0)
+        except (TypeError,ValueError,OverflowError):venue_minimum=math.nan
+        effective_minimum=max(
+            self.args.minimum_shares,
+            venue_minimum if math.isfinite(venue_minimum) and venue_minimum>0 else math.inf)
         mode=str(item.get("execution_mode") or "SEQUENTIAL")
         base={
             "schema":ROW_SCHEMA,"model_sha":self.args.model_sha,"paper_only":True,
@@ -548,7 +560,13 @@ class Shadow:
             "market_end_ms":int(m.get("end_timestamp_ms") or 0),
             "mandatory_taker_delay_ns":item["terms"].get("mandatory_taker_delay_ns") if item["terms"] else None,
             "inter_leg_skew_ms":item["skew_ms"],"leg_order":item["order"],
-            "deep_requested_shares":requested_q,"target_shares":q,"state":"CENSORED",
+            "deep_requested_shares":requested_q,
+            "capped_requested_shares":capped_q,
+            "target_shares":q,
+            "quantity_rounding":"FLOOR_TO_2_DECIMAL_SHARES",
+            "venue_minimum_order_shares":venue_minimum if math.isfinite(venue_minimum) else None,
+            "effective_minimum_order_shares":effective_minimum if math.isfinite(effective_minimum) else None,
+            "state":"CENSORED",
             "lifecycle":["CREATED"],"semantic_fingerprint":item["fingerprint"],
             "fee_rounding":"MATCHED_QUANTITY_5DP_MIN_0.00001_USDC",
             "taker_rebate_used_in_entry_gate":False,
@@ -574,8 +592,12 @@ class Shadow:
         yes,no=str(current.get("yes_token") or ""),str(current.get("no_token") or "")
         origin=int(c.get("receive_wall_ms") or 0)
         target=int(item["target_ms"]);skew=int(item["skew_ms"])
-        if target<=0 or q<self.args.minimum_shares:
+        if target<=0:
             base["state"]="NO_TRADE_SIZE";return base
+        if not math.isfinite(effective_minimum):
+            base["state"]="CENSORED_MIN_ORDER_UNVERIFIED";return base
+        if q+1e-12<effective_minimum:
+            base["state"]="NO_TRADE_BELOW_MIN_ORDER";return base
 
         base["lifecycle"]+=["SENT","ACK_PENDING","PENDING_DELAY"]
         y0=book_point(self.book,mid,yes,target,side,deep=getattr(self,"deep",None),origin_ms=origin)
