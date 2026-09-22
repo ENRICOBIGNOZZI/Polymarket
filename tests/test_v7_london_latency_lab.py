@@ -66,6 +66,53 @@ def test_no_duplicate_latency_workflow_is_added():
     assert not (ROOT / ".github/workflows/london-latency-lab.yml").exists()
 
 
+def test_host_tuning_lab_is_reversible_and_default_off():
+    host = (ROOT / "ops/v7_host_latency_ab.py").read_text()
+    probe = (ROOT / "src/v7_public_paired_clob_transport_probe.cpp").read_text()
+    tls_header = (ROOT / "include/pm/v7_clob_tls.hpp").read_text()
+    socket_header = (ROOT / "include/pm/socket_tuning.hpp").read_text()
+    ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
+    bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
+
+    for profile in (
+        "performance_governor",
+        "cstate_dma_latency",
+        "ena_interrupt_moderation_zero",
+        "irq_feed_affinity",
+        "socket_busy_poll_50",
+        "decision_affinity",
+        "combined_runtime_tuning",
+    ):
+        assert profile in host
+
+    assert "restore(original)" in host
+    assert "restored_exactly" in host
+    assert "persistent_tuning" in host
+    assert '"persistent_tuning": False' in host
+    assert "isolcpus=" in host
+    assert "taskset" in host
+    assert "pin_decision" in host
+    assert "socket_busy_poll_us = 0" in tls_header
+    assert "int socket_busy_poll_us = 0" in probe
+    assert "kMaxBusyPollUs" in socket_header
+    assert "apply_busy_poll" in socket_header
+    assert "incoming_napi_id" in socket_header
+    assert "v7_host_latency_ab.py" in ssm
+    assert "host-tuning.json" in ssm
+    assert "ethtool" in bootstrap
+
+
+def test_host_tuning_is_evidence_only_and_has_tail_gate():
+    host = (ROOT / "ops/v7_host_latency_ab.py").read_text()
+    assert 'cp99 <= bp99 * 0.90' in host
+    assert 'cp999 <= bp999' in host
+    assert 'cf <= bf' in host
+    assert "polymarket-v7-paper.service" in host
+    assert 'raise SystemExit("PAPER runtime must be stopped")' in host
+    assert "real_order_submission" in host
+    assert "authenticated_execution" in host
+
+
 def test_final_latency_evidence_has_zero_direct_queue_and_replay_parity():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     runtime = (ROOT / "src/v7_pure_arb_multi_runtime.cpp").read_text()
