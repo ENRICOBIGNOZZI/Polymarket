@@ -199,7 +199,7 @@ jobs:
               pm_v7_native_settlement_authority_tests pm_v7_paper_queue_tests pm_v7_oms_tests
             ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
               ctest --test-dir build-ASan-UBSan --parallel "$(nproc)" --output-on-failure \
-              -R 'pm_v7_(native_runtime_evidence_tests|latency_trace_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|oms_tests|crypto_settlement_native_candidate_validate)'
+              -R 'pm_v7_(native_runtime_evidence_tests|latency_trace_tests|execution_mode_tests|native_paper_execution_tests|native_paper_pair_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|oms_tests|crypto_settlement_native_candidate_validate)'
           fi
           ccache --show-stats
 
@@ -291,7 +291,7 @@ jobs:
               pm_v7_native_settlement_authority_tests pm_v7_paper_queue_tests pm_v7_oms_tests \
               pm_v7_crypto_decision_lane_tests pm_v7_maker_paper_tests pm_v7_external_execution_tests
             ctest --test-dir build-${{ matrix.build_type }} --parallel "$(nproc)" --output-on-failure \
-              -R 'pm_v7_(native_runtime_evidence_tests|latency_trace_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|oms_tests|crypto_decision_lane_tests|maker_paper_tests|external_execution_tests|crypto_settlement_native_candidate_validate)'
+              -R 'pm_v7_(native_runtime_evidence_tests|latency_trace_tests|execution_mode_tests|native_paper_execution_tests|native_paper_pair_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|oms_tests|crypto_decision_lane_tests|maker_paper_tests|external_execution_tests|crypto_settlement_native_candidate_validate)'
           fi
           ccache --show-stats
       - name: Enforce V7 internal latency SLO
@@ -393,6 +393,7 @@ jobs:
             pm_v7_latency_trace_tests \
             pm_v7_execution_mode_tests \
             pm_v7_native_paper_execution_tests \
+            pm_v7_native_paper_pair_execution_tests \
             pm_v7_execution_admission_tests \
             pm_v7_native_settlement_authority_tests \
             pm_v7_paper_queue_tests \
@@ -400,7 +401,7 @@ jobs:
             pm_v7_clob_rate_limit_tests \
             pm_v7_pure_arb_lane_tests
           ctest --test-dir build-pure-arb-${{ matrix.build_type }} --output-on-failure \
-            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|latency_trace_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests|pure_arb_lane_tests)'
+            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|latency_trace_tests|execution_mode_tests|native_paper_execution_tests|native_paper_pair_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests|pure_arb_lane_tests)'
           ccache --show-stats
 
       - name: Pure-arb native performance gate
@@ -473,6 +474,7 @@ jobs:
             pm_v7_latency_trace_tests \
             pm_v7_execution_mode_tests \
             pm_v7_native_paper_execution_tests \
+            pm_v7_native_paper_pair_execution_tests \
             pm_v7_execution_admission_tests \
             pm_v7_native_settlement_authority_tests \
             pm_v7_paper_queue_tests \
@@ -480,7 +482,7 @@ jobs:
             pm_v7_pure_arb_lane_tests
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             ctest --test-dir build-pure-arb-asan --output-on-failure \
-            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|latency_trace_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests|pure_arb_lane_tests)'
+            -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|latency_trace_tests|execution_mode_tests|native_paper_execution_tests|native_paper_pair_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests|pure_arb_lane_tests)'
           ccache --show-stats
 
   london-runtime-boundary:
