@@ -19,9 +19,10 @@ def test_native_shadow_is_same_process_and_zero_authority():
     start=engine.index("// Zero-authority complete-set arbitrage shadow.")
     end=engine.index("if (options.capture_native_observations",start)
     shadow=engine[start:end]
-    assert "pure_arb::fee_usdc" in shadow
-    assert "pure_arb::price" in shadow
-    assert shadow.count("pure_arb::sweep(")==2
+    assert "pure_arb_lane.evaluate" in shadow
+    assert "pure_arb::PairInput" in shadow
+    assert "pure_arb::fee_usdc" not in shadow
+    assert "pure_arb::sweep(" not in shadow
     for forbidden in (
         "authority.submit(",
         "append_candidate(",
@@ -44,8 +45,9 @@ def test_shadow_terms_match_frozen_observer_reserve_and_venue_fees():
     assert 'double pure_arb_reserve_per_share = 0.0005' in observer
     assert "options.taker_fee_rate" in engine
     assert "options.taker_fee_exponent" in engine
-    assert "pure_arb::fee_usdc" in engine
-    assert "pure_arb::sweep" in engine
+    assert "pure_arb_context.fee_rate" in engine
+    assert "pure_arb_context.fee_exponent" in engine
+    assert "pure_arb_context.reserve_per_share" in engine
     assert "pure_arb_max_leg_skew_ns = 100'000'000LL" in engine
     assert '"--pure-arb-max-leg-skew-ns", "100000000"' in manager
 
