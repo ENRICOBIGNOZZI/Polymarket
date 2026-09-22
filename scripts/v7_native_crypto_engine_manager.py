@@ -802,6 +802,16 @@ class Manager:
                 else "DECISIONS" if getattr(self.args, "capture_native_decisions", False)
                 else "OFF"
             ),
+            "pure_arb_shadow_enabled": bool(getattr(self.args, "pure_arb_shadow", False)),
+            "pure_arb_shadow_execution_authority": False,
+            "pure_arb_shadow_reserve_per_share":
+                float(getattr(self.args, "pure_arb_reserve_per_share", 0.0005)),
+            "pure_arb_shadow_max_leg_skew_ns":
+                int(getattr(self.args, "pure_arb_max_leg_skew_ns", 100_000_000)),
+            "pure_arb_shadow_max_receive_to_decision_ns":
+                int(getattr(self.args, "pure_arb_max_receive_to_decision_ns", 50_000_000)),
+            "pure_arb_shadow_prefunded_complete_set_shares":
+                float(getattr(self.args, "pure_arb_prefunded_complete_set_shares", 1000.0)),
             "native_full_capture_contexts_requested": getattr(self.args, "capture_native_full_context", []),
             "native_full_capture_minimum_free_bytes": 20 * 1024**3,
             "evidence_worker_count": int(evidence.get("worker_count") or 0),
@@ -998,6 +1008,16 @@ class Manager:
                             str(self.args.execution_window_ns)])
         elif getattr(self.args, "capture_native_decisions", False) or full_requested:
             command.append("--capture-native-decisions")
+        if getattr(self.args, "pure_arb_shadow", False):
+            command.extend([
+                "--pure-arb-shadow",
+                "--pure-arb-reserve-per-share", repr(self.args.pure_arb_reserve_per_share),
+                "--pure-arb-max-leg-skew-ns", str(self.args.pure_arb_max_leg_skew_ns),
+                "--pure-arb-max-receive-to-decision-ns",
+                str(self.args.pure_arb_max_receive_to_decision_ns),
+                "--pure-arb-prefunded-complete-set-shares",
+                repr(self.args.pure_arb_prefunded_complete_set_shares),
+            ])
         return command
 
     def _wrapped_hot_command(self, command: list[str]) -> list[str]:
@@ -1360,6 +1380,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--capture-execution-windows", action="store_true",
         help="Capture bounded post-decision PM book/trade windows for execution modelling")
     parser.add_argument("--execution-window-ns", type=int, default=2_000_000_000)
+    parser.add_argument("--pure-arb-shadow", action="store_true",
+        help="Run same-process complete-set pure-arb detection with zero execution authority")
+    parser.add_argument("--pure-arb-reserve-per-share", type=float, default=0.0005)
+    parser.add_argument("--pure-arb-max-leg-skew-ns", type=int, default=100_000_000)
+    parser.add_argument("--pure-arb-max-receive-to-decision-ns", type=int, default=50_000_000)
+    parser.add_argument("--pure-arb-prefunded-complete-set-shares", type=float, default=1000.0)
     parser.add_argument("--capture-native-full-context", action="append", default=[],
         help="Record full native books only for this ASSET:HORIZON, with a 20 GiB free-space launch gate")
     args = parser.parse_args()
@@ -1379,6 +1405,15 @@ def parse_args() -> argparse.Namespace:
         parser.error("invalid taker tte window")
     if not 1_000_000 <= args.execution_window_ns <= 10_000_000_000:
         parser.error("invalid execution capture window")
+    if not math.isfinite(args.pure_arb_reserve_per_share) or not 0 <= args.pure_arb_reserve_per_share < 1:
+        parser.error("invalid pure-arb reserve")
+    if not 0 <= args.pure_arb_max_leg_skew_ns <= 5_000_000_000:
+        parser.error("invalid pure-arb leg skew")
+    if not 1_000_000 <= args.pure_arb_max_receive_to_decision_ns <= 5_000_000_000:
+        parser.error("invalid pure-arb receive-to-decision bound")
+    if (not math.isfinite(args.pure_arb_prefunded_complete_set_shares)
+            or not 0 < args.pure_arb_prefunded_complete_set_shares <= 1_000_000):
+        parser.error("invalid pure-arb prefunded complete-set shares")
     if args.probability_model is not None and args.probability_evaluation_end_wall_ns <= 0:
         parser.error("probability model requires explicit evaluation end wall ns")
     if args.probability_model is None and args.probability_evaluation_end_wall_ns != 0:
