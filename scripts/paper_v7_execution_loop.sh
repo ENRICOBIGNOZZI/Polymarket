@@ -191,7 +191,7 @@ python3 scripts/v7_capital_allocator.py --config "$CONFIG" --output-dir "$ALLOC"
 # enough logical CPUs. The plan is preserved as evidence.
 while IFS='=' read -r key value; do
   case "$key" in
-    PM_V7_HOT_CPUSET|PM_V7_COLLECTOR_CPUSET|PM_V7_CONTROL_CPUSET|PM_V7_HOT_NICE|PM_V7_COLLECTOR_NICE|PM_V7_CONTROL_NICE)
+    PM_V7_HOT_CPUSET|PM_V7_COLLECTOR_CPUSET|PM_V7_CONTROL_CPUSET|PM_V7_LATENCY_CPUSET|PM_V7_HOT_NICE|PM_V7_COLLECTOR_NICE|PM_V7_CONTROL_NICE|PM_V7_LATENCY_NICE)
       export "$key=$value" ;;
     *) echo "unexpected resource-plan key: $key" >&2; exit 74 ;;
   esac
@@ -315,7 +315,7 @@ v7_register_child "$!"
 # the exchange-native sidecar below separately applies the verified per-market venue delay and transport arms.
 # The universe keeps 30 active contexts and may preload future M5/M15 books.
 # Future books are warm data only: the arb evaluator still requires start<=now<end.
-v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
+v7_exec_class LATENCY_OBSERVER "$FILLABILITY_OBSERVER" \
   --config "$ALLOC/micro_maker.json" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only \
   --output-dir "$RUN_ROOT/research/repricing_book" \
@@ -508,7 +508,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_combo_rfq_shadow.py \
   --model-sha "$SHA" --catalog "$PURE_ARB_DIR/combo_market_source.json" \
   --rfq-tape "$PURE_ARB_DIR/combo_rfq_tape.jsonl" \
   --output "$PURE_ARB_DIR/combo_rfq_shadow_status.json" \
-  --interval-seconds 1 --timeout-seconds 1 \
+  --interval-seconds 0.05 --timeout-seconds 1 \
   >> "$PURE_ARB_DIR/combo_rfq_shadow.log" 2>&1 &
 v7_register_optional_child "$!"
 
@@ -683,6 +683,15 @@ v7_exec_class COLLECTOR python3 scripts/v7_maker_queue_calibration.py \
   --model-sha "$SHA" --output "$PURE_ARB_DIR/maker_queue_calibration.json" \
   --minimum-samples 20 --interval-seconds 10 \
   >> "$PURE_ARB_DIR/maker_queue_calibration.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Queue-model calibration is dormant until independently verified own-order
+# USER-WS fills exist. Missing evidence yields WAITING, never synthetic calibration.
+v7_exec_class COLLECTOR python3 scripts/v7_maker_self_fill_calibration.py \
+  --model-sha "$SHA" --maker-cycles "$PURE_ARB_DIR/two_sided_complete_set_cycles.jsonl" \
+  --verified-self-fills "$RUN_ROOT/control/verified_self_fill_evidence.jsonl" \
+  --output "$PURE_ARB_DIR/maker_self_fill_calibration.json" --interval-seconds 30 \
+  >> "$PURE_ARB_DIR/maker_self_fill_calibration.log" 2>&1 &
 v7_register_optional_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_maker_policy.py \
