@@ -21,5 +21,6 @@
   "paper_budget_pusd": 10000,
   "collateral_asset": "pUSD",
   "complete_set_merge_fixed_cost_pusd": 0,
-  "complete_set_merge_variable_cost_bps": 0
+  "complete_set_merge_variable_cost_bps": 0,
+  "maker_cancel_relief_fraction_for_allocation": 0
 }
