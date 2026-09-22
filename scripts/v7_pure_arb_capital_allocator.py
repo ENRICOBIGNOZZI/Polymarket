@@ -195,6 +195,55 @@ def summarize(obs:list[dict[str,Any]],policy:dict[str,Any])->dict[str,Any]:
     return result
 
 
+def summarize_by_market(obs:list[dict[str,Any]],policy:dict[str,Any])->dict[str,Any]:
+    z=float(policy["confidence_z"]);minimum=int(policy["minimum_samples"])
+    grouped=defaultdict(list)
+    for x in obs:
+        grouped[(str(x["strategy"]),str(x.get("market_id") or "UNKNOWN"))].append(x)
+    out={}
+    for (strategy,market),rr in sorted(grouped.items()):
+        values=[float(x["pnl"])/(float(x["capital"])*float(x["lock_seconds"]))
+                for x in rr if x["capital"]>0 and x["lock_seconds"]>0]
+        lower=conservative_mean(values,z)
+        key=f"{strategy}|{market}"
+        out[key]={
+            "strategy":strategy,"market_id":market,"samples":len(values),
+            "mean_pnl_per_capital_second":sum(values)/len(values) if values else None,
+            "conservative_pnl_per_capital_second":lower,
+            "eligible_for_allocation":len(values)>=minimum and lower is not None and lower>0,
+        }
+    return out
+
+
+def allocate_market(stats:dict[str,Any],policy:dict[str,Any])->dict[str,float]:
+    budget=float(policy["paper_budget_pusd"])
+    strategy_cap=budget*float(policy["maximum_strategy_fraction"])
+    market_cap=budget*float(policy["maximum_market_fraction"])
+    weights={k:max(0.0,float(v["conservative_pnl_per_capital_second"]))
+             for k,v in stats.items() if v.get("eligible_for_allocation")}
+    allocation={k:0.0 for k in weights}
+    strategy_used=defaultdict(float);market_used=defaultdict(float)
+    remaining=budget
+    for _ in range(32):
+        active=[]
+        for key,w in weights.items():
+            row=stats[key];strategy=str(row["strategy"]);market=str(row["market_id"])
+            room=min(strategy_cap-strategy_used[strategy],market_cap-market_used[market])
+            if w>0 and room>1e-9:active.append((key,w,room))
+        if not active or remaining<=1e-9:break
+        denom=sum(w for _,w,_ in active)
+        used=0.0
+        for key,w,room in active:
+            add=min(room,remaining*w/denom)
+            if add<=0:continue
+            allocation[key]+=add
+            strategy=str(stats[key]["strategy"]);market=str(stats[key]["market_id"])
+            strategy_used[strategy]+=add;market_used[market]+=add;used+=add
+        if used<=1e-9:break
+        remaining-=used
+    return {k:v for k,v in allocation.items() if v>1e-9}
+
+
 def allocate(stats:dict[str,Any],policy:dict[str,Any])->dict[str,float]:
     budget=float(policy["paper_budget_pusd"])
     cap=budget*float(policy["maximum_strategy_fraction"])
@@ -242,6 +291,11 @@ def main()->int:
              +postfix_observations(args.postfix_cycles,policy)
              +cross_observations(args.cross_status,policy,now_ms))
         stats=summarize(obs,policy)
+        market_stats=summarize_by_market(obs,policy)
+        market_alloc=allocate_market(market_stats,policy)
+        strategy_alloc=defaultdict(float)
+        for key,value in market_alloc.items():
+            strategy_alloc[str(market_stats[key]["strategy"])]+=value
         result={
             "schema":SCHEMA,"version":1,"model_sha":args.model_sha,
             "timestamp_ms":now_ms,"paper_only":True,
@@ -252,7 +306,9 @@ def main()->int:
             "score_semantics":policy["score"],
             "maker_rebate_policy":policy["maker_rebate_policy"],
             "strategy_statistics":stats,
-            "recommended_paper_budget_pusd":allocate(stats,policy),
+            "market_statistics":market_stats,
+            "recommended_market_budget_pusd":market_alloc,
+            "recommended_paper_budget_pusd":dict(strategy_alloc),
             "unallocated_is_cash":True,
             "observations":len(obs),
         }
