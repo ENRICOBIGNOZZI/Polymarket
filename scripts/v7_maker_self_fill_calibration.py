@@ -36,7 +36,11 @@ def calibrate(cycles:Path,evidence:Path,sha:str,max_rows:int,minimum:int)->dict[
           "timestamp_ms":time.time_ns()//1_000_000,"verified_self_fill_events":len(actual)}
     if not actual:
         return {**base,"state":"WAITING_FOR_VERIFIED_SELF_FILL_EVIDENCE","arms":[]}
-    arms=defaultdict(lambda:{"n":0,"errors":0,"paired_actual":0,"paired_predicted":0})
+    arms=defaultdict(lambda:{
+        "n":0,"errors":0,"paired_actual":0,"paired_predicted":0,
+        "leg_squared_error":0.0,"pair_squared_error":0.0,
+        "absolute_fill_error":0.0,
+    })
     matched=0
     for row in tail_jsonl(cycles,max_rows=max_rows,max_bytes=67_108_864):
         if row.get("schema")!=MAKER_SCHEMA or row.get("model_sha")!=sha:continue
@@ -45,21 +49,40 @@ def calibrate(cycles:Path,evidence:Path,sha:str,max_rows:int,minimum:int)->dict[
         if observed is None:continue
         matched+=1
         target=max(0.0,float(row.get("target_shares") or 0))
-        actual_pair=min(observed["yes_filled_shares"],observed["no_filled_shares"])+1e-12>=target>0
+        actual_yes_frac=min(1.0,observed["yes_filled_shares"]/target) if target>0 else 0.0
+        actual_no_frac=min(1.0,observed["no_filled_shares"]/target) if target>0 else 0.0
+        actual_pair_frac=min(actual_yes_frac,actual_no_frac)
+        actual_pair=actual_pair_frac>=1.0-1e-12
         for scenario in row.get("queue_scenarios") or []:
             if not isinstance(scenario,dict):continue
             key=f"q={float(scenario.get('multiplier') or 0):.3f}|c={float(scenario.get('cancel_relief_fraction') or 0):.3f}"
-            predicted=str(scenario.get("state") or "")=="BOTH_FULL"
+            try:
+                pred_yes=min(1.0,max(0.0,float(scenario.get("yes_filled_shares") or 0.0))/target) if target>0 else 0.0
+                pred_no=min(1.0,max(0.0,float(scenario.get("no_filled_shares") or 0.0))/target) if target>0 else 0.0
+            except (TypeError,ValueError,OverflowError):
+                continue
+            pred_pair_frac=min(pred_yes,pred_no)
+            predicted=pred_pair_frac>=1.0-1e-12
             cell=arms[key];cell["n"]+=1;cell["errors"]+=predicted!=actual_pair
             cell["paired_actual"]+=actual_pair;cell["paired_predicted"]+=predicted
+            cell["leg_squared_error"]+=(pred_yes-actual_yes_frac)**2+(pred_no-actual_no_frac)**2
+            cell["pair_squared_error"]+=(pred_pair_frac-actual_pair_frac)**2
+            cell["absolute_fill_error"]+=abs(pred_yes-actual_yes_frac)+abs(pred_no-actual_no_frac)
     rows=[]
     for key,cell in arms.items():
         n=cell["n"]
         rows.append({"arm":key,**cell,
                      "classification_error_rate":cell["errors"]/n if n else None,
                      "actual_paired_rate":cell["paired_actual"]/n if n else None,
-                     "predicted_paired_rate":cell["paired_predicted"]/n if n else None})
-    rows.sort(key=lambda x:(x["classification_error_rate"] if x["classification_error_rate"] is not None else 2,-x["n"],x["arm"]))
+                     "predicted_paired_rate":cell["paired_predicted"]/n if n else None,
+                     "mean_leg_brier":cell["leg_squared_error"]/(2*n) if n else None,
+                     "mean_pair_brier":cell["pair_squared_error"]/n if n else None,
+                     "mean_absolute_fill_error":cell["absolute_fill_error"]/(2*n) if n else None})
+    rows.sort(key=lambda x:(
+        x["mean_pair_brier"] if x["mean_pair_brier"] is not None else math.inf,
+        x["mean_leg_brier"] if x["mean_leg_brier"] is not None else math.inf,
+        x["classification_error_rate"] if x["classification_error_rate"] is not None else 2,
+        -x["n"],x["arm"]))
     enough=matched>=minimum and rows and rows[0]["n"]>=minimum
     return {**base,"state":"CALIBRATED_RESEARCH_ONLY" if enough else "INSUFFICIENT_VERIFIED_SELF_FILL_EVIDENCE",
             "matched_cycles":matched,"minimum_samples":minimum,
