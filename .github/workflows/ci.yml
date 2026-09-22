@@ -79,7 +79,7 @@ jobs:
             cpp=true
             london=true
           fi
-          if grep -Eq '^(CMakeLists\.txt|include/|src/(http|api|event_api|config|boost_json|fast_arb|fast_ws)\.cpp)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
+          if grep -Eq '^(CMakeLists\.txt|include/|src/(http|api|event_api|config|boost_json|fast_arb|fast_ws|v7_market_state|v7_market_ws|v7_maker_fillability_observer)\.cpp)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
             full=true
           fi
           if grep -Eq '^(src/v7_(maker|crypto_decision|external|ingress|market_ws)|include/.*v7_(maker|crypto_decision|external|ingress|market_ws)|config/v7_latency_slo\.json|scripts/v7_latency_gate\.py)' "$RUNNER_TEMP/v7-changed-paths.txt"; then
