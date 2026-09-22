@@ -12,6 +12,7 @@ sys.path.insert(0,str(ROOT/"scripts"))
 import v7_combo_collateral_return_shadow as collateral
 import v7_combo_rfq_shadow as rfq
 import v7_exact_relation_discovery as relations
+import v7_maker_self_fill_calibration as maker_cal
 
 SHA="c"*40
 
@@ -97,6 +98,47 @@ def test_collateral_return_is_never_credited_without_verified_capture():
     out=collateral.summarize(good,SHA)
     assert out["state"]=="VERIFIED_PLAN_ONLY"
     assert out["released_pusd"]==12.5
+
+
+def test_self_fill_calibration_uses_verified_user_ws_fractional_fills():
+    with tempfile.TemporaryDirectory() as d:
+        root=Path(d)
+        cycles=root/"cycles.jsonl";fills=root/"fills.jsonl"
+        cycle={
+            "schema":"polymarket_v7_two_sided_complete_set_cycle_v2",
+            "model_sha":SHA,"paper_only":True,"cycle_id":"c","target_shares":10,
+            "queue_scenarios":[
+                {"multiplier":1.0,"cancel_relief_fraction":0.0,
+                 "state":"BOTH_PARTIAL","yes_filled_shares":8,"no_filled_shares":6},
+                {"multiplier":2.0,"cancel_relief_fraction":0.0,
+                 "state":"BOTH_PARTIAL","yes_filled_shares":4,"no_filled_shares":3},
+            ],
+        }
+        fill={
+            "schema":"polymarket_v7_verified_self_fill_event_v1",
+            "model_sha":SHA,"verified":True,"source":"USER_WS_SELF_ORDER",
+            "cycle_id":"c","yes_filled_shares":7.5,"no_filled_shares":6.2,
+        }
+        cycles.write_text(json.dumps(cycle)+"\n",encoding="utf-8")
+        fills.write_text(json.dumps(fill)+"\n",encoding="utf-8")
+        out=maker_cal.calibrate(cycles,fills,SHA,100,1)
+        assert out["state"]=="CALIBRATED_RESEARCH_ONLY"
+        assert out["arms"][0]["arm"]=="q=1.000|c=0.000"
+        assert out["arms"][0]["mean_pair_brier"] is not None
+
+
+def test_rfq_gateway_has_no_quote_or_confirmation_send_path():
+    source=(ROOT/"scripts/v7_combo_rfq_gateway_readonly.py").read_text()
+    assert source.count("_send_frame(sock") == 2  # auth helper + websocket pong only
+    assert "outbound_application_messages\":\"AUTH_ONLY" in source
+    assert "signed_order" not in source
+
+
+def test_fencing_supervisor_uses_only_canonical_aws_lease():
+    source=(ROOT/"scripts/v7_multi_az_fencing_supervisor.py").read_text()
+    assert "ops/v7_aws_fencing_lease.py" in source
+    assert "v7_multi_az_fencing_lease.py" not in source
+    assert "MULTI_AZ_FENCING_LEASE_LOST" in source
 
 
 def test_ultra_sota_runtime_is_registered_fail_closed():
