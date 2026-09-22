@@ -311,7 +311,8 @@ v7_register_child "$!"
 
 # Grafana reads only zero-authority pure-arb status emitted by this observer; it never controls execution.
 # Pure complete-set PAPER arbitrage is evaluated inside this same observer
-# on every drained WS book event: no second feed, no ML, no artificial hold/delay.
+# on every drained WS book event: no second feed or ML. Detection itself adds no artificial delay;
+# the exchange-native sidecar below separately applies the verified per-market venue delay and transport arms.
 # The universe keeps 30 active contexts and may preload future M5/M15 books.
 # Future books are warm data only: the arb evaluator still requires start<=now<end.
 v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER" \
