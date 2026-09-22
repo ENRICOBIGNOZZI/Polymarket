@@ -35,6 +35,11 @@ LOG="$BENCH/bootstrap.$SHA.$RUN_ID.log"
 mkdir -p "$BENCH"
 [[ -d "$APP/.git" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
+SERVICE_GROUP="$(id -gn {service_user})"
+# Benchmark checkouts can inherit root-owned Git objects from earlier SSM
+# bootstrap runs. Repair only Git metadata ownership while the PAPER runtime is
+# stopped; the working tree itself remains under the service user's control.
+chown -R {service_user}:"$SERVICE_GROUP" "$APP/.git"
 dirty_before="$(sudo -u {service_user} git -C "$APP" status --porcelain)"
 if [[ -n "$dirty_before" ]]; then
   echo "benchmark_source_checkout_dirty=1"
