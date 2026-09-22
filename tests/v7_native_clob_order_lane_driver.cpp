@@ -89,6 +89,15 @@ int main(int argc, char** argv) {
     assert(result.identity_bound);
     assert(result.wire_monotonic_ns > 0);
     assert(result.response_complete_monotonic_ns >= result.wire_monotonic_ns);
+    assert(result.latency.submit_start_monotonic_ns > 0);
+    assert(result.latency.rate_limit_complete_monotonic_ns >= result.latency.submit_start_monotonic_ns);
+    assert(result.latency.sign_start_monotonic_ns >= result.latency.rate_limit_complete_monotonic_ns);
+    assert(result.latency.sign_complete_monotonic_ns >= result.latency.sign_start_monotonic_ns);
+    assert(result.latency.frame_complete_monotonic_ns >= result.latency.sign_complete_monotonic_ns);
+    assert(result.latency.wire_start_monotonic_ns >= result.latency.frame_complete_monotonic_ns);
+    assert(result.wire_monotonic_ns >= result.latency.wire_start_monotonic_ns);
+    assert(result.latency.prewire_ns() > 0);
+    assert(result.latency.signing_ns() > 0);
 
     const auto* record = oms.find(prepared.command.client_order_id);
     assert(record != nullptr);

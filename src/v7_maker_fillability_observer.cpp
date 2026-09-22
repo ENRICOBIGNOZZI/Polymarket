@@ -551,6 +551,7 @@ struct TradeEvidence {
     std::int64_t exchange_event_ns = 0;
     std::int64_t receive_wall_ms = 0;
     std::int64_t receive_monotonic_ns = 0;
+    std::int64_t decode_complete_monotonic_ns = 0;
     std::int64_t enqueue_monotonic_ns = 0;
     std::int32_t price_e4 = 0;
     std::int64_t quantity_microunits = 0;
@@ -919,6 +920,7 @@ public:
     void on_frame(std::string_view payload, const pm::fast::FeedReceiveStamp& receive) {
         std::array<MarketWsEvent, kWsOutputCapacity> events{};
         const auto result = decoder_->process_frame(payload, receive, events);
+        const auto decode_complete_ns = monotonic_ns();
         raw_last_trade_events_.fetch_add(
             result.raw_last_trade_events, std::memory_order_relaxed);
         valid_trade_prints_.fetch_add(result.trade_events, std::memory_order_relaxed);
@@ -992,6 +994,7 @@ public:
             row.exchange_event_ns = event.exchange_event_ns;
             row.receive_wall_ms = receive.wall_ms;
             row.receive_monotonic_ns = receive.monotonic_ns;
+            row.decode_complete_monotonic_ns = decode_complete_ns;
             row.price_e4 = event.price_e4;
             row.quantity_microunits = event.quantity_microunits;
             row.aggressor_side = event.side;
@@ -1559,6 +1562,10 @@ public:
         if (sell_sweep.shares_microunits > 0) ++pure_arb_funnel_.sell_l10_executable;
 
         const auto decision_ns = monotonic_ns();
+        pure_arb_last_receive_to_decode_ns_ = std::max<std::int64_t>(
+            0, row.decode_complete_monotonic_ns - row.receive_monotonic_ns);
+        pure_arb_last_decode_to_enqueue_ns_ = std::max<std::int64_t>(
+            0, row.enqueue_monotonic_ns - row.decode_complete_monotonic_ns);
         pure_arb_last_receive_to_enqueue_ns_ = std::max<std::int64_t>(
             0, row.enqueue_monotonic_ns - row.receive_monotonic_ns);
         pure_arb_last_queue_wait_ns_ = std::max<std::int64_t>(
@@ -1571,6 +1578,8 @@ public:
             0, decision_ns - row.receive_monotonic_ns);
         pure_arb_max_receive_to_decision_ns_ = std::max(
             pure_arb_max_receive_to_decision_ns_, pure_arb_last_receive_to_decision_ns_);
+        pure_arb_receive_to_decode_latency_.add(pure_arb_last_receive_to_decode_ns_);
+        pure_arb_decode_to_enqueue_latency_.add(pure_arb_last_decode_to_enqueue_ns_);
         pure_arb_receive_to_enqueue_latency_.add(pure_arb_last_receive_to_enqueue_ns_);
         pure_arb_queue_wait_latency_.add(pure_arb_last_queue_wait_ns_);
         pure_arb_decision_latency_.add(pure_arb_last_decision_compute_ns_);
@@ -1884,6 +1893,18 @@ public:
                     pure_arb_funnel_.sell_below_min_order_rejections},
                 {"stale_decision_rejections", pure_arb_funnel_.stale_decision_rejections}}},
             {"latency_window_samples", static_cast<std::uint64_t>(pure_arb_receive_latency_.size())},
+            {"receive_to_decode_ns", json::object{
+                {"p50", pure_arb_receive_to_decode_latency_.quantile(0.50)},
+                {"p90", pure_arb_receive_to_decode_latency_.quantile(0.90)},
+                {"p99", pure_arb_receive_to_decode_latency_.quantile(0.99)},
+                {"p99_9", pure_arb_receive_to_decode_latency_.quantile(0.999)},
+                {"max", pure_arb_receive_to_decode_latency_.quantile(1.0)}}},
+            {"decode_to_enqueue_ns", json::object{
+                {"p50", pure_arb_decode_to_enqueue_latency_.quantile(0.50)},
+                {"p90", pure_arb_decode_to_enqueue_latency_.quantile(0.90)},
+                {"p99", pure_arb_decode_to_enqueue_latency_.quantile(0.99)},
+                {"p99_9", pure_arb_decode_to_enqueue_latency_.quantile(0.999)},
+                {"max", pure_arb_decode_to_enqueue_latency_.quantile(1.0)}}},
             {"receive_to_enqueue_ns", json::object{
                 {"p50", pure_arb_receive_to_enqueue_latency_.quantile(0.50)},
                 {"p90", pure_arb_receive_to_enqueue_latency_.quantile(0.90)},
@@ -1908,6 +1929,8 @@ public:
                 {"p99", pure_arb_decision_latency_.quantile(0.99)},
                 {"p99_9", pure_arb_decision_latency_.quantile(0.999)},
                 {"max", pure_arb_max_decision_compute_ns_}}},
+            {"last_receive_to_decode_ns", pure_arb_last_receive_to_decode_ns_},
+            {"last_decode_to_enqueue_ns", pure_arb_last_decode_to_enqueue_ns_},
             {"last_receive_to_enqueue_ns", pure_arb_last_receive_to_enqueue_ns_},
             {"last_queue_wait_ns", pure_arb_last_queue_wait_ns_},
             {"last_decision_compute_ns", pure_arb_last_decision_compute_ns_},
@@ -2434,10 +2457,14 @@ private:
     double pure_arb_total_pnl_ = 0.0;
     double pure_arb_conservative_total_pnl_ = 0.0;
     PureArbFunnelState pure_arb_funnel_{};
+    PureArbLatencyWindow pure_arb_receive_to_decode_latency_{};
+    PureArbLatencyWindow pure_arb_decode_to_enqueue_latency_{};
     PureArbLatencyWindow pure_arb_receive_to_enqueue_latency_{};
     PureArbLatencyWindow pure_arb_queue_wait_latency_{};
     PureArbLatencyWindow pure_arb_receive_latency_{};
     PureArbLatencyWindow pure_arb_decision_latency_{};
+    std::int64_t pure_arb_last_receive_to_decode_ns_ = 0;
+    std::int64_t pure_arb_last_decode_to_enqueue_ns_ = 0;
     std::int64_t pure_arb_last_receive_to_enqueue_ns_ = 0;
     std::int64_t pure_arb_last_queue_wait_ns_ = 0;
     std::int64_t pure_arb_last_decision_compute_ns_ = 0;
