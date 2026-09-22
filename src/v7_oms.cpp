@@ -254,6 +254,12 @@ OmsTransitionResult OmsOrder::apply(const OmsEvent& event) noexcept {
             break;
 
         case OmsEventType::RequestCancel:
+            if (record_.state == OrderState::PendingDelay) {
+                // Venue taker delay is explicitly non-cancelable. Preserve the
+                // authoritative pending-delay state while rejecting the local
+                // cancel attempt as a lifecycle invariant violation.
+                return result(false, false, false, true);
+            }
             if (record_.state == OrderState::AckPending || record_.state == OrderState::Live
                 || record_.state == OrderState::Partial) {
                 record_.state = OrderState::CancelRequested;
