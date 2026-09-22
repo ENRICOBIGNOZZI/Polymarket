@@ -54,6 +54,24 @@ struct NativeLifecycleResult {
     std::uint8_t terminal_retired = 0;
 };
 
+enum class NativeSettlementPairReason : std::uint8_t {
+    Accepted = 1,
+    InvalidPair = 2,
+    FirstLegRejected = 3,
+    SecondLegRejectedRolledBack = 4,
+    RollbackFailed = 5,
+};
+
+struct NativeSettlementPairResult {
+    NativeSettlementAuthorityResult yes{};
+    NativeSettlementAuthorityResult no{};
+    NativeLifecycleResult rollback{};
+    NativeSettlementPairReason reason = NativeSettlementPairReason::InvalidPair;
+    std::int64_t risk_admitted_monotonic_ns = 0;
+    std::uint8_t accepted = 0;
+    std::uint8_t rollback_complete = 0;
+};
+
 // Single in-process owner for the native CRYPTO_SETTLEMENT_ENGINE admission,
 // inventory, maker lifecycle and OMS chain. Candidate generators never reserve
 // capital, reserve inventory, mutate OMS state or select a second executor.
@@ -72,6 +90,14 @@ public:
 
     [[nodiscard]] NativeSettlementAuthorityResult submit(
         const ExecutionPlan& plan,
+        std::int64_t minimum_order_microunits,
+        std::int64_t now_monotonic_ns) noexcept;
+
+    // All-or-none admission before transport. No bytes leave the process until
+    // both dedicated PureArbFok legs are fully reserved in the one authority.
+    [[nodiscard]] NativeSettlementPairResult submit_pair(
+        const ExecutionPlan& yes_plan,
+        const ExecutionPlan& no_plan,
         std::int64_t minimum_order_microunits,
         std::int64_t now_monotonic_ns) noexcept;
 
