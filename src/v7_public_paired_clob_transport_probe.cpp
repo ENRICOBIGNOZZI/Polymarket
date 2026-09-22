@@ -117,14 +117,24 @@ struct Options {
 
 struct Samples {
     std::vector<std::int64_t> pair_completion_ns;
-    std::vector<std::int64_t> wire_skew_ns;
+    std::vector<std::int64_t> first_wire_offset_ns;
+    std::vector<std::int64_t> second_wire_offset_ns;
+    std::vector<std::int64_t> wire_start_skew_ns;
+    std::vector<std::int64_t> wire_complete_skew_ns;
+    std::vector<std::int64_t> first_ack_offset_ns;
+    std::vector<std::int64_t> second_ack_offset_ns;
     std::vector<std::int64_t> ack_skew_ns;
     std::uint64_t failures = 0;
 };
 
 void reserve(Samples& s, std::size_t n) {
     s.pair_completion_ns.reserve(n);
-    s.wire_skew_ns.reserve(n);
+    s.first_wire_offset_ns.reserve(n);
+    s.second_wire_offset_ns.reserve(n);
+    s.wire_start_skew_ns.reserve(n);
+    s.wire_complete_skew_ns.reserve(n);
+    s.first_ack_offset_ns.reserve(n);
+    s.second_ack_offset_ns.reserve(n);
     s.ack_skew_ns.reserve(n);
 }
 
@@ -146,8 +156,27 @@ void record_parallel(
         ++out.failures;
         return;
     }
+    const auto first_wire = std::min(
+        pair.yes.wire_complete_monotonic_ns,
+        pair.no.wire_complete_monotonic_ns);
+    const auto second_wire = std::max(
+        pair.yes.wire_complete_monotonic_ns,
+        pair.no.wire_complete_monotonic_ns);
+    const auto first_ack = std::min(
+        pair.yes.ack_complete_monotonic_ns,
+        pair.no.ack_complete_monotonic_ns);
+    const auto second_ack = std::max(
+        pair.yes.ack_complete_monotonic_ns,
+        pair.no.ack_complete_monotonic_ns);
     out.pair_completion_ns.push_back(ack - start);
-    out.wire_skew_ns.push_back(pair.wire_skew_ns);
+    out.first_wire_offset_ns.push_back(first_wire - start);
+    out.second_wire_offset_ns.push_back(second_wire - start);
+    out.wire_start_skew_ns.push_back(std::llabs(
+        pair.yes.write_start_monotonic_ns
+        - pair.no.write_start_monotonic_ns));
+    out.wire_complete_skew_ns.push_back(pair.wire_skew_ns);
+    out.first_ack_offset_ns.push_back(first_ack - start);
+    out.second_ack_offset_ns.push_back(second_ack - start);
     out.ack_skew_ns.push_back(pair.ack_skew_ns);
 }
 
@@ -165,12 +194,23 @@ void record_serial(
         ++out.failures;
         return;
     }
+    const auto start = first.write_start_monotonic_ns;
     out.pair_completion_ns.push_back(
-        second.ack_complete_monotonic_ns
-        - first.write_start_monotonic_ns);
-    out.wire_skew_ns.push_back(std::llabs(
+        second.ack_complete_monotonic_ns - start);
+    out.first_wire_offset_ns.push_back(
+        first.wire_complete_monotonic_ns - start);
+    out.second_wire_offset_ns.push_back(
+        second.wire_complete_monotonic_ns - start);
+    out.wire_start_skew_ns.push_back(std::llabs(
+        second.write_start_monotonic_ns
+        - first.write_start_monotonic_ns));
+    out.wire_complete_skew_ns.push_back(std::llabs(
         second.wire_complete_monotonic_ns
         - first.wire_complete_monotonic_ns));
+    out.first_ack_offset_ns.push_back(
+        first.ack_complete_monotonic_ns - start);
+    out.second_ack_offset_ns.push_back(
+        second.ack_complete_monotonic_ns - start);
     out.ack_skew_ns.push_back(std::llabs(
         second.ack_complete_monotonic_ns
         - first.ack_complete_monotonic_ns));
@@ -180,7 +220,12 @@ json::object samples_json(const Samples& s) {
     return {
         {"failures", s.failures},
         {"pair_completion_ns", dist(s.pair_completion_ns)},
-        {"wire_skew_ns", dist(s.wire_skew_ns)},
+        {"first_wire_offset_ns", dist(s.first_wire_offset_ns)},
+        {"second_wire_offset_ns", dist(s.second_wire_offset_ns)},
+        {"wire_start_skew_ns", dist(s.wire_start_skew_ns)},
+        {"wire_complete_skew_ns", dist(s.wire_complete_skew_ns)},
+        {"first_ack_offset_ns", dist(s.first_ack_offset_ns)},
+        {"second_ack_offset_ns", dist(s.second_ack_offset_ns)},
         {"ack_skew_ns", dist(s.ack_skew_ns)},
     };
 }
