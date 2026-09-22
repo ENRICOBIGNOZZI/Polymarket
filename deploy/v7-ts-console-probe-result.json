@@ -3,15 +3,9 @@
   "body_markers": [],
   "device_names": [],
   "final_host": "accounts.google.com",
-  "final_path": "/v3/signin/identifier",
+  "final_path": "/v3/signin/rejected",
   "mfa_required": false,
   "page_title": "Sign in - Google Accounts",
   "schema": "polymarket_v7_ts_console_probe_result_v1",
-  "visible_inputs": [
-    {
-      "name": "identifier",
-      "placeholder": "",
-      "type": "text"
-    }
-  ]
+  "visible_inputs": []
 }
