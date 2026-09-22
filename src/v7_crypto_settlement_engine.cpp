@@ -837,6 +837,7 @@ int main(int argc, char** argv) {
                     [](const auto& window) { return window.active != 0; });
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
+                yes_book_epoch = no_book_epoch = 0;
                 if (options.capture_native_observations || (options.capture_execution_windows && repricing_active)) {
                     if (!evidence_writer.publish_observation(observation(yes_book, kYes, 5))) ++adapter_handoff_failures;
                     if (!evidence_writer.publish_observation(observation(no_book, kNo, 5))) ++adapter_handoff_failures;
