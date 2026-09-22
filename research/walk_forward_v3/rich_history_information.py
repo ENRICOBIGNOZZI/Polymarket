@@ -617,6 +617,12 @@ def main(argv=None):
         raise ValueError("DATA_NOT_READY:" + str(data.get("input_state")))
 
     rows = [r for r in data["decisions"] if _valid_state(r)]
+    # The full builder necessarily materializes a broader causal-decision set.
+    # Once research support is filtered, drop the container references to
+    # excluded rows before fitting large action models.
+    data["decisions"] = []
+    import gc
+    gc.collect()
     window, rows = history_window(rows, a.maximum_history_hours)
     splits = chronological_split(rows)
     start_ns, end_ns = int(window["start_ns"]), int(window["end_ns"])
