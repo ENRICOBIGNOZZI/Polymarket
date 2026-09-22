@@ -1,8 +1,8 @@
 {
   "schema": "polymarket_v7_pure_arb_exact_deploy_request_v1",
   "version": 1,
-  "request_id": "pure-arb-exact-c7c4de15-live-retry2-20260921",
-  "target_sha": "c7c4de15df26805f51b78733dcf755854ffc87e3",
+  "request_id": "pure-arb-latency-stage3-bb6cd0e3-20260922",
+  "target_sha": "bb6cd0e3198654c159c3e08a159e3279e73f8e09",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
