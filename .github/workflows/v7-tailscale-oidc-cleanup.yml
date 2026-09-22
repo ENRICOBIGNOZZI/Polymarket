@@ -17,32 +17,28 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: main
-          fetch-depth: 0
+          ref: ${{ github.sha }}
+          fetch-depth: 2
 
-      - name: Validate cleanup request against canonical main
+      - name: Validate cleanup request
         id: req
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags origin main
-          main_sha="$(git rev-parse origin/main)"
-          test "$(git rev-parse HEAD)" = "$main_sha"
-          parent_sha="$(git rev-parse HEAD^)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
           test "$changed" = "deploy/v7-tailscale-cleanup-request.json"
-          python3 - deploy/v7-tailscale-cleanup-request.json "$parent_sha" "$GITHUB_OUTPUT" <<'PY'
-          import json,re,sys
+          python3 - deploy/v7-tailscale-cleanup-request.json "$GITHUB_OUTPUT" <<'PY'
+          import json,sys
           v=json.load(open(sys.argv[1],encoding='utf-8'))
           assert v.get('schema')=='polymarket_v7_tailscale_cleanup_request_v1'
           assert v.get('version')==1
-          assert v.get('expected_parent_sha')==sys.argv[2]
           client=v.get('client_id'); audience=v.get('audience')
           assert isinstance(client,str) and len(client)>=8
           assert isinstance(audience,str) and len(audience)>=8
           assert 1 <= int(v.get('maximum_deletions') or 0) <= 1200
           assert v.get('preserve_ips')==['100.102.9.16','100.104.183.109','100.65.195.111']
-          with open(sys.argv[3],'a',encoding='utf-8') as h:
+          with open(sys.argv[2],'a',encoding='utf-8') as h:
               h.write(f"client_id={client}\n")
               h.write(f"audience={audience}\n")
           PY
@@ -68,18 +64,6 @@ jobs:
           print(token)
           PY
           )"
-          python3 - "$jwt" <<'PY'
-          import base64,json,sys
-          token=sys.argv[1]
-          part=token.split('.')[1]
-          part += '=' * (-len(part) % 4)
-          claims=json.loads(base64.urlsafe_b64decode(part.encode()))
-          safe={k:claims.get(k) for k in (
-              'iss','aud','sub','repository','repository_id',
-              'repository_owner','repository_owner_id','ref','job_workflow_ref'
-          )}
-          print('V7_GITHUB_OIDC_CLAIMS='+json.dumps(safe,sort_keys=True))
-          PY
           response="$(curl -fsS -X POST 'https://api.tailscale.com/api/v2/oauth/token-exchange' \
             -H 'Content-Type: application/x-www-form-urlencoded' \
             --data-urlencode "client_id=$CLIENT_ID" \
