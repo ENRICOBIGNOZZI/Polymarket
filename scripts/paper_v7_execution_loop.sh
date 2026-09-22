@@ -557,9 +557,15 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_deep_sizing_shadow.py \
   >> "$PURE_ARB_DIR/pure_arb_deep_sizing.log" 2>&1 &
 v7_register_optional_child "$!"
 
-# Venue mode is a safety gate. Until a live public mode observer is available,
-# observed mode remains DEGRADED while PAPER can run an explicitly labeled
-# NORMAL counterfactual. This can never grant authenticated execution.
+# Public venue-mode observer is zero authority and fail-closed. The PAPER
+# execution shadow may still run an explicitly labeled NORMAL counterfactual,
+# but observed mode remains independently recorded from the public status page.
+v7_exec_class COLLECTOR python3 scripts/v7_polymarket_status_source.py \
+  --output "$RUN_ROOT/control/venue_mode_source.json" \
+  --timeout-seconds 3 --interval-ms 1000 \
+  >> "$PURE_ARB_DIR/venue_mode_source.log" 2>&1 &
+v7_register_optional_child "$!"
+
 v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_venue_mode.py \
   --source "$RUN_ROOT/control/venue_mode_source.json" \
   --output "$PURE_ARB_DIR/venue_mode_status.json" --model-sha "$SHA" \
