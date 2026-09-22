@@ -99,7 +99,12 @@ NativeOrderTxResult NativeOrderTxOwner::prepare_submit(
     command.market_state_version = plan.market_state_version;
     command.price_tick = intent.price_tick;
     command.quantity_microunits = intent.quantity_microunits;
+    command.frame_receive_monotonic_ns =
+        intent.causal_trigger_receive_monotonic_ns;
+    command.decode_complete_monotonic_ns =
+        intent.decode_complete_monotonic_ns;
     command.decision_monotonic_ns = intent.decision_monotonic_ns;
+    command.risk_admitted_monotonic_ns = now_monotonic_ns;
     command.queue_monotonic_ns = now_monotonic_ns;
     command.tick_size_e4 = plan.tick_size_e4;
     command.side = intent.side;
