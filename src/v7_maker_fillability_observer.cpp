@@ -573,6 +573,7 @@ struct PureArbMarketState {
     std::uint8_t fee_verified = 0;
     std::int64_t start_wall_ms = 0;
     std::int64_t end_wall_ms = 0;
+    double prefunded_complete_set_shares_remaining = 0.0;
     PureArbDirectionState buy{};
     PureArbDirectionState sell{};
 };
@@ -733,6 +734,8 @@ public:
             market.fee_verified = token.fee_verified;
             market.start_wall_ms = token.start_wall_ms;
             market.end_wall_ms = token.end_wall_ms;
+            market.prefunded_complete_set_shares_remaining =
+                pure_arb_prefunded_complete_set_shares_;
             if (token.is_yes != 0) market.yes_handle = token.instrument_handle;
             else market.no_handle = token.instrument_handle;
         }
@@ -1048,6 +1051,15 @@ public:
                 };
                 restore_direction("buy_complete_set", it->buy);
                 restore_direction("sell_complete_set", it->sell);
+                if (prior_market_id == it->market_id) {
+                    const double prior_remaining = number64(
+                        find_value(prior, "prefunded_complete_set_shares_remaining"),
+                        it->prefunded_complete_set_shares_remaining);
+                    if (std::isfinite(prior_remaining) && prior_remaining >= 0.0
+                        && prior_remaining <= pure_arb_prefunded_complete_set_shares_) {
+                        it->prefunded_complete_set_shares_remaining = prior_remaining;
+                    }
+                }
             }
         } catch (const std::exception&) {
             // Non-authoritative PAPER telemetry only. Corrupt/stale state
@@ -1060,6 +1072,8 @@ public:
         apply_selection_windows(tokens_, selection, false);
         for (const auto& token : tokens_) {
             auto& market = pure_arb_markets_[token.market_handle];
+            const bool new_market = !market.market_id.empty()
+                && market.market_id != token.market_id;
             market.market_id = token.market_id;
             market.asset = token.asset;
             market.horizon = token.horizon;
@@ -1068,6 +1082,10 @@ public:
             market.fee_verified = token.fee_verified;
             market.start_wall_ms = token.start_wall_ms;
             market.end_wall_ms = token.end_wall_ms;
+            if (new_market) {
+                market.prefunded_complete_set_shares_remaining =
+                    pure_arb_prefunded_complete_set_shares_;
+            }
         }
     }
 
@@ -1307,7 +1325,8 @@ public:
 
         const auto buy_sweep = sweep_pure_arb(yes, no, market, true);
         const auto prefund_microunits = static_cast<std::int64_t>(std::llround(
-            pure_arb_prefunded_complete_set_shares_ * kMicrounitsPerShare));
+            std::max(0.0, market.prefunded_complete_set_shares_remaining)
+            * kMicrounitsPerShare));
         const auto sell_sweep = sweep_pure_arb(
             yes, no, market, false, prefund_microunits);
         market.buy.last_executable_shares_l10 = buy_sweep.shares();
@@ -1361,6 +1380,9 @@ public:
                     token->market_handle, market, market.sell, 2, sell_sweep,
                     micro_shares(sell_qty_l1), row.receive_wall_ms,
                     row.receive_monotonic_ns, decision_ns);
+                market.prefunded_complete_set_shares_remaining = std::max(
+                    0.0,
+                    market.prefunded_complete_set_shares_remaining - sell_sweep.shares());
             }
         } else {
             market.sell.active = false;
@@ -1397,6 +1419,8 @@ public:
                 {"horizon", market.horizon},
                 {"market_id", market.market_id},
                 {"fee_verified", market.fee_verified != 0},
+                {"prefunded_complete_set_shares_remaining",
+                    market.prefunded_complete_set_shares_remaining},
                 {"buy_complete_set", json::object{
                     {"active", market.buy.active},
                     {"cycles", market.buy.cycles},
