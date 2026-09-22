@@ -1,0 +1,8 @@
+{
+  "schema": "polymarket_v7_london_tailscale_recover_v1",
+  "monitoring_only": true,
+  "paper_only": true,
+  "real_order_submission": false,
+  "serve_port": 19091,
+  "target_port": 9090
+}
