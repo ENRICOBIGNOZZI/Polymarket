@@ -191,7 +191,9 @@ def taker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]
                         "verified_ancillary_taker_rebate_pnl":ancillary,
                         "execution_mode":str(worst.get("execution_mode") or ""),
                         "capital":capital,"lock_seconds":lock,
-                        "merge_credit_applied":False})
+                        "merge_credit_applied":(
+                            kind=="BUY_COMPLETE_SET"
+                            and policy.get("complete_set_merge_verified") is True)})
     return out
 
 def maker_observations(path:Path|None,policy:dict[str,Any],
@@ -230,7 +232,8 @@ def maker_observations(path:Path|None,policy:dict[str,Any],
                         "pnl":pnl,"base_pnl":base_pnl,
                         "verified_ancillary_reward_pnl":ancillary_reward_pnl,
                         "verified_reward_rate_pusd_per_capital_second":reward_rate,
-                        "capital":capital,"lock_seconds":lock})
+                        "capital":capital,"lock_seconds":lock,
+                        "merge_credit_applied":False})
     return out
 
 
