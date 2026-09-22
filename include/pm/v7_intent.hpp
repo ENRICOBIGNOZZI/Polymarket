@@ -63,6 +63,9 @@ struct StrategyIntent {
     // is comparable to local decision/OMS timestamps and exposes any polling
     // or signal-grid delay before the decision. Zero means unavailable.
     std::int64_t causal_trigger_receive_monotonic_ns = 0;
+    // Absolute completion time of the causal market-data decode/book update.
+    // Zero when unavailable; never synthesized from a duration.
+    std::int64_t decode_complete_monotonic_ns = 0;
     // Local monotonic time when the strategy signal became actionable. For an
     // event-driven policy this may equal the trigger receive time; for a
     // quantized/grid policy it records the grid boundary explicitly. Zero
