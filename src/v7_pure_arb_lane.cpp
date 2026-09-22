@@ -47,7 +47,7 @@ bool PureArbLane::valid() const noexcept {
 
 Evaluation PureArbLane::evaluate(const PairInput& input) const noexcept {
     Evaluation out{};
-    if (!valid() || input.decision_monotonic_ns <= 0) {
+    if (!valid()) {
         out.reason = RejectReason::InvalidContext;
         return out;
     }
@@ -161,7 +161,8 @@ Evaluation PureArbLane::evaluate(const PairInput& input) const noexcept {
         input.yes.receive_monotonic_ns,
         input.no.receive_monotonic_ns);
     plan.decision_monotonic_ns = input.decision_monotonic_ns;
-    if (plan.decision_monotonic_ns < plan.trigger_receive_monotonic_ns) {
+    if (plan.decision_monotonic_ns > 0
+        && plan.decision_monotonic_ns < plan.trigger_receive_monotonic_ns) {
         out.reason = RejectReason::InvalidContext;
         return out;
     }
