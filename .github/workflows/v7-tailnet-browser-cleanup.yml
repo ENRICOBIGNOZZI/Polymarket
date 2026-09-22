@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 50
+          fetch-depth: 0
 
       - name: Decrypt one-shot Tailscale login
         shell: bash
