@@ -51,6 +51,9 @@ def test_latency_lab_does_not_require_cutover_readiness():
     assert "v7_cutover_contract.py" not in latency
     assert "v7_london_ssm_benchmark.py" in latency
     assert "v7_london_ssm_bootstrap.py" in latency
+    assert "test -f ops/v7_london_latency_lab.sh" in latency
+    assert "bash -n ops/v7_london_latency_lab.sh" in latency
+    assert "test -x ops/v7_london_latency_lab.sh" not in latency
 
 
 def test_latency_lab_requires_measured_10pct_tail_gate():
