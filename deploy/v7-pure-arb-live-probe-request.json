@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_pure_arb_live_probe_request_v1",
   "version": 1,
-  "request_id": "pure-arb-post-grafana-index-refresh-20260921",
+  "request_id": "pure-arb-live-status-20260922T1045CEST",
   "expected_sha": "c7c4de15df26805f51b78733dcf755854ffc87e3",
   "paper_only": true,
   "authenticated_execution": false,
