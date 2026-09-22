@@ -2,7 +2,7 @@
   "schema": "polymarket_v7_rich_history_stale_cleanup_v1",
   "version": 1,
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "stale_prefix": "/tmp/polymarket-rich-history-dfd177172a7e",
-  "keep_prefix": "/tmp/polymarket-rich-history-de38680075de",
+  "stale_prefix": "/tmp/polymarket-rich-history-de38680075de",
+  "keep_prefix": "/tmp/polymarket-rich-history-0ceb004f575e",
   "research_only": true
 }
