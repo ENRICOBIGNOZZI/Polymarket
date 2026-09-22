@@ -1311,8 +1311,6 @@ public:
         const auto& no = pure_arb_latest_books_[market.no_handle];
         const auto yes_epoch = pure_arb_book_epochs_[market.yes_handle];
         const auto no_epoch = pure_arb_book_epochs_[market.no_handle];
-        const auto yes_wall = pure_arb_book_receive_wall_ms_[market.yes_handle];
-        const auto no_wall = pure_arb_book_receive_wall_ms_[market.no_handle];
         const auto now_wall = row.receive_wall_ms;
 
         if (!(token->start_wall_ms <= now_wall && now_wall < token->end_wall_ms)) {
@@ -1330,107 +1328,100 @@ public:
         }
         ++pure_arb_funnel_.fee_ready;
 
-        if (yes_epoch == 0 || yes_epoch != no_epoch) {
+        const auto prefund_microunits = static_cast<std::int64_t>(std::llround(
+            std::max(0.0, market.prefunded_complete_set_shares_remaining)
+            * kMicrounitsPerShare));
+        pm::v7::pure_arb::Context arb_context{};
+        arb_context.market_handle = token->market_handle;
+        arb_context.event_handle = token->event_handle;
+        arb_context.yes_instrument_handle = market.yes_handle;
+        arb_context.no_instrument_handle = market.no_handle;
+        arb_context.fee_rate = market.fee_rate;
+        arb_context.fee_exponent = market.fee_exponent;
+        arb_context.reserve_per_share = pure_arb_reserve_per_share_;
+        arb_context.minimum_order_microunits =
+            static_cast<std::int64_t>(std::llround(
+                market.minimum_order_shares * kMicrounitsPerShare));
+        arb_context.maximum_leg_skew_ns =
+            pure_arb_max_leg_skew_ms_ * 1'000'000LL;
+        arb_context.sell_capacity_microunits = prefund_microunits;
+        arb_context.fee_verified = market.fee_verified;
+
+        pm::v7::pure_arb::PairInput arb_input{};
+        arb_input.yes = yes;
+        arb_input.no = no;
+        arb_input.yes_connection_epoch = yes_epoch;
+        arb_input.no_connection_epoch = no_epoch;
+        auto arb = pm::v7::pure_arb::PureArbLane(arb_context).evaluate(arb_input);
+
+        if (arb.epoch_synced == 0) {
             market.buy.active = false;
             market.sell.active = false;
             return;
         }
         ++pure_arb_funnel_.epoch_synced;
-
-        if (yes_wall <= 0 || no_wall <= 0
-            || (yes_wall >= no_wall ? yes_wall - no_wall : no_wall - yes_wall) > pure_arb_max_leg_skew_ms_) {
+        if (arb.leg_skew_ready == 0) {
             market.buy.active = false;
             market.sell.active = false;
             return;
         }
         ++pure_arb_funnel_.leg_skew_ready;
-
-        if (yes.valid == 0 || no.valid == 0
-            || yes.lineage_continuous == 0 || no.lineage_continuous == 0) {
+        if (arb.lineage_ready == 0) {
             market.buy.active = false;
             market.sell.active = false;
             return;
         }
         ++pure_arb_funnel_.lineage_ready;
-
-        const bool book_valid =
-            yes.best_bid_e4 > 0 && yes.best_ask_e4 > yes.best_bid_e4 && yes.best_ask_e4 < 10'000
-            && no.best_bid_e4 > 0 && no.best_ask_e4 > no.best_bid_e4 && no.best_ask_e4 < 10'000
-            && yes.best_bid_microunits > 0 && yes.best_ask_microunits > 0
-            && no.best_bid_microunits > 0 && no.best_ask_microunits > 0
-            && yes.bid_level_count > 0 && yes.ask_level_count > 0
-            && no.bid_level_count > 0 && no.ask_level_count > 0;
-        if (!book_valid) {
+        if (arb.book_valid == 0) {
             market.buy.active = false;
             market.sell.active = false;
             return;
         }
         ++pure_arb_funnel_.book_valid;
-
-        const double yes_ask = e4_price(yes.best_ask_e4);
-        const double no_ask = e4_price(no.best_ask_e4);
-        const double yes_bid = e4_price(yes.best_bid_e4);
-        const double no_bid = e4_price(no.best_bid_e4);
-        const auto buy_qty_l1 = std::min(yes.best_ask_microunits, no.best_ask_microunits);
-        const auto sell_qty_l1 = std::min(yes.best_bid_microunits, no.best_bid_microunits);
-        const double buy_shares_l1 = micro_shares(buy_qty_l1);
-        const double sell_shares_l1 = micro_shares(sell_qty_l1);
-        const double buy_fee = buy_shares_l1 > 0.0
-            ? (pm::v7::pure_arb::fee_usdc(
-                   buy_shares_l1, yes_ask, market.fee_rate, market.fee_exponent)
-               + pm::v7::pure_arb::fee_usdc(
-                   buy_shares_l1, no_ask, market.fee_rate, market.fee_exponent))
-                / buy_shares_l1
-            : std::numeric_limits<double>::quiet_NaN();
-        const double sell_fee = sell_shares_l1 > 0.0
-            ? (pm::v7::pure_arb::fee_usdc(
-                   sell_shares_l1, yes_bid, market.fee_rate, market.fee_exponent)
-               + pm::v7::pure_arb::fee_usdc(
-                   sell_shares_l1, no_bid, market.fee_rate, market.fee_exponent))
-                / sell_shares_l1
-            : std::numeric_limits<double>::quiet_NaN();
-        if (!std::isfinite(buy_fee) || !std::isfinite(sell_fee)) {
+        if (arb.fee_finite == 0) {
             market.buy.active = false;
             market.sell.active = false;
             return;
         }
         ++pure_arb_funnel_.fee_finite;
 
-        const double buy_raw_edge = 1.0 - yes_ask - no_ask;
-        const double sell_raw_edge = yes_bid + no_bid - 1.0;
-        const double buy_edge = buy_raw_edge - buy_fee;
-        const double sell_edge = sell_raw_edge - sell_fee;
+        const double buy_raw_edge = arb.buy_raw_edge_per_share;
+        const double sell_raw_edge = arb.sell_raw_edge_per_share;
+        const double buy_edge = arb.buy_edge_per_share;
+        const double sell_edge = arb.sell_edge_per_share;
+        const double buy_shares_l1 = micro_shares(
+            std::min(yes.best_ask_microunits, no.best_ask_microunits));
+        const double sell_shares_l1 = micro_shares(
+            std::min(yes.best_bid_microunits, no.best_bid_microunits));
         market.buy.last_edge_per_share = buy_edge;
         market.sell.last_edge_per_share = sell_edge;
-        market.buy.last_executable_shares = micro_shares(buy_qty_l1);
-        market.sell.last_executable_shares = micro_shares(sell_qty_l1);
+        market.buy.last_executable_shares = buy_shares_l1;
+        market.sell.last_executable_shares = sell_shares_l1;
         ++pure_arb_evaluations_;
 
         if (buy_raw_edge > 1e-12) ++pure_arb_funnel_.buy_raw_positive;
         if (sell_raw_edge > 1e-12) ++pure_arb_funnel_.sell_raw_positive;
         if (buy_edge > 1e-12) ++pure_arb_funnel_.buy_after_fee_positive;
         if (sell_edge > 1e-12) ++pure_arb_funnel_.sell_after_fee_positive;
-        if (buy_edge > pure_arb_reserve_per_share_ + 1e-12) ++pure_arb_funnel_.buy_after_reserve_positive;
-        if (sell_edge > pure_arb_reserve_per_share_ + 1e-12) ++pure_arb_funnel_.sell_after_reserve_positive;
+        if (buy_edge > pure_arb_reserve_per_share_ + 1e-12)
+            ++pure_arb_funnel_.buy_after_reserve_positive;
+        if (sell_edge > pure_arb_reserve_per_share_ + 1e-12)
+            ++pure_arb_funnel_.sell_after_reserve_positive;
         for (std::size_t i = 0; i < kPureArbReserveArms.size(); ++i) {
-            if (buy_edge > kPureArbReserveArms[i] + 1e-12) {
+            if (buy_edge > kPureArbReserveArms[i] + 1e-12)
                 ++pure_arb_funnel_.buy_reserve_positive[i];
-            }
-            if (sell_edge > kPureArbReserveArms[i] + 1e-12) {
+            if (sell_edge > kPureArbReserveArms[i] + 1e-12)
                 ++pure_arb_funnel_.sell_reserve_positive[i];
-            }
         }
 
-        const auto buy_sweep = sweep_pure_arb(yes, no, market, true);
-        const auto prefund_microunits = static_cast<std::int64_t>(std::llround(
-            std::max(0.0, market.prefunded_complete_set_shares_remaining)
-            * kMicrounitsPerShare));
-        const auto sell_sweep = sweep_pure_arb(
-            yes, no, market, false, prefund_microunits);
+        const auto& buy_sweep = arb.buy;
+        const auto& sell_sweep = arb.sell;
         market.buy.last_executable_shares_l10 = buy_sweep.shares();
         market.sell.last_executable_shares_l10 = sell_sweep.shares();
-        if (buy_sweep.shares_microunits > 0) ++pure_arb_funnel_.buy_l10_executable;
-        if (sell_sweep.shares_microunits > 0) ++pure_arb_funnel_.sell_l10_executable;
+        if (buy_sweep.shares_microunits > 0)
+            ++pure_arb_funnel_.buy_l10_executable;
+        if (sell_sweep.shares_microunits > 0)
+            ++pure_arb_funnel_.sell_l10_executable;
 
         const auto decision_ns = monotonic_ns();
         pure_arb_last_receive_to_decode_ns_ = std::max<std::int64_t>(
