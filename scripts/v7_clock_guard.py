@@ -26,7 +26,9 @@ def main()->int:
     ap.add_argument("--clob-url",default="https://clob.polymarket.com")
     ap.add_argument("--maximum-absolute-offset-ms",type=float,default=50.0)
     ap.add_argument("--timeout-seconds",type=float,default=2.0);ap.add_argument("--interval-seconds",type=float,default=5.0)
+    ap.add_argument("--fail-after-consecutive-unsafe",type=int,default=3)
     args=ap.parse_args();args.output.parent.mkdir(parents=True,exist_ok=True)
+    consecutive_unsafe=0
     while True:
         now_ms=time.time_ns()//1_000_000
         try:
@@ -42,6 +44,9 @@ def main()->int:
                "maximum_absolute_offset_ms":args.maximum_absolute_offset_ms}
         tmp=args.output.with_suffix(args.output.suffix+".tmp")
         tmp.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8");tmp.replace(args.output)
+        consecutive_unsafe = 0 if safe else consecutive_unsafe + 1
+        if consecutive_unsafe >= args.fail_after_consecutive_unsafe:
+            return 2
         time.sleep(args.interval_seconds)
 
 if __name__=="__main__":raise SystemExit(main())
