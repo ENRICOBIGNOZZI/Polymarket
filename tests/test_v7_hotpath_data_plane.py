@@ -27,7 +27,9 @@ def test_repricing_book_observer_covers_all_runtime_contexts_outside_hot_path():
     assert 'if (options.fair_only)' in observer
     assert '--selection "$RUN_ROOT/universe/book_selection.json" --selection-only' in loop
     assert '--output-dir "$RUN_ROOT/research/repricing_book"' in loop
-    observer_launch = loop.split('v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"',1)[1].split('v7_register_optional_child',1)[0]
+    marker='v7_exec_class LATENCY_OBSERVER "$FILLABILITY_OBSERVER"'
+    assert marker in loop
+    observer_launch = loop.split(marker,1)[1].split('v7_register_optional_child',1)[0]
     assert '--fair-only' not in observer_launch
     for field in (
         '"subscribed_markets"', '"subscribed_tokens"',
@@ -36,7 +38,7 @@ def test_repricing_book_observer_covers_all_runtime_contexts_outside_hot_path():
     ):
         assert field in observer
     rows = {row['id']: row for row in manifest['processes']}
-    assert rows['pm_book_observer']['runtime_class'] == 'COLLECTOR'
+    assert rows['pm_book_observer']['runtime_class'] == 'LATENCY_OBSERVER'
     assert rows['crypto_settlement_engine']['runtime_class'] == 'HOT_PATH'
     assert rows['crypto_settlement_engine']['dependencies'] == []
     assert 'v7_assert_registered_child_count 30' in loop
