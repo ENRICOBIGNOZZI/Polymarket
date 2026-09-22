@@ -58,7 +58,8 @@ add_library(pm_v7_common
   src/v7_native_order_tx.cpp
   src/v7_native_settlement_authority.cpp
   src/v7_native_paper_execution.cpp
-  src/v7_native_runtime_evidence.cpp)
+  src/v7_native_runtime_evidence.cpp
+  src/v7_native_latency_tape.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json Threads::Threads)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -343,9 +344,23 @@ if(BUILD_TESTING)
   add_test(NAME pm_v7_native_runtime_evidence_tests
     COMMAND pm_v7_native_runtime_evidence_tests)
 
+  add_executable(pm_v7_native_latency_tape_tests
+    tests/test_v7_native_latency_tape.cpp)
+  target_link_libraries(pm_v7_native_latency_tape_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_native_latency_tape_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_native_latency_tape_tests
+    COMMAND pm_v7_native_latency_tape_tests)
+
   add_executable(pm_v7_native_clob_order_lane_driver tests/v7_native_clob_order_lane_driver.cpp)
   target_link_libraries(pm_v7_native_clob_order_lane_driver PRIVATE pm_v7_account_native)
   target_compile_options(pm_v7_native_clob_order_lane_driver PRIVATE -UNDEBUG)
+
+  add_executable(pm_v7_user_oms_bridge_latency_tests
+    tests/test_v7_user_oms_bridge_latency.cpp)
+  target_link_libraries(pm_v7_user_oms_bridge_latency_tests PRIVATE pm_v7_account_native)
+  target_compile_options(pm_v7_user_oms_bridge_latency_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_user_oms_bridge_latency_tests
+    COMMAND pm_v7_user_oms_bridge_latency_tests)
 
   add_executable(pm_v7_clob_rate_limit_tests tests/test_v7_clob_rate_limit.cpp)
   target_link_libraries(pm_v7_clob_rate_limit_tests PRIVATE pm_v7_clob_native)
