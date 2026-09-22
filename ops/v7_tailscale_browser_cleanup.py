@@ -82,6 +82,8 @@ def wait_for_human_2sv(page, timeout_s: int=420) -> bool:
             for pattern in (
                 r"Google Prompt", r"Tap Yes", r"Check your phone",
                 r"Use your phone", r"Get a prompt",
+                r"Controlla il telefono", r"Tocca Sì", r"Usa il telefono",
+                r"Ricevi un prompt",
             ):
                 chosen=first_visible(page.get_by_text(re.compile(pattern,re.I)))
                 if chosen is not None:
@@ -155,35 +157,65 @@ def login(page,email,password):
         except Exception:
             body=page.locator("body").inner_text(timeout=5000)
             lower=body.lower()
-            if any(marker.lower() in lower for marker in INTERACTIVE_MARKERS):
-                if not wait_for_human_2sv(page):
+            safe_url=page.url.split("?")[0][:180]
+            safe_flags={
+                "identifier": "/signin/identifier" in page.url,
+                "challenge": "/challenge/" in page.url,
+                "account_chooser": ("choose an account" in lower or "scegli un account" in lower),
+                "verify": any(x in lower for x in (
+                    "verify it's you","confirm it's you","2-step verification",
+                    "check your phone","tap yes","passkey",
+                    "verifica che sia tu","conferma la tua identità",
+                    "verifica in due passaggi","controlla il telefono",
+                    "tocca sì","passkey"
+                )),
+                "browser_blocked": any(x in lower for x in (
+                    "couldn’t sign you in","couldn't sign you in",
+                    "browser or app may not be secure",
+                    "impossibile accedere","browser o app potrebbero non essere sicuri"
+                )),
+            }
+            print("tailnet_cleanup_google_intermediate="+json.dumps(
+                {"url":safe_url,**safe_flags},sort_keys=True
+            ),flush=True)
+            if safe_flags["browser_blocked"]:
+                raise RuntimeError("google_browser_blocked")
+            if safe_flags["identifier"]:
+                if "couldn’t find your google account" in lower or "couldn't find your google account" in lower:
+                    raise RuntimeError("google_account_not_found")
+                if "enter a valid email" in lower or "inserisci un indirizzo email valido" in lower:
+                    raise RuntimeError("google_identifier_invalid")
+                raise RuntimeError("google_identifier_did_not_advance")
+            if "accounts.google.com" in page.url:
+                # Google may insert challenge/passkey/account-selection screens
+                # before or instead of the password screen. Wait through those
+                # flows rather than treating them as a missing password field.
+                if not wait_for_human_2sv(page,timeout_s=900):
                     raise RuntimeError("interactive_auth_timeout")
                 if "accounts.google.com" not in page.url:
                     password_box=None
                 else:
                     password_box=page.locator('input[name="Passwd"]')
-                    password_box.wait_for(state="visible",timeout=5000)
-            elif "accounts.google.com" not in page.url:
+                    try:
+                        password_box.wait_for(state="visible",timeout=10000)
+                    except Exception:
+                        # If the challenge itself completed authentication,
+                        # allow the final Tailscale redirect loop below to decide.
+                        password_box=None
+            else:
                 generic_password=first_visible(page.locator('input[type="password"]'))
                 if generic_password is None:
-                    raise RuntimeError("sso_password_field_missing")
-                generic_password.fill(password)
-                submit=first_visible(page.get_by_role("button",name=re.compile(r"Sign in|Log in|Next|Continue",re.I)))
-                if submit is None:
-                    submit=first_visible(page.locator('button[type="submit"], input[type="submit"]'))
-                if submit is None:
-                    raise RuntimeError("sso_submit_missing")
-                submit.click()
-                password_box=None
-                page.wait_for_timeout(1500)
-            elif "/signin/identifier" in page.url:
-                if "couldn’t find your google account" in lower or "couldn't find your google account" in lower:
-                    raise RuntimeError("google_account_not_found")
-                if "enter a valid email" in lower:
-                    raise RuntimeError("google_identifier_invalid")
-                raise RuntimeError("google_identifier_did_not_advance")
-            else:
-                raise RuntimeError("google_password_field_missing")
+                    password_box=None
+                else:
+                    generic_password.fill(password)
+                    submit=first_visible(page.get_by_role("button",name=re.compile(r"Sign in|Log in|Next|Continue",re.I)))
+                    if submit is None:
+                        submit=first_visible(page.locator('button[type="submit"], input[type="submit"]'))
+                    if submit is None:
+                        raise RuntimeError("sso_submit_missing")
+                    submit.click()
+                    password_box=None
+                    page.wait_for_timeout(1500)
         if password_box is not None:
             password_box.fill(password)
             nxt=first_visible(page.locator("#passwordNext")) or first_visible(page.get_by_role("button",name=re.compile(r"Next",re.I)))
