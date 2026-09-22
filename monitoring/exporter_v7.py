@@ -998,6 +998,22 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
         "polymarket_v7_native_rejected_decision_observations_total",
         native.get("native_rejected_decision_observations"),
     ))
+    lines.append(_metric(
+        "polymarket_v7_native_pure_arb_shadow_enabled",
+        native.get("pure_arb_shadow_enabled"),
+    ))
+    lines.append(_metric(
+        "polymarket_v7_native_pure_arb_shadow_observations_total",
+        native.get("native_pure_arb_shadow_observations"),
+    ))
+    lines.append(_metric(
+        "polymarket_v7_native_pure_arb_shadow_buy_cycles_total",
+        native.get("native_pure_arb_shadow_buy_cycles"),
+    ))
+    lines.append(_metric(
+        "polymarket_v7_native_pure_arb_shadow_sell_cycles_total",
+        native.get("native_pure_arb_shadow_sell_cycles"),
+    ))
     for reason, count in sorted((native.get("native_decision_reason_counts") or {}).items()):
         lines.append(_metric(
             "polymarket_v7_native_decision_reason_total", count, {"reason": reason}
