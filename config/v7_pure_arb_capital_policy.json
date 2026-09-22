@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_pure_arb_capital_policy_v1",
-  "version": 1,
+  "version": 2,
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
@@ -16,11 +16,29 @@
   "taker_transport_delay_ms_for_allocation": 5,
   "taker_inter_leg_skew_ms_for_allocation": 5,
   "maker_rebate_policy": "EXCLUDE_UNTIL_REALIZED_OR_VERIFIED",
-  "score": "CONSERVATIVE_EXPECTED_PNL_DIVIDED_BY_CAPITAL_TIME",
+  "score": "MARKET_CLUSTERED_CONSERVATIVE_PNL_DIVIDED_BY_CAPITAL_TIME",
   "confidence_z": 1.6448536269514722,
   "paper_budget_pusd": 10000,
   "collateral_asset": "pUSD",
   "complete_set_merge_fixed_cost_pusd": 0,
   "complete_set_merge_variable_cost_bps": 0,
-  "maker_cancel_relief_fraction_for_allocation": 0
+  "maker_cancel_relief_fraction_for_allocation": 0,
+  "minimum_independent_clusters": 5,
+  "bootstrap_block_size": 5,
+  "bootstrap_draws": 2000,
+  "bootstrap_alpha": 0.05,
+  "taker_execution_mode_for_allocation": "WORST_ACROSS_MODES",
+  "taker_required_execution_modes": [
+    "SEQUENTIAL",
+    "PARALLEL",
+    "BATCH"
+  ],
+  "taker_rebate_policy": "ANCILLARY_ONLY_IF_VERIFIED_DAILY_TIER",
+  "tail_risk_metrics": [
+    "P01",
+    "P05",
+    "EXPECTED_SHORTFALL_5PCT",
+    "WORST",
+    "MOVING_BLOCK_BOOTSTRAP_LOWER_95"
+  ]
 }
