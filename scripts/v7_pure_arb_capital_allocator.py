@@ -147,28 +147,29 @@ def taker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]
         groups[key].append(r)
     out=[]
     for key,rr in groups.items():
-        if allocation_mode=="WORST_ACROSS_MODES":
-            modes={str(x.get("execution_mode") or "SEQUENTIAL").upper() for x in rr}
-            required={str(x).upper() for x in policy.get(
-                "taker_required_execution_modes",["SEQUENTIAL","PARALLEL","BATCH"])}
-            if not required.issubset(modes):continue
+        required={str(x).upper() for x in policy.get(
+            "taker_required_execution_modes",["SEQUENTIAL","PARALLEL","BATCH"])}
         usable=[x for x in rr if isinstance(x.get("execution_pnl_after_reserve"),(int,float))]
         if not usable:continue
+        usable_by_mode=defaultdict(list)
+        for row in usable:
+            usable_by_mode[str(row.get("execution_mode") or "SEQUENTIAL").upper()].append(row)
+        if allocation_mode=="WORST_ACROSS_MODES":
+            # A censored mode is uncertainty, not a free option. Every required
+            # execution mode must have resolved PnL evidence before allocation.
+            if not required.issubset(set(usable_by_mode)):continue
         valid=True
-        for mode in {str(x.get("execution_mode") or "SEQUENTIAL").upper() for x in rr}:
+        modes_to_check=(required if allocation_mode=="WORST_ACROSS_MODES"
+                        else set(usable_by_mode))
+        for mode in modes_to_check:
             if mode=="BATCH":continue
-            orderings={str(x.get("leg_order")) for x in rr
-                       if str(x.get("execution_mode") or "SEQUENTIAL").upper()==mode}
-            if len(orderings)<2:valid=False
+            orderings={str(x.get("leg_order")) for x in usable_by_mode.get(mode,())}
+            if not {"YES_FIRST","NO_FIRST"}.issubset(orderings):valid=False
         if not valid:continue
         worst=min(usable,key=lambda x:float(x["execution_pnl_after_reserve"]))
         if allocation_mode=="BEST_VERIFIED_MODE":
-            by_mode={}
-            for row in usable:
-                mode=str(row.get("execution_mode") or "SEQUENTIAL").upper()
-                by_mode.setdefault(mode,[]).append(row)
             mode_worst=[min(group,key=lambda x:float(x["execution_pnl_after_reserve"]))
-                        for group in by_mode.values()]
+                        for group in usable_by_mode.values()]
             worst=max(mode_worst,key=lambda x:float(x["execution_pnl_after_reserve"]))
         q=float(worst.get("target_shares") or 0)
         yp=float(worst.get("revalidation_yes_price") or 0)
