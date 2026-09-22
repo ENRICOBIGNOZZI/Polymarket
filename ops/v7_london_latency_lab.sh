@@ -99,12 +99,41 @@ run_sign pgo-use
 
 soft_before="$(awk '/^softirq /{print $2}' /proc/stat 2>/dev/null || echo 0)"
 ctxt_before="$(awk '/^ctxt /{print $2}' /proc/stat 2>/dev/null || echo 0)"
-"$WORK/build-ipo/polymarket_v7_public_paired_tls_probe" \
-  --samples "$SAMPLES" --warmup 8 > "$OUT_DIR/public-paired-tls.json"
+drops_before="$(python3 - <<'PY'
+from pathlib import Path
+total=0
+for line in Path('/proc/net/dev').read_text().splitlines()[2:]:
+    _, raw=line.split(':',1); x=raw.split()
+    total += int(x[3]) + int(x[11])
+print(total)
+PY
+)"
+perf_used=0
+if command -v perf >/dev/null 2>&1 \
+   && perf stat -x, -o "$OUT_DIR/perf-check.csv" -e task-clock true >/dev/null 2>&1; then
+  perf_used=1
+  perf stat -x, -o "$OUT_DIR/perf-public.csv" \
+    -e task-clock,context-switches,cpu-migrations \
+    "$WORK/build-ipo/polymarket_v7_public_paired_tls_probe" \
+      --samples "$SAMPLES" --warmup 8 \
+      > "$OUT_DIR/public-paired-tls.json"
+else
+  "$WORK/build-ipo/polymarket_v7_public_paired_tls_probe" \
+    --samples "$SAMPLES" --warmup 8 > "$OUT_DIR/public-paired-tls.json"
+fi
 soft_after="$(awk '/^softirq /{print $2}' /proc/stat 2>/dev/null || echo 0)"
 ctxt_after="$(awk '/^ctxt /{print $2}' /proc/stat 2>/dev/null || echo 0)"
+drops_after="$(python3 - <<'PY'
+from pathlib import Path
+total=0
+for line in Path('/proc/net/dev').read_text().splitlines()[2:]:
+    _, raw=line.split(':',1); x=raw.split()
+    total += int(x[3]) + int(x[11])
+print(total)
+PY
+)"
 
-python3 - "$OUT_DIR" "$SHA" "$soft_before" "$soft_after" "$ctxt_before" "$ctxt_after" <<'PY'
+python3 - "$OUT_DIR" "$SHA" "$soft_before" "$soft_after" "$ctxt_before" "$ctxt_after" "$drops_before" "$drops_after" "$perf_used" <<'PY'
 import json,sys
 from pathlib import Path
 root=Path(sys.argv[1]); sha=sys.argv[2]
@@ -117,6 +146,18 @@ def sign(d):
 def candidate(test,base):
     return test["p99"] <= base["p99"]*.90 and test["p999"] <= base["p999"]
 b=sign(base); i=sign(ipo); p=sign(pgo)
+perf={}
+if sys.argv[9]=="1":
+    path=root/"perf-public.csv"
+    if path.exists():
+        for raw in path.read_text().splitlines():
+            if not raw or raw.startswith('#'): continue
+            fields=raw.split(',')
+            if len(fields)<3: continue
+            value=fields[0].strip().replace('<not counted>','').replace('<not supported>','')
+            event=fields[2].strip()
+            try: perf[event]=float(value)
+            except Exception: pass
 summary={
  "schema":"polymarket_v7_london_latency_lab_v1",
  "sha":sha,
@@ -135,6 +176,8 @@ summary={
  "host_counters_delta":{
    "softirq":max(0,int(sys.argv[4])-int(sys.argv[3])),
    "context_switches":max(0,int(sys.argv[6])-int(sys.argv[5])),
+   "network_drops":max(0,int(sys.argv[8])-int(sys.argv[7])),
+   "perf":perf,
  },
 }
 (root/"summary.json").write_text(json.dumps(summary,sort_keys=True)+"\n")
