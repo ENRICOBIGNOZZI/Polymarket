@@ -10,18 +10,21 @@ PROGRAM = r'''
 #include <cassert>
 using namespace pm::v7::clob;
 int main(){
- constexpr long long S=1000000000LL;
- LaneRateConfig order{{2,10*S},{4,60*S}};
- LaneRateConfig cancel{{1,10*S},{2,60*S}};
- ClobRateLimiter r(order,cancel);
- assert(r.try_acquire(RateLane::Order,0));
- assert(r.try_acquire(RateLane::Order,0));
- assert(!r.try_acquire(RateLane::Order,0));
- assert(r.try_acquire(RateLane::Cancel,0));
- assert(!r.try_acquire(RateLane::Cancel,0));
- assert(r.try_acquire(RateLane::Cancel,10*S));
- assert(r.try_acquire(RateLane::Order,10*S));
- assert(!r.try_acquire(RateLane::Order,9*S));
+ constexpr long long T0=1;
+ constexpr long long STEP=25'000'000LL;
+ ClobRateLimiter r;
+ // Standard tier starts with independent 60-order and 120-cancel bursts.
+ for(int i=0;i<60;++i) assert(r.try_acquire(RateLane::Order,T0,1));
+ assert(!r.try_acquire(RateLane::Order,T0,1));
+ assert(r.try_acquire(RateLane::Cancel,T0,1));
+ auto snap=r.snapshot(T0);
+ assert(snap.order_tokens==0.0);
+ assert(snap.cancel_tokens==119.0);
+ // One Standard order token refills in 25ms; cancel bucket remains separate.
+ assert(r.try_acquire(RateLane::Order,T0+STEP,1));
+ snap=r.snapshot(T0+STEP);
+ assert(snap.order_tokens_consumed==61);
+ assert(snap.cancel_tokens_consumed==1);
  return 0;
 }
 '''
