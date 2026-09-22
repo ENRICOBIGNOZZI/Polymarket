@@ -9,12 +9,20 @@
   "fee_semantics": {
     "calculation_time": "MATCH_TIME",
     "settlement_asset": "USDC_VALUE",
-    "maker_fee_rate": 0.0,
+    "maker_fee_rate": 0,
     "market_fee_parameters_must_be_verified": true,
-    "legacy_buy_fee_in_shares_is_not_production_v2": true
+    "legacy_buy_fee_in_shares_is_not_production_v2": true,
+    "buy_collection_mode": "USDC_VALUE",
+    "supported_buy_collection_modes": [
+      "USDC_VALUE",
+      "SHARES_ON_BUY"
+    ],
+    "buy_collection_mode_source": "POLYMARKET_EXCHANGE_V2_UPGRADE_20260428",
+    "public_documentation_conflict_observed": true,
+    "alternative_buy_collection_mode_for_sensitivity": "SHARES_ON_BUY"
   },
   "maker_rebates": {
-    "crypto_reference_fraction": 0.20,
+    "crypto_reference_fraction": 0.2,
     "use_in_entry_gate": false,
     "account_as_ancillary_realized_pnl": true,
     "runtime_reverification_required": true
@@ -38,6 +46,7 @@
     "real_order_submission": false,
     "unknown_fee_policy": "NON_EXECUTABLE",
     "unknown_delay_policy": "NON_EXECUTABLE_TAKER",
-    "unknown_venue_mode_policy": "NO_NEW_RISK"
+    "unknown_venue_mode_policy": "NO_NEW_RISK",
+    "unverified_buy_collection_mode_policy": "NON_EXECUTABLE_TAKER"
   }
 }
