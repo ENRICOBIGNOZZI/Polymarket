@@ -107,6 +107,18 @@ def test_london_bootstrap_forwards_exact_sha_ci_reuse_to_stage_release():
     assert 'PM_V7_CI_REPOSITORY="$CI_REPOSITORY"' in bootstrap
 
 
+def test_london_bootstrap_precreates_service_owned_ci_receipts():
+    bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
+    install = next(
+        line for line in bootstrap.splitlines()
+        if 'sudo install -d -o "$SERVICE_USER"' in line
+    )
+    # The command continues on one long shell line in the canonical bootstrap.
+    assert '"$RUNTIME_ROOT"' in install
+    assert '"$RUNTIME_ROOT/by-sha"' in install
+    assert '"$RUNTIME_ROOT/ci-receipts"' in install
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
