@@ -1,0 +1,10 @@
+{
+  "schema": "polymarket_v7_london_tailscale_attach_v1",
+  "hostname": "polymarket-london-paper",
+  "prometheus_local_port": 9090,
+  "tailnet_port": 19091,
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "monitoring_only": true
+}
