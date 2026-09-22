@@ -34,24 +34,6 @@ struct NativeSettlementAuthorityResult {
     std::uint8_t capital_released_on_failure = 0;
 };
 
-enum class NativeSettlementPairReason : std::uint8_t {
-    Accepted = 1,
-    InvalidPair = 2,
-    FirstLegRejected = 3,
-    SecondLegRejectedRolledBack = 4,
-    RollbackFailed = 5,
-};
-
-struct NativeSettlementPairResult {
-    NativeSettlementAuthorityResult yes{};
-    NativeSettlementAuthorityResult no{};
-    NativeLifecycleResult rollback{};
-    NativeSettlementPairReason reason = NativeSettlementPairReason::InvalidPair;
-    std::int64_t risk_admitted_monotonic_ns = 0;
-    std::uint8_t accepted = 0;
-    std::uint8_t rollback_complete = 0;
-};
-
 struct NativeInventorySnapshot {
     std::uint64_t market_handle = 0;
     std::uint64_t instrument_handle = 0;
@@ -70,6 +52,25 @@ struct NativeLifecycleResult {
     std::uint8_t applied = 0;
     std::uint8_t terminal_retired = 0;
 };
+
+enum class NativeSettlementPairReason : std::uint8_t {
+    Accepted = 1,
+    InvalidPair = 2,
+    FirstLegRejected = 3,
+    SecondLegRejectedRolledBack = 4,
+    RollbackFailed = 5,
+};
+
+struct NativeSettlementPairResult {
+    NativeSettlementAuthorityResult yes{};
+    NativeSettlementAuthorityResult no{};
+    NativeLifecycleResult rollback{};
+    NativeSettlementPairReason reason = NativeSettlementPairReason::InvalidPair;
+    std::int64_t risk_admitted_monotonic_ns = 0;
+    std::uint8_t accepted = 0;
+    std::uint8_t rollback_complete = 0;
+};
+
 
 // Single in-process owner for the native CRYPTO_SETTLEMENT_ENGINE admission,
 // inventory, maker lifecycle and OMS chain. Candidate generators never reserve
