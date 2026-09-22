@@ -28,6 +28,9 @@ def _driver() -> Path:
         ROOT / "build-Release" / "pm_v7_native_clob_order_lane_driver",
         ROOT / "build-Debug" / "pm_v7_native_clob_order_lane_driver",
     ]
+    candidates.extend(sorted(
+        ROOT.glob("build*/pm_v7_native_clob_order_lane_driver")
+    ))
     for path in candidates:
         if path.is_file():
             return path
