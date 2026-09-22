@@ -144,6 +144,19 @@ def test_latency_failure_surfaces_bounded_partial_evidence():
     assert 'exit "$lab_rc"' in ssm
 
 
+def test_multipath_outputs_are_service_user_owned_and_latency_evidence_survives_failure():
+    multipath = (ROOT / "ops/v7_london_multipath_ssm.py").read_text()
+    workflow = (ROOT / ".github/workflows/v7-london-aws-provision.yml").read_text()
+    assert 'rm -rf "$OUT"' in multipath
+    assert 'install -d -o {service_user}' in multipath
+    assert 'stat -c \'%U\' "$OUT"' in multipath
+    assert "trap 'tar -C \"$out\" -czf \"$RUNNER_TEMP/london-latency-results.tgz\" . || true' EXIT" in workflow
+    assert "if: always() && env.PHASE == 'latency-lab'" in workflow
+    shootout = workflow.index('cat "$out/latency.$EXPECTED_SHA.shootout.json"')
+    multipath_call = workflow.index("python3 ops/v7_london_multipath_ssm.py", shootout)
+    assert shootout < multipath_call
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
