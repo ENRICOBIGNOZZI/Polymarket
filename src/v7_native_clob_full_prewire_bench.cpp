@@ -96,11 +96,21 @@ int main(int argc, char** argv) {
     std::vector<std::int64_t> limiter_ns;
     std::vector<std::int64_t> amount_ns;
     std::vector<std::int64_t> sign_ns;
+    std::vector<std::int64_t> dynamic_fields_ns;
+    std::vector<std::int64_t> order_struct_hash_ns;
+    std::vector<std::int64_t> poly_digest_ns;
+    std::vector<std::int64_t> secp_sign_ns;
+    std::vector<std::int64_t> signature_wrap_ns;
     std::vector<std::int64_t> frame_ns;
     std::vector<std::int64_t> total_ns;
     limiter_ns.reserve(samples);
     amount_ns.reserve(samples);
     sign_ns.reserve(samples);
+    dynamic_fields_ns.reserve(samples);
+    order_struct_hash_ns.reserve(samples);
+    poly_digest_ns.reserve(samples);
+    secp_sign_ns.reserve(samples);
+    signature_wrap_ns.reserve(samples);
     frame_ns.reserve(samples);
     total_ns.reserve(samples);
 
@@ -153,12 +163,25 @@ int main(int argc, char** argv) {
             return 70;
         }
 
+        const auto fields_done = ns_now();
+        clob_eip712::Hash32 contents{}, digest{};
+        std::array<std::uint8_t, poly1271::kEvmSignatureBytes> inner_signature{};
         std::array<char, poly1271::kWrappedSignatureHexChars> signature{};
-        if (!poly1271::sign_prepared_poly1271_hex(
-                order_hasher, poly_hasher, signer, salt_value,
-                amounts.maker_amount, amounts.taker_amount,
-                timestamp_ms, signature)) {
+
+        if (!order_hasher.struct_hash_u64(
+                salt_value, amounts.maker_amount, amounts.taker_amount,
+                timestamp_ms, contents)) {
             return 71;
+        }
+        const auto struct_done = ns_now();
+        if (!poly_hasher.digest(contents, digest)) return 73;
+        const auto poly_done = ns_now();
+        if (!signer.sign_digest(digest, inner_signature)) return 74;
+        const auto secp_done = ns_now();
+        if (!poly1271::wrap_signature_hex(
+                inner_signature, order_hasher.domain_separator(),
+                contents, signature)) {
+            return 75;
         }
         const auto t2 = ns_now();
 
@@ -175,6 +198,11 @@ int main(int argc, char** argv) {
         limiter_ns.push_back(rl1 - rl0);
         amount_ns.push_back(t1 - rl1);
         sign_ns.push_back(t2 - t1);
+        dynamic_fields_ns.push_back(fields_done - t1);
+        order_struct_hash_ns.push_back(struct_done - fields_done);
+        poly_digest_ns.push_back(poly_done - struct_done);
+        secp_sign_ns.push_back(secp_done - poly_done);
+        signature_wrap_ns.push_back(t2 - secp_done);
         frame_ns.push_back(t3 - t2);
         total_ns.push_back(t3 - t0);
     }
@@ -188,6 +216,11 @@ int main(int argc, char** argv) {
     print_dist("rate_limit_check", limiter_ns); std::cout << ',';
     print_dist("amounts", amount_ns); std::cout << ',';
     print_dist("prepared_poly1271_sign", sign_ns); std::cout << ',';
+    print_dist("dynamic_fields", dynamic_fields_ns); std::cout << ',';
+    print_dist("order_struct_hash", order_struct_hash_ns); std::cout << ',';
+    print_dist("poly1271_digest", poly_digest_ns); std::cout << ',';
+    print_dist("secp256k1_sign", secp_sign_ns); std::cout << ',';
+    print_dist("signature_wrap_hex", signature_wrap_ns); std::cout << ',';
     print_dist("zero_copy_post", frame_ns); std::cout << ',';
     print_dist("total", total_ns);
     std::cout << "}}\n";
