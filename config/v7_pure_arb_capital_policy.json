@@ -33,7 +33,7 @@
     "PARALLEL",
     "BATCH"
   ],
-  "taker_rebate_policy": "ANCILLARY_ONLY_IF_VERIFIED_DAILY_TIER",
+  "taker_rebate_policy": "REFERENCE_ONLY_UNTIL_REALIZED_TRADE_ATTRIBUTION_VERIFIED",
   "tail_risk_metrics": [
     "P01",
     "P05",
