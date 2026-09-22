@@ -90,6 +90,12 @@ def test_three_az_bootstrap_repairs_git_metadata_ownership_before_fetch():
     assert 'chown -R {service_user}:"$SERVICE_GROUP" "$APP/.git"' in bootstrap
 
 
+def test_london_bootstrap_owns_runtime_receipt_roots_for_service_user():
+    bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
+    assert '"$RUNTIME_ROOT" "$RUNTIME_ROOT/by-sha" "$RUNTIME_ROOT/ci-receipts"' in bootstrap
+    assert '"$ARTIFACT_ROOT" "$ARTIFACT_ROOT/by-sha"' in bootstrap
+
+
 def test_london_bootstrap_propagates_exact_sha_ci_reuse_to_stage_release():
     bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
     assert 'REUSE_EXACT_SHA_CI="${POLYMARKET_REUSE_EXACT_SHA_CI:-0}"' in bootstrap
