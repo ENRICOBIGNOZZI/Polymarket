@@ -9,11 +9,28 @@ PLUGINS="$BASE/plugins"
 DATA="$BASE/data"
 CFG="$BASE/config/grafana.ini"
 
-test -f "$PROV/dashboards/v7.yml"
 test -f "$DASH/polymarket-v7-pure-arb.json"
-grep -q 'folder: Polymarket London' "$PROV/dashboards/v7.yml"
-grep -q "path: $DASH" "$PROV/dashboards/v7.yml"
+mkdir -p "$PROV/dashboards" "$DASH" "$LOGS" "$PLUGINS" "$DATA"
 
+cat > "$PROV/dashboards/v7.yml" <<YAML
+apiVersion: 1
+providers:
+  - name: Polymarket V7 Crypto
+    orgId: 1
+    folder: Polymarket London
+    folderUid: afyms0c1xjabkf
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 5
+    options:
+      path: $DASH
+      foldersFromFilesStructure: false
+YAML
+
+grep -q 'folder: Polymarket London' "$PROV/dashboards/v7.yml"
+grep -q 'folderUid: afyms0c1xjabkf' "$PROV/dashboards/v7.yml"
+grep -q "path: $DASH" "$PROV/dashboards/v7.yml"
 rm -f "$PROV/dashboards/v7-pure-arb.yml"
 
 pkill -TERM -f '/opt/homebrew/bin/grafana server' 2>/dev/null || true
