@@ -55,13 +55,38 @@ def read(path:Path)->list[dict[str,int]]:
         rows.append(row)
     return rows
 
-def summarize(rows:list[dict[str,int]])->dict:
-    samples={name:[] for name,_,_ in SEGMENTS}
+def coalesce(rows:list[dict[str,int]])->list[dict[str,int]]:
+    merged:dict[int,dict[str,int]]={}
     for row in rows:
+        trace_id=row["trace_id"]
+        current=merged.setdefault(trace_id,{key:0 for key in FIELDS})
+        current["version"]=1
+        current["trace_id"]=trace_id
+        current["valid_mask"] |= row["valid_mask"]
+        for key in FIELDS:
+            if key in {"version","valid_mask","trace_id"}:continue
+            value=row[key]
+            if value<=0:continue
+            prior=current[key]
+            if key.endswith("_monotonic_ns") or key in {
+                "frame_receive","decode_complete","arb_decision","risk_admitted",
+                "sign_start","sign_done","wire_start","wire_complete","http_ack",
+                "user_ws_match",
+            }:
+                if prior==0 or value<prior:current[key]=value
+            elif prior==0:
+                current[key]=value
+    return [merged[key] for key in sorted(merged)]
+
+def summarize(rows:list[dict[str,int]])->dict:
+    traces=coalesce(rows)
+    samples={name:[] for name,_,_ in SEGMENTS}
+    for row in traces:
         for name,start,end in SEGMENTS:
             a,b=row[start],row[end]
             if a>0 and b>=a:samples[name].append(b-a)
-    return {"schema":"polymarket_v7_latency_trace_summary_v1","record_count":len(rows),
+    return {"schema":"polymarket_v7_latency_trace_summary_v1",
+            "record_count":len(rows),"trace_count":len(traces),
             "units":"nanoseconds","segments":{name:dist(samples[name]) for name,_,_ in SEGMENTS}}
 
 def main()->int:
