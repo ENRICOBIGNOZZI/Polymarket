@@ -436,6 +436,7 @@ class Shadow:
             ) / n if n else None,
             "mean_total_shadow_pnl": sum(pnls) / len(pnls) if pnls else None,
             "sum_total_shadow_pnl": sum(pnls) if pnls else 0.0,
+            "total_legging_loss": sum(legging) if legging else 0.0,
             "mean_legging_loss": sum(legging) / len(legging) if legging else None,
             "funnel": dict(self.funnel),
             "cancels": dict(self.cancels),
