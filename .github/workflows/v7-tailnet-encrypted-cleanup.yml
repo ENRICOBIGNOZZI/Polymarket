@@ -6,6 +6,7 @@ on:
     paths:
       - deploy/v7-tailnet-encrypted-cleanup-request.json
       - .github/workflows/v7-tailnet-encrypted-cleanup.yml
+      - ops/v7_tailscale_browser_cleanup.py
 
 # recovery-trigger-20260922-final
 permissions:
