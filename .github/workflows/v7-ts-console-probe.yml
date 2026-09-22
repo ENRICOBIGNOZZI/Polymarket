@@ -1,0 +1,300 @@
+name: V7 Tailscale console read-only probe
+
+on:
+  push:
+    branches:
+      - ops/v7-ts-console-probe-20260922
+    paths:
+      - deploy/v7-ts-console-probe-request.json
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      BRIDGE_BRANCH: ops/v7-ts-console-probe-20260922
+      REQUEST_PATH: deploy/v7-ts-console-probe-request.json
+      PUBLIC_CERT_PATH: deploy/v7-ts-console-probe-public.crt
+      PUBLIC_META_PATH: deploy/v7-ts-console-probe-public.json
+      PAYLOAD_PATH: deploy/v7-ts-console-probe-payload.json
+      RESULT_PATH: deploy/v7-ts-console-probe-result.json
+
+    steps:
+      - name: Checkout bridge
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.BRIDGE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Validate request
+        id: req
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST_PATH" "$GITHUB_OUTPUT" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v=={"schema":"polymarket_v7_ts_console_probe_v1","read_only":True,"request_nonce":"ts-console-probe-20260922-v1"}
+          with open(sys.argv[2],'a') as h: h.write("nonce="+v["request_nonce"]+"\n")
+          PY
+
+      - name: Publish ephemeral certificate
+        env:
+          NONCE: ${{ steps.req.outputs.nonce }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/key.pem"
+          cert="$RUNNER_TEMP/cert.pem"
+          openssl req -x509 -newkey rsa:3072 -sha256 -days 1 -nodes             -keyout "$key" -out "$cert"             -subj "/CN=polymarket-v7-ts-console-${GITHUB_RUN_ID}" >/dev/null 2>&1
+          chmod 600 "$key"
+          cp "$cert" "$PUBLIC_CERT_PATH"
+          cert_sha="$(sha256sum "$cert" | awk '{print $1}')"
+          python3 - "$PUBLIC_META_PATH" "$NONCE" "$cert_sha" "$GITHUB_RUN_ID" <<'PY'
+          import json,sys,time
+          open(sys.argv[1],"w").write(json.dumps({
+            "schema":"polymarket_v7_ts_console_probe_public_v1",
+            "request_nonce":sys.argv[2],
+            "cert_sha256":sys.argv[3],
+            "run_id":int(sys.argv[4]),
+            "created_at":int(time.time())
+          },sort_keys=True,indent=2)+"\n")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$PUBLIC_CERT_PATH" "$PUBLIC_META_PATH"
+          git commit -m "ops(v7): publish Tailscale console probe certificate [skip ci]"
+          git push origin "HEAD:$BRIDGE_BRANCH"
+          echo "cert_sha=$cert_sha" >> "$GITHUB_ENV"
+
+      - name: Wait for encrypted credentials
+        env:
+          NONCE: ${{ steps.req.outputs.nonce }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for _ in $(seq 1 160); do
+            git fetch --quiet origin "$BRIDGE_BRANCH"
+            if git cat-file -e "origin/$BRIDGE_BRANCH:$PAYLOAD_PATH" 2>/dev/null; then
+              git show "origin/$BRIDGE_BRANCH:$PAYLOAD_PATH" > "$RUNNER_TEMP/payload.json"
+              if python3 - "$RUNNER_TEMP/payload.json" "$NONCE" "$cert_sha" "$GITHUB_RUN_ID" <<'PY'
+          import base64,json,sys
+          from pathlib import Path
+          v=json.load(open(sys.argv[1]))
+          assert v.get("schema")=="polymarket_v7_ts_console_probe_payload_v1"
+          assert v.get("request_nonce")==sys.argv[2]
+          assert v.get("cert_sha256")==sys.argv[3]
+          assert int(v.get("run_id") or 0)==int(sys.argv[4])
+          raw=base64.b64decode(v["cms_der_b64"],validate=True)
+          Path("/tmp/ts-console.cms").write_bytes(raw)
+          PY
+              then found=1; break; fi
+            fi
+            sleep 3
+          done
+          test "$found" = 1
+
+      - name: Decrypt in memory
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl cms -decrypt -binary -inform DER             -in /tmp/ts-console.cms             -recip "$RUNNER_TEMP/cert.pem"             -inkey "$RUNNER_TEMP/key.pem"             -out "$RUNNER_TEMP/login.json"
+          python3 - "$RUNNER_TEMP/login.json" "$GITHUB_ENV" <<'PY'
+          import json,secrets,sys
+          v=json.load(open(sys.argv[1]))
+          assert set(v)=={"TAILSCALE_EMAIL","TAILSCALE_PASSWORD"}
+          for k,val in v.items():
+            print(f"::add-mask::{val}")
+            d="TS_"+secrets.token_hex(8)
+            with open(sys.argv[2],"a") as h: h.write(f"{k}<<{d}\n{val}\n{d}\n")
+          PY
+          rm -f /tmp/ts-console.cms "$RUNNER_TEMP/login.json"
+          shred -u "$RUNNER_TEMP/key.pem" 2>/dev/null || rm -f "$RUNNER_TEMP/key.pem"
+
+      - name: Install browser
+        run: |
+          python3 -m pip install --quiet playwright
+          python3 -m playwright install --with-deps chromium >/dev/null
+
+      - name: Login and inspect machines read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/probe.py" <<'PY'
+          import json,os,re,time
+          from pathlib import Path
+          from urllib.parse import urlparse
+          from playwright.sync_api import sync_playwright
+
+          email=os.environ["TAILSCALE_EMAIL"]
+          password=os.environ["TAILSCALE_PASSWORD"]
+          out=Path(os.environ["RESULT_PATH"])
+          result={
+            "schema":"polymarket_v7_ts_console_probe_result_v1",
+            "authenticated":False,
+            "mfa_required":False,
+            "final_host":"",
+            "final_path":"",
+            "page_title":"",
+            "visible_inputs":[],
+            "device_names":[],
+            "body_markers":[]
+          }
+
+          def visible_inputs(page):
+              vals=[]
+              for sel in ["input:visible"]:
+                  loc=page.locator(sel)
+                  for i in range(min(loc.count(),20)):
+                      el=loc.nth(i)
+                      vals.append({
+                        "type":el.get_attribute("type") or "",
+                        "placeholder":el.get_attribute("placeholder") or "",
+                        "name":el.get_attribute("name") or ""
+                      })
+              return vals
+
+          def click_named(page, patterns):
+              for pat in patterns:
+                  b=page.get_by_role("button",name=re.compile(pat,re.I))
+                  if b.count():
+                      try:
+                          b.first.click()
+                          return True
+                      except Exception:
+                          pass
+              return False
+
+          with sync_playwright() as p:
+              browser=p.chromium.launch(headless=True)
+              ctx=browser.new_context()
+              page=ctx.new_page()
+              page.goto("https://console.tailscale.com/admin/machines",wait_until="domcontentloaded",timeout=120000)
+              deadline=time.time()+120
+              while time.time()<deadline:
+                  host=(urlparse(page.url).hostname or "").lower()
+                  path=urlparse(page.url).path
+                  try:
+                      body=page.locator("body").inner_text(timeout=5000)
+                  except Exception:
+                      body=""
+                  low=body.lower()
+                  inputs=visible_inputs(page)
+
+                  # Tailscale's own email gate can live on console.tailscale.com.
+                  email_gate=page.locator('input[placeholder*="email" i]:visible')
+                  if email_gate.count() and not host.endswith("accounts.google.com"):
+                      try:
+                          email_gate.first.fill(email)
+                          if not click_named(page,["continue","sign in","log in","next"]):
+                              page.keyboard.press("Enter")
+                          page.wait_for_timeout(1800)
+                          continue
+                      except Exception:
+                          pass
+
+                  if host.endswith("accounts.google.com"):
+                      em=page.locator('input[type="email"]:visible')
+                      pw=page.locator('input[type="password"]:visible')
+                      if em.count():
+                          em.first.fill(email)
+                          if not click_named(page,["next"]): page.keyboard.press("Enter")
+                          page.wait_for_timeout(1800); continue
+                      if pw.count():
+                          pw.first.fill(password)
+                          if not click_named(page,["next"]): page.keyboard.press("Enter")
+                          page.wait_for_timeout(2200); continue
+                      if any(x in low for x in ["2-step verification","verify it’s you","verify it's you","check your phone","authenticator","security key","tap yes"]):
+                          result["mfa_required"]=True
+                          break
+
+                  # Generic consent/continue step.
+                  if click_named(page,["^continue$","^allow$"]):
+                      page.wait_for_timeout(1400); continue
+
+                  # Authenticated only when no login form remains and page content looks like Machines UI.
+                  login_input_present=any(
+                      ("email" in (x["placeholder"]+x["name"]).lower()) or x["type"]=="password"
+                      for x in inputs
+                  )
+                  authenticated_host=host.endswith("console.tailscale.com") and path.startswith("/admin")
+                  machine_ui=any(x in low for x in ["machines","devices","machine"])
+                  if authenticated_host and machine_ui and not login_input_present:
+                      result["authenticated"]=True
+                      break
+
+                  page.wait_for_timeout(1000)
+
+              result["final_host"]=urlparse(page.url).hostname or ""
+              result["final_path"]=urlparse(page.url).path
+              result["page_title"]=page.title()
+              result["visible_inputs"]=visible_inputs(page)
+
+              try:
+                  body=page.locator("body").inner_text(timeout=10000)
+              except Exception:
+                  body=""
+              low=body.lower()
+              for marker in ["machines","devices","enter your email","2-step verification","verify it’s you","verify it's you","offline","online"]:
+                  if marker in low:
+                      result["body_markers"].append(marker)
+
+              if result["authenticated"]:
+                  # Collect visible device-like identifiers without mutating anything.
+                  patterns=[
+                    r"github-runnervm[a-z0-9-]*",
+                    r"gh-(?:deploy|health|freeze|inventory|mamma-[a-z0-9-]+)-[a-z0-9-]+",
+                    r"mamma-portfolio",
+                    r"enrico.?s macbook air[^\n]*",
+                  ]
+                  names=set()
+                  for pat in patterns:
+                      names.update(re.findall(pat,body,re.I))
+                  # Use the page's search box if available to surface virtualized CI rows.
+                  search=None
+                  for sel in ['input[placeholder*="search" i]:visible','input[type="search"]:visible']:
+                      loc=page.locator(sel)
+                      if loc.count():
+                          search=loc.first
+                          break
+                  if search is not None:
+                      for term in ["github-runnervm","gh-deploy-","gh-health-","gh-freeze-","gh-inventory-"]:
+                          try:
+                              search.fill(term)
+                              page.wait_for_timeout(1200)
+                              txt=page.locator("body").inner_text(timeout=10000)
+                              for pat in patterns:
+                                  names.update(re.findall(pat,txt,re.I))
+                          except Exception:
+                              pass
+                      try: search.fill("")
+                      except Exception: pass
+                  result["device_names"]=sorted(names)[:200]
+
+              browser.close()
+
+          out.write_text(json.dumps(result,sort_keys=True,indent=2)+"\n")
+          if not result["authenticated"]:
+              raise SystemExit(3 if result["mfa_required"] else 2)
+          PY
+          rc=0
+          python3 "$RUNNER_TEMP/probe.py" || rc=$?
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$RESULT_PATH"
+          git commit -m "ops(v7): publish Tailscale console read-only probe [skip ci]"
+          git fetch --quiet origin "$BRIDGE_BRANCH"
+          git rebase "origin/$BRIDGE_BRANCH"
+          git push origin "HEAD:$BRIDGE_BRANCH"
+          exit "$rc"
+
+      - name: Clear credentials
+        if: always()
+        run: |
+          echo 'TAILSCALE_EMAIL=' >> "$GITHUB_ENV"
+          echo 'TAILSCALE_PASSWORD=' >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/login.json" /tmp/ts-console.cms || true
