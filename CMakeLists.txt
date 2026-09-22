@@ -58,6 +58,7 @@ add_library(pm_v7_common
   src/v7_native_order_tx.cpp
   src/v7_native_settlement_authority.cpp
   src/v7_native_paper_execution.cpp
+  src/v7_native_paper_pair_execution.cpp
   src/v7_native_runtime_evidence.cpp
   src/v7_latency_trace.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
