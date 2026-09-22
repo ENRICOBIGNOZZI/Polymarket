@@ -497,7 +497,7 @@ def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | Non
             continue
         if start <= now_s < close:
             active.setdefault(context, []).append(row)
-        elif horizon in {"M5", "M15"} and start > now_s:
+        elif start > now_s:
             future.setdefault(context, []).append(row)
 
     if set(active) != BOOK_CONTEXTS:
@@ -557,7 +557,7 @@ def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | Non
 
         horizon = current["horizon"]
         candidates = future.get(context) or []
-        if horizon in {"M5", "M15"} and candidates:
+        if candidates:
             candidates = sorted(
                 candidates,
                 key=lambda row: (
@@ -569,7 +569,9 @@ def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | Non
             earliest_start = int(candidates[0].get("window_start_unix") or 0)
             same_start = [row for row in candidates
                           if int(row.get("window_start_unix") or 0) == earliest_start]
-            if len(same_start) == 1:
+            always_preload = horizon in {"M5", "M15"}
+            near_rollover = 0 < earliest_start - now_s <= 300
+            if len(same_start) == 1 and (always_preload or near_rollover):
                 nxt = render_market(same_start[0], "NEXT")
                 if nxt is not None:
                     markets.append(nxt)
@@ -588,7 +590,7 @@ def build_book_selection(snapshot: dict[str, Any]) -> tuple[dict[str, Any] | Non
         "automatic_promotion": False,
         "selection_only": True,
         "active_only": False,
-        "preload_policy": "CURRENT_PLUS_NEXT_M5_M15",
+        "preload_policy": "CURRENT_PLUS_NEXT_M5_M15_AND_ALL_CONTEXTS_WITHIN_300S",
         "generated_at_ms": int(snapshot["timestamp_ms"]),
         "generation_sha256": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
         "active_market_count": active_count,
