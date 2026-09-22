@@ -170,6 +170,21 @@ def venue_policy(v:dict[str,Any])->dict[str,bool]:
     return {k:p.get(k) is True for k in ("new_taker","new_maker","cancel")}
 
 
+def verified_taker_rebate(path:Path|None,sha:str,now_ms:int)->tuple[bool,float,str|None]:
+    v=load(path)
+    if (v.get("schema")!="polymarket_v7_fee_reward_registry_v1"
+        or v.get("model_sha")!=sha or v.get("paper_only") is not True
+        or v.get("authenticated_execution") is not False
+        or v.get("real_order_submission") is not False):
+        return False,0.0,None
+    row=v.get("taker_rebate") if isinstance(v.get("taker_rebate"),dict) else {}
+    if row.get("verified") is not True:return False,0.0,None
+    try:fraction=float(row.get("rebate_fraction"));expires=int(row.get("expires_at_ms") or 0)
+    except (TypeError,ValueError,OverflowError):return False,0.0,None
+    if not(0<=fraction<=1 and expires>=now_ms):return False,0.0,None
+    return True,fraction,str(row.get("tier") or "") or None
+
+
 class Tail:
     def __init__(self,path:Path,sha:str):
         self.path,self.sha,self.handle=path,sha,None
@@ -451,7 +466,13 @@ class Shadow:
         base["taker_rebate_counterfactual_by_tier"]={
             name:entry_fees*fraction for _,fraction,name in TAKER_REBATE_TIERS
         }
-        base["verified_ancillary_taker_rebate_pusd"]=0.0
+        rebate_verified,rebate_fraction,rebate_tier=verified_taker_rebate(
+            self.args.fee_reward_registry,self.args.model_sha,time.time_ns()//1_000_000)
+        base["taker_rebate_verified"]=rebate_verified
+        base["taker_rebate_fraction"]=rebate_fraction if rebate_verified else 0.0
+        base["taker_rebate_tier"]=rebate_tier if rebate_verified else None
+        base["verified_ancillary_taker_rebate_pusd"]=(
+            entry_fees*rebate_fraction if rebate_verified else 0.0)
 
         if len(filled)==2:
             redemption=q if buy else -q
@@ -562,6 +583,7 @@ def main()->int:
     ap.add_argument("--market-terms-root",type=Path,required=True)
     ap.add_argument("--venue-mode",type=Path,required=True)
     ap.add_argument("--exchange-semantics",type=Path,required=True)
+    ap.add_argument("--fee-reward-registry",type=Path)
     ap.add_argument("--model-sha",required=True)
     ap.add_argument("--output",type=Path,required=True)
     ap.add_argument("--status",type=Path,required=True)
