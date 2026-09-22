@@ -561,6 +561,7 @@ v7_register_optional_child "$!"
 # observed mode remains DEGRADED while PAPER can run an explicitly labeled
 # NORMAL counterfactual. This can never grant authenticated execution.
 v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_venue_mode.py \
+  --source "$RUN_ROOT/control/venue_mode_source.json" \
   --output "$PURE_ARB_DIR/venue_mode_status.json" --model-sha "$SHA" \
   --paper-counterfactual-mode NORMAL --maximum-age-ms 5000 --interval-ms 1000 \
   >> "$PURE_ARB_DIR/venue_mode.log" 2>&1 &
