@@ -141,6 +141,15 @@ jobs:
       - name: Publish only to isolated research branch
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('docs/research/native-alpha-2h-2026-09-21')
+          for path in root.rglob('*.csv'):
+              raw=path.read_bytes()
+              normalized=raw.replace(b'\r\n',b'\n')
+              if normalized!=raw:
+                  path.write_bytes(normalized)
+          PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f "$OUTPUT_DIR"
