@@ -289,7 +289,8 @@ struct PureArbExecutionPlan {
         || input.minimum_order_microunits <= 0
         || input.maximum_leg_skew_ns <= 0
         || input.trigger_receive_monotonic_ns <= 0
-        || input.decision_monotonic_ns < input.trigger_receive_monotonic_ns
+        || (input.decision_monotonic_ns != 0
+            && input.decision_monotonic_ns < input.trigger_receive_monotonic_ns)
         || !std::isfinite(input.reserve_per_share)
         || input.reserve_per_share < 0.0) {
         out.reason = DecisionReason::InvalidInput;
