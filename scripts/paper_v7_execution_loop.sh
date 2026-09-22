@@ -501,6 +501,14 @@ v7_exec_class COLLECTOR python3 scripts/v7_combo_market_source.py \
   >> "$PURE_ARB_DIR/combo_market_source.log" 2>&1 &
 v7_register_optional_child "$!"
 
+# Authenticated RFQ data collector. Its only outbound application text frame
+# is AUTH; there is no implementation for RFQ quote/cancel/confirmation sends.
+v7_exec_class COLLECTOR python3 scripts/v7_combo_rfq_gateway_readonly.py \
+  --model-sha "$SHA" --tape "$PURE_ARB_DIR/combo_rfq_tape.jsonl" \
+  --status "$PURE_ARB_DIR/combo_rfq_gateway_status.json" \
+  >> "$PURE_ARB_DIR/combo_rfq_gateway.log" 2>&1 &
+v7_register_optional_child "$!"
+
 # RFQ pricing is shadow-only. The tape remains empty unless a separately
 # authorized read-only RFQ capture is supplied; this process never authenticates
 # or sends quote/cancel/confirmation messages.
@@ -808,7 +816,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 29
+v7_assert_registered_child_count 30
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
