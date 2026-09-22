@@ -58,6 +58,7 @@ add_library(pm_v7_common
   src/v7_native_order_tx.cpp
   src/v7_native_settlement_authority.cpp
   src/v7_native_paper_execution.cpp
+  src/v7_native_paper_pair_execution.cpp
   src/v7_native_runtime_evidence.cpp
   src/v7_native_latency_tape.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
@@ -336,6 +337,13 @@ if(BUILD_TESTING)
   target_compile_options(pm_v7_native_paper_execution_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_native_paper_execution_tests
     COMMAND pm_v7_native_paper_execution_tests)
+
+  add_executable(pm_v7_native_paper_pair_execution_tests
+    tests/test_v7_native_paper_pair_execution.cpp)
+  target_link_libraries(pm_v7_native_paper_pair_execution_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_native_paper_pair_execution_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_native_paper_pair_execution_tests
+    COMMAND pm_v7_native_paper_pair_execution_tests)
 
   add_executable(pm_v7_native_runtime_evidence_tests
     tests/test_v7_native_runtime_evidence.cpp)
