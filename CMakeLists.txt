@@ -339,6 +339,12 @@ if(BUILD_TESTING)
 
   add_test(NAME pm_v7_public_paired_clob_transport_probe_validate
     COMMAND polymarket_v7_public_paired_clob_transport_probe --validate-only)
+  add_test(NAME pm_v7_public_paired_clob_transport_probe_reject_busy_poll
+    COMMAND polymarket_v7_public_paired_clob_transport_probe
+      --socket-busy-poll-us 2001 --validate-only)
+  set_tests_properties(
+    pm_v7_public_paired_clob_transport_probe_reject_busy_poll
+    PROPERTIES WILL_FAIL TRUE)
   add_test(NAME pm_v7_crypto_settlement_native_candidate_validate
     COMMAND polymarket_v7_crypto_settlement_engine --validate-only)
   add_test(NAME pm_v7_pure_arb_multi_runtime_validate
