@@ -69,6 +69,15 @@ def test_three_az_bootstrap_repairs_only_disabled_benchmark_checkout():
     assert "PM_V7_CI_REPOSITORY=ENRICOBIGNOZZI/Polymarket" in bootstrap
 
 
+def test_three_az_bootstrap_repairs_checkout_ownership_before_git():
+    bootstrap = (ROOT / "ops/v7_london_ssm_bootstrap.py").read_text()
+    stopped = bootstrap.index("! systemctl is-active --quiet polymarket-v7-paper.service")
+    ownership = bootstrap.index("chown -R {service_user}")
+    fetch = bootstrap.index('git -C "$APP" fetch --no-tags origin main')
+    assert stopped < ownership < fetch
+    assert "stat -c '%U' \"$APP/.git\"" in bootstrap
+
+
 def test_london_bootstrap_dependencies_retrigger_latency_lab():
     bootstrap = (ROOT / "ops/v7_london_bootstrap.sh").read_text()
     workflow = (ROOT / ".github/workflows/v7-london-aws-provision.yml").read_text()
