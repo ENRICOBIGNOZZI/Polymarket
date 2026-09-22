@@ -39,6 +39,20 @@ def test_london_latency_lab_is_three_az_paper_only():
     assert '"matching_engine_latency_observed": False' in ssm
 
 
+def test_latency_lab_does_not_require_cutover_readiness():
+    workflow = (ROOT / ".github/workflows/v7-london-aws-provision.yml").read_text()
+    start = workflow.index('if [[ "$PHASE" != "latency-lab" ]]; then')
+    end = workflow.index("python3 - <<'PY'", start)
+    gate = workflow[start:end]
+    assert "v7_cutover_contract.py" in gate
+    assert "Latency hosts deliberately keep the PAPER runtime disabled" in gate
+    non_latency, latency = gate.split("else", 1)
+    assert "v7_cutover_contract.py" in non_latency
+    assert "v7_cutover_contract.py" not in latency
+    assert "v7_london_ssm_benchmark.py" in latency
+    assert "v7_london_ssm_bootstrap.py" in latency
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
