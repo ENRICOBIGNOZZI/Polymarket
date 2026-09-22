@@ -191,25 +191,12 @@ int main(int argc, char** argv) {
             return 70;
         }
 
-        const auto fields_done = ns_now();
-        clob_eip712::Hash32 contents{}, digest{};
-        std::array<std::uint8_t, poly1271::kEvmSignatureBytes> inner_signature{};
         std::array<char, poly1271::kWrappedSignatureHexChars> signature{};
-
-        if (!order_hasher.struct_hash_u64(
-                salt_value, amounts.maker_amount, amounts.taker_amount,
-                timestamp_ms, contents)) {
+        if (!poly1271::sign_prepared_poly1271_hex(
+                order_hasher, poly_hasher, signer, salt_value,
+                amounts.maker_amount, amounts.taker_amount,
+                timestamp_ms, signature)) {
             return 71;
-        }
-        const auto struct_done = ns_now();
-        if (!poly_hasher.digest(contents, digest)) return 73;
-        const auto poly_done = ns_now();
-        if (!signer.sign_digest(digest, inner_signature)) return 74;
-        const auto secp_done = ns_now();
-        if (!poly1271::wrap_signature_hex(
-                inner_signature, order_hasher.domain_separator(),
-                contents, signature)) {
-            return 75;
         }
         const auto t2 = ns_now();
 
@@ -226,13 +213,57 @@ int main(int argc, char** argv) {
         limiter_ns.push_back(rl1 - rl0);
         amount_ns.push_back(t1 - rl1);
         sign_ns.push_back(t2 - t1);
-        dynamic_fields_ns.push_back(fields_done - t1);
-        order_struct_hash_ns.push_back(struct_done - fields_done);
-        poly_digest_ns.push_back(poly_done - struct_done);
-        secp_sign_ns.push_back(secp_done - poly_done);
-        signature_wrap_ns.push_back(t2 - secp_done);
         frame_ns.push_back(t3 - t2);
         total_ns.push_back(t3 - t0);
+    }
+
+    // Profile signing substages separately. The production latency gate above
+    // remains byte-for-byte on sign_prepared_poly1271_hex.
+    for (std::size_t i = 0; i < samples; ++i) {
+        const auto amounts = clob_order::marketable_limit_amounts(
+            Side::Buy, 5000, 100, 5'000'000);
+        if (!amounts.valid) return 79;
+        const std::uint64_t salt_value = 1'000'000ULL + i;
+        const std::uint64_t timestamp_ms = 1'720'000'000'000ULL + i;
+
+        const auto f0 = ns_now();
+        std::array<char, 32> salt_buf{}, maker_buf{}, taker_buf{}, ts_buf{};
+        std::array<char, 24> req_ts_buf{};
+        const auto salt_sv = dec(salt_value, salt_buf);
+        const auto maker_sv = dec(amounts.maker_amount, maker_buf);
+        const auto taker_sv = dec(amounts.taker_amount, taker_buf);
+        const auto ts_sv = dec(timestamp_ms, ts_buf);
+        const auto req_ts_sv = dec(timestamp_ms / 1000U, req_ts_buf);
+        if (salt_sv.empty() || maker_sv.empty() || taker_sv.empty()
+            || ts_sv.empty() || req_ts_sv.empty()) {
+            return 80;
+        }
+        const auto f1 = ns_now();
+
+        clob_eip712::Hash32 contents{}, digest{};
+        std::array<std::uint8_t, poly1271::kEvmSignatureBytes> inner{};
+        std::array<char, poly1271::kWrappedSignatureHexChars> wrapped{};
+        if (!order_hasher.struct_hash_u64(
+                salt_value, amounts.maker_amount, amounts.taker_amount,
+                timestamp_ms, contents)) {
+            return 81;
+        }
+        const auto f2 = ns_now();
+        if (!poly_hasher.digest(contents, digest)) return 82;
+        const auto f3 = ns_now();
+        if (!signer.sign_digest(digest, inner)) return 83;
+        const auto f4 = ns_now();
+        if (!poly1271::wrap_signature_hex(
+                inner, order_hasher.domain_separator(), contents, wrapped)) {
+            return 84;
+        }
+        const auto f5 = ns_now();
+
+        dynamic_fields_ns.push_back(f1 - f0);
+        order_struct_hash_ns.push_back(f2 - f1);
+        poly_digest_ns.push_back(f3 - f2);
+        secp_sign_ns.push_back(f4 - f3);
+        signature_wrap_ns.push_back(f5 - f4);
     }
 
     std::cout
