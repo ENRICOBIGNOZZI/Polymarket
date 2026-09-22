@@ -14,7 +14,7 @@ No authenticated API. No real orders. No automatic promotion.
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 import hashlib
 import json
 import math
@@ -232,14 +232,128 @@ class Tail:
         return out
 
 
-def book_point(book:BookTimeline,mid:str,token:str,at_ms:int,side:str)->dict[str,Any]|None:
+DEEP_BOOK_SCHEMA="polymarket_v7_pure_arb_deep_book_snapshot_v1"
+
+
+class DeepReplayTimeline:
+    """Candidate-time deep snapshot + canonical incremental book mutations."""
+
+    def __init__(self,path:Path,sha:str):
+        self.path,self.sha,self.handle=path,sha,None
+        self.snapshots=defaultdict(lambda:deque(maxlen=256))
+
+    @staticmethod
+    def _levels(raw:Any)->dict[int,float]:
+        out={}
+        if not isinstance(raw,list):return out
+        for level in raw:
+            if not isinstance(level,dict):continue
+            try:
+                price=int(round(float(level.get("price"))*10_000))
+                size=float(level.get("size"))
+            except (TypeError,ValueError,OverflowError):continue
+            if 0<price<10_000 and math.isfinite(size) and size>0:
+                out[price]=size
+        return out
+
+    def ingest(self,row:Any)->None:
+        if (not isinstance(row,dict) or row.get("schema")!=DEEP_BOOK_SCHEMA
+            or row.get("model_sha")!=self.sha or row.get("paper_only") is not True
+            or row.get("authenticated_execution") is not False
+            or row.get("real_order_submission") is not False
+            or row.get("execution_authority")!="ZERO_AUTHORITY_RESEARCH_ONLY"):
+            return
+        try:
+            mid=str(row["market_id"]);ts=int(row["receive_wall_ms"])
+            epoch=int(row["connection_epoch"]);session=str(row["observer_session_id"])
+            yes=str(row["yes_token"]);no=str(row["no_token"])
+        except (KeyError,TypeError,ValueError,OverflowError):return
+        if not(mid and yes and no and session and ts>0 and epoch>0):return
+        if any(row.get(k) is True for k in (
+            "yes_bid_truncated","yes_ask_truncated","no_bid_truncated","no_ask_truncated")):
+            return
+        snap={
+            "market_id":mid,"receive_wall_ms":ts,"connection_epoch":epoch,
+            "observer_session_id":session,"yes_token":yes,"no_token":no,
+            "yes_bids":self._levels(row.get("yes_bid_levels")),
+            "yes_asks":self._levels(row.get("yes_ask_levels")),
+            "no_bids":self._levels(row.get("no_bid_levels")),
+            "no_asks":self._levels(row.get("no_ask_levels")),
+        }
+        if all(snap[k] for k in ("yes_bids","yes_asks","no_bids","no_asks")):
+            self.snapshots[mid].append(snap)
+
+    def poll(self)->None:
+        for _ in range(2):
+            if self.handle is None:
+                try:self.handle=self.path.open("rb")
+                except OSError:return
+            while True:
+                pos=self.handle.tell();raw=self.handle.readline()
+                if not raw or not raw.endswith(b"\n"):
+                    self.handle.seek(pos);break
+                try:self.ingest(json.loads(raw))
+                except (ValueError,UnicodeDecodeError):continue
+            try:
+                old,cur=os.fstat(self.handle.fileno()),self.path.stat()
+                if (old.st_dev,old.st_ino)==(cur.st_dev,cur.st_ino):
+                    if cur.st_size<self.handle.tell():self.handle.seek(0)
+                    return
+            except OSError:return
+            self.handle.close();self.handle=None
+
+    def levels_at(self,market:str,token:str,origin_ms:int,target_ms:int,
+                  side:str,book:BookTimeline)->list[tuple[float,float]]|None:
+        snapshot=None
+        for row in reversed(self.snapshots.get(market,())):
+            if row["receive_wall_ms"]<=origin_ms and token in {row["yes_token"],row["no_token"]}:
+                snapshot=row;break
+        if snapshot is None:return None
+        if (snapshot["observer_session_id"]!=book.session
+            or snapshot["connection_epoch"]!=book.epoch):
+            return None
+        prefix="yes" if token==snapshot["yes_token"] else "no"
+        bids=dict(snapshot[prefix+"_bids"]);asks=dict(snapshot[prefix+"_asks"])
+        start=int(snapshot["receive_wall_ms"])
+        for row in book.between(market,token,start,target_ms):
+            if (row.get("observer_session_id")!=snapshot["observer_session_id"]
+                or int(row.get("connection_epoch") or 0)!=snapshot["connection_epoch"]
+                or row.get("valid") is not True or row.get("lineage_continuous") is not True):
+                return None
+            if row.get("deep_replay_reset") is True:return None
+            change=row.get("book_change")
+            if not isinstance(change,dict):continue
+            try:
+                price=int(round(float(change.get("price"))*10_000))
+                size=float(change.get("size"));change_side=str(change.get("side") or "").upper()
+            except (TypeError,ValueError,OverflowError):return None
+            if not(0<price<10_000 and math.isfinite(size) and size>=0):return None
+            levels=bids if change_side=="BUY" else asks if change_side=="SELL" else None
+            if levels is None:return None
+            if size<=0:levels.pop(price,None)
+            else:levels[price]=size
+        chosen=asks if side.upper()=="BUY" else bids
+        ordered=sorted(chosen.items(),reverse=side.upper()=="SELL")
+        return [(price/10_000.0,size) for price,size in ordered if size>0]
+
+
+def book_point(book:BookTimeline,mid:str,token:str,at_ms:int,side:str,
+               *,deep:DeepReplayTimeline|None=None,origin_ms:int|None=None)->dict[str,Any]|None:
     row=book.asof(mid,token,at_ms)
     if row is None:return None
     try:ts=int(row["receive_wall_ms"])
     except (KeyError,TypeError,ValueError,OverflowError):return None
-    levels=parse_levels(row,side)
-    reverse="SELL" if side=="BUY" else "BUY"
-    unwind_levels=parse_levels(row,reverse)
+    levels=None;unwind_levels=None;source="CAUSAL_L10"
+    if deep is not None and origin_ms is not None:
+        levels=deep.levels_at(mid,token,origin_ms,at_ms,side,book)
+        reverse="SELL" if side=="BUY" else "BUY"
+        unwind_levels=deep.levels_at(mid,token,origin_ms,at_ms,reverse,book)
+        if levels and unwind_levels:source="CAUSAL_DEEP_REPLAY_1024"
+        else:levels=unwind_levels=None
+    if levels is None:
+        levels=parse_levels(row,side)
+        reverse="SELL" if side=="BUY" else "BUY"
+        unwind_levels=parse_levels(row,reverse)
     if not levels or not unwind_levels:return None
     return {
         "ts":ts,
@@ -249,7 +363,9 @@ def book_point(book:BookTimeline,mid:str,token:str,at_ms:int,side:str)->dict[str
         "depth":sum(q for _,q in levels),
         "unwind":unwind_levels[0][0],
         "unwind_depth":sum(q for _,q in unwind_levels),
-        "causal_depth_levels":int(row.get("causal_depth_levels") or len(levels)),
+        "causal_depth_levels":1024 if source=="CAUSAL_DEEP_REPLAY_1024" else int(
+            row.get("causal_depth_levels") or len(levels)),
+        "depth_source":source,
     }
 
 
@@ -297,6 +413,8 @@ class Shadow:
             args.book_tape,args.model_sha,
             retention_ms=max(10_000,max(args.inter_leg_skew_ms)+args.maximum_book_age_ms
                              +args.unwind_delay_ms+5000))
+        self.deep=(DeepReplayTimeline(args.deep_book_snapshots,args.model_sha)
+                   if args.deep_book_snapshots is not None else None)
         self.rows=[];self.seen=set();self.pending=[]
         args.output.parent.mkdir(parents=True,exist_ok=True)
         args.status.parent.mkdir(parents=True,exist_ok=True)
@@ -393,13 +511,14 @@ class Shadow:
         if buy and buy_collection_mode!="USDC_VALUE":
             base["state"]="CENSORED_BUY_FEE_COLLECTION_UNVERIFIED";return base
         yes,no=str(current.get("yes_token") or ""),str(current.get("no_token") or "")
+        origin=int(c.get("receive_wall_ms") or 0)
         target=int(item["target_ms"]);skew=int(item["skew_ms"])
         if target<=0 or q<self.args.minimum_shares:
             base["state"]="NO_TRADE_SIZE";return base
 
         base["lifecycle"]+=["SENT","ACK_PENDING","PENDING_DELAY"]
-        y0=book_point(self.book,mid,yes,target,side)
-        n0=book_point(self.book,mid,no,target,side)
+        y0=book_point(self.book,mid,yes,target,side,deep=self.deep,origin_ms=origin)
+        n0=book_point(self.book,mid,no,target,side,deep=self.deep,origin_ms=origin)
         if y0 is None or n0 is None:
             base["state"]="CENSORED_ARRIVAL_BOOK";return base
         if max(target-int(y0["ts"]),target-int(n0["ts"]))>self.args.maximum_book_age_ms:
@@ -409,6 +528,16 @@ class Shadow:
 
         # Revalidate the requested q against the full causal L10 ladders.  The
         # worst consumed level becomes the marketable-limit bound for each leg.
+        candidate_l10=max(0.0,float(c.get("executable_shares_l10") or 0.0))
+        requires_deep=q>candidate_l10+1e-9
+        deep_ready=(y0.get("depth_source")=="CAUSAL_DEEP_REPLAY_1024"
+                    and n0.get("depth_source")=="CAUSAL_DEEP_REPLAY_1024")
+        base["arrival_depth_source"]=(
+            "CAUSAL_DEEP_REPLAY_1024" if deep_ready else "CAUSAL_L10")
+        base["deep_replay_required"]=requires_deep
+        base["deep_replay_available"]=deep_ready
+        if requires_deep and not deep_ready:
+            base["state"]="CENSORED_DEEP_REPLAY_UNAVAILABLE";return base
         yplan=fok_sweep(y0["levels"],q,side,None)
         nplan=fok_sweep(n0["levels"],q,side,None)
         if not yplan["filled"] or not nplan["filled"]:
@@ -458,7 +587,8 @@ class Shadow:
         weighted_volume_total=0.0
         for leg in order_sequence:
             token=yes if leg=="YES" else no
-            point=book_point(self.book,mid,token,times[leg],side)
+            point=book_point(
+                self.book,mid,token,times[leg],side,deep=self.deep,origin_ms=origin)
             sweep=fok_fill(point,side=side,limit=limits[leg],quantity=q,
                            target_ms=times[leg],maximum_book_age_ms=self.args.maximum_book_age_ms)
             ok=bool(sweep.get("filled"))
@@ -509,7 +639,8 @@ class Shadow:
 
         first=filled[0];token=yes if first=="YES" else no
         unwind_at=max(times.values())+self.args.unwind_delay_ms
-        point=book_point(self.book,mid,token,unwind_at,side)
+        point=book_point(
+            self.book,mid,token,unwind_at,side,deep=self.deep,origin_ms=origin)
         if point is None:
             base["state"]="ONE_LEG_UNWIND_CENSORED";base["paired_execution"]=False
             base["lifecycle"].append("UNWIND_CENSORED");return base
@@ -590,7 +721,9 @@ class Shadow:
 
     def run(self):
         while True:
-            self.book.poll();self.ingest();self.evaluate_ready();self.publish()
+            self.book.poll()
+            if self.deep is not None:self.deep.poll()
+            self.ingest();self.evaluate_ready();self.publish()
             time.sleep(self.args.interval_ms/1000.0)
 
 
@@ -602,6 +735,7 @@ def main()->int:
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--candidates",type=Path,required=True)
     ap.add_argument("--book-tape",type=Path,required=True)
+    ap.add_argument("--deep-book-snapshots",type=Path)
     ap.add_argument("--selection",type=Path,required=True)
     ap.add_argument("--market-terms-root",type=Path,required=True)
     ap.add_argument("--venue-mode",type=Path,required=True)
