@@ -15,6 +15,7 @@ enum class ExecutionPolicyId : std::uint8_t {
     MultiLeg = 5,
     Liquidation = 6,
     Emergency = 7,
+    PureArbFok = 8,
 };
 
 // Common hand-off between strategy/risk and the single execution/OMS owner.

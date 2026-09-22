@@ -59,7 +59,8 @@ add_library(pm_v7_common
   src/v7_native_settlement_authority.cpp
   src/v7_native_paper_execution.cpp
   src/v7_native_runtime_evidence.cpp
-  src/v7_native_latency_tape.cpp)
+  src/v7_native_latency_tape.cpp
+  src/v7_pure_arb_multi_engine.cpp)
 target_include_directories(pm_v7_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${Boost_INCLUDE_DIRS})
 target_link_libraries(pm_v7_common PUBLIC pm_json Threads::Threads)
 target_compile_options(pm_v7_common PRIVATE -Wall -Wextra -Wpedantic)
@@ -213,6 +214,15 @@ target_link_libraries(polymarket_v7_crypto_settlement_engine PRIVATE
 target_compile_options(polymarket_v7_crypto_settlement_engine PRIVATE
   -Wall -Wextra -Wpedantic)
 
+# Dedicated complete-set arbitrage PAPER runtime: one PM feed worker, one
+# fixed multi-market state owner and one settlement authority.
+add_executable(polymarket_v7_pure_arb_multi_runtime
+  src/v7_pure_arb_multi_runtime.cpp)
+target_link_libraries(polymarket_v7_pure_arb_multi_runtime PRIVATE
+  pm_v7_common pm_fast_arb pm_core Threads::Threads)
+target_compile_options(polymarket_v7_pure_arb_multi_runtime PRIVATE
+  -Wall -Wextra -Wpedantic)
+
 if(NOT PM_LONDON_RUNTIME_ONLY)
 add_executable(polymarket_v7_external_tape_replay src/v7_external_tape_replay.cpp)
 target_link_libraries(polymarket_v7_external_tape_replay PRIVATE pm_v7_external)
@@ -308,6 +318,10 @@ if(BUILD_TESTING)
 
   add_test(NAME pm_v7_crypto_settlement_native_candidate_validate
     COMMAND polymarket_v7_crypto_settlement_engine --validate-only)
+  add_test(NAME pm_v7_pure_arb_multi_runtime_validate
+    COMMAND polymarket_v7_pure_arb_multi_runtime
+      --config ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/v7_pure_arb_multi_runtime.json
+      --validate-only)
   add_test(NAME pm_v7_crypto_settlement_native_candidate_10k_limits
     COMMAND polymarket_v7_crypto_settlement_engine
       --sleeve-budget-microdollars 10000000000
@@ -375,6 +389,13 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_pure_arb_lane_tests PRIVATE pm_v7_common)
   target_compile_options(pm_v7_pure_arb_lane_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_pure_arb_lane_tests COMMAND pm_v7_pure_arb_lane_tests)
+
+  add_executable(pm_v7_pure_arb_multi_engine_tests
+    tests/test_v7_pure_arb_multi_engine.cpp)
+  target_link_libraries(pm_v7_pure_arb_multi_engine_tests PRIVATE pm_v7_common)
+  target_compile_options(pm_v7_pure_arb_multi_engine_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_pure_arb_multi_engine_tests
+    COMMAND pm_v7_pure_arb_multi_engine_tests)
 
   add_test(NAME pm_v7_native_clob_full_prewire_bench_smoke
     COMMAND polymarket_v7_native_clob_full_prewire_bench 64)
