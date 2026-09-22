@@ -217,7 +217,7 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
                 or row.get("authenticated_execution") is not False \
                 or row.get("real_order_submission") is not False:
             raise ValueError(f"{zone_id} latency safety boundary invalid")
-        network = row["public_transport"]["parallel_two_persistent_lanes"]
+        network = row["public_transport"]["parallel_persistent_legs"]
         pair = network["pair_completion_ns"]
         measurements.append({
             "physical_zone_id": zone_id,
@@ -246,7 +246,7 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
         "automatic_cutover": False,
         "authenticated_order_latency_observed": False,
         "matching_engine_latency_observed": False,
-        "selection_metric": "public paired TLS GET /time p99 then p999",
+        "selection_metric": "public paired CLOB persistent-transport GET /time p99 then p999",
         "selected_physical_zone_id": ordered[0]["physical_zone_id"],
         "measurements": measurements,
         "raw": rows,
