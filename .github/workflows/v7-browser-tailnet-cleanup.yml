@@ -10,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# quota-retry-2sv-2
+# quota-direct-log-2sv
   actions: read
 
 jobs:
@@ -94,18 +94,13 @@ jobs:
             sleep 0.1
           done
           test "$ready" = 1
-          set +e
-          python3 ops/v7_tailscale_ci_cleanup_browser.py \
+          python3 -m py_compile ops/v7_tailscale_ci_cleanup_browser.py
+          python3 -u ops/v7_tailscale_ci_cleanup_browser.py \
             --credentials "$RUNNER_TEMP/tailnet-login.json" \
             --repository "$GITHUB_REPOSITORY" \
             --github-token "$GH_TOKEN" \
             --chrome "$(command -v google-chrome)" \
-            --cdp-url http://127.0.0.1:9222 \
-            >"$RUNNER_TEMP/tailnet-cleanup.log" 2>&1
-          rc=$?
-          set -e
-          cat "$RUNNER_TEMP/tailnet-cleanup.log"
-          exit "$rc"
+            --cdp-url http://127.0.0.1:9222
 
       - name: Destroy plaintext credentials
         if: always()
