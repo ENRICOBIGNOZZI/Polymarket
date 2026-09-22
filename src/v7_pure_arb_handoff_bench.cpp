@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -132,16 +133,16 @@ Result direct(std::size_t n) {
 
 Result spsc(std::size_t n) {
     Result out; out.latency.reserve(n);
-    SpscRing<Event, 65536> queue;
+    auto queue = std::make_unique<SpscRing<Event, 65536>>();
     std::atomic<bool> producer_done{false};
     std::thread consumer([&] {
         BookHotSnapshot yes{},no{};
         Event e{};
         std::size_t consumed=0;
         while(consumed<n) {
-            if(!queue.try_pop(e)) {
+            if(!queue->try_pop(e)) {
                 if(producer_done.load(std::memory_order_acquire)
-                    && queue.approximate_size()==0) break;
+                    && queue->approximate_size()==0) break;
                 std::this_thread::yield();
                 continue;
             }
@@ -152,7 +153,7 @@ Result spsc(std::size_t n) {
     });
     for(std::size_t i=0;i<n;++i) {
         Event e{}; mutate(e,i); e.receive_ns=now_ns();
-        while(!queue.try_push(e)) std::this_thread::yield();
+        while(!queue->try_push(e)) std::this_thread::yield();
     }
     producer_done.store(true,std::memory_order_release);
     consumer.join();
