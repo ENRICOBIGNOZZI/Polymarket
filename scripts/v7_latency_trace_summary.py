@@ -56,12 +56,15 @@ def read(path:Path)->list[dict[str,int]]:
     return rows
 
 def coalesce(rows:list[dict[str,int]])->list[dict[str,int]]:
-    merged:dict[int,dict[str,int]]={}
+    merged:dict[tuple[int,int],dict[str,int]]={}
     for row in rows:
         trace_id=row["trace_id"]
-        current=merged.setdefault(trace_id,{key:0 for key in FIELDS})
+        instrument=row["instrument_handle"]
+        key=(trace_id,instrument)
+        current=merged.setdefault(key,{field:0 for field in FIELDS})
         current["version"]=1
         current["trace_id"]=trace_id
+        current["instrument_handle"]=instrument
         current["valid_mask"] |= row["valid_mask"]
         for key in FIELDS:
             if key in {"version","valid_mask","trace_id"}:continue
