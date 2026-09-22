@@ -190,7 +190,8 @@ def taker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]
                         "pnl":pnl,"base_pnl":base_pnl,
                         "verified_ancillary_taker_rebate_pnl":ancillary,
                         "execution_mode":str(worst.get("execution_mode") or ""),
-                        "capital":capital,"lock_seconds":lock})
+                        "capital":capital,"lock_seconds":lock,
+                        "merge_credit_applied":False})
     return out
 
 def maker_observations(path:Path|None,policy:dict[str,Any],
@@ -213,10 +214,12 @@ def maker_observations(path:Path|None,policy:dict[str,Any],
         capital=target*(float(r.get("yes_price") or 0)+float(r.get("no_price") or 0))
         event_ms=int(r.get("origin_ms") or 0)
         paired=str(x.get("state")) in {"BOTH_FULL","BOTH_PARTIAL"}
-        end_ms=int(r.get("market_end_ms") or 0) if paired else event_ms+int(r.get("ttl_ms") or 0)
-        lock=(complete_set_lock_seconds(policy,end_ms=end_ms,event_ms=event_ms,minimum=minimum)
-              if paired else capital_lock_seconds(end_ms=end_ms,event_ms=event_ms,minimum=minimum))
-        base_pnl=float(x["total_shadow_pnl"])-(complete_set_merge_cost(policy,capital) if paired else 0.0)
+        # Current maker shadow deliberately holds a filled leg through TTL to
+        # measure legging. It does not execute an immediate on-chain merge.
+        # Therefore verified taker merge latency cannot be credited here.
+        end_ms=event_ms+int(r.get("ttl_ms") or 0)
+        lock=capital_lock_seconds(end_ms=end_ms,event_ms=event_ms,minimum=minimum)
+        base_pnl=float(x["total_shadow_pnl"])
         market_id=str(r.get("market_id") or "")
         reward_rate=max(0.0,float(reward_rates.get(market_id,0.0)))
         ancillary_reward_pnl=reward_rate*capital*lock if capital>0 and lock>0 else 0.0
