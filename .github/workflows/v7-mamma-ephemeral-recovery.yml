@@ -1,0 +1,97 @@
+name: V7 mamma ephemeral Grafana recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-mamma-ephemeral-recovery-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
+      SERVER_USER: ${{ vars.POLYMARKET_SERVER_USER || 'enrico' }}
+      SERVER_PORT: ${{ vars.POLYMARKET_SERVER_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - deploy/v7-mamma-ephemeral-recovery-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert v=={"schema":"polymarket_v7_mamma_ephemeral_recovery_v1","monitoring_only":True}
+          PY
+
+      - name: Join tailnet ephemerally
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
+          audience: api.tailscale.com/TCb65amTk321CNTRL-kwWnLvpSbF11CNTRL
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          ping: ${{ env.SERVER_HOST }}
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -T 10 -p "$SERVER_PORT" "$SERVER_HOST" > ~/.ssh/known_hosts
+          test -s ~/.ssh/known_hosts
+
+      - name: Recover Grafana and verify end to end
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -P "$SERVER_PORT" \
+            ops/v7_mamma_grafana_recover.sh \
+            "$SERVER_USER@$SERVER_HOST:/tmp/v7_mamma_grafana_recover.sh"
+          ssh -i ~/.ssh/key -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+            -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          chmod 700 /tmp/v7_mamma_grafana_recover.sh
+          /tmp/v7_mamma_grafana_recover.sh
+          rm -f /tmp/v7_mamma_grafana_recover.sh
+
+          echo '=== LONDON PROMETHEUS ==='
+          result="$(curl -fsS --max-time 10 --get \
+            --data-urlencode 'query=polymarket_pure_arb_up' \
+            http://100.102.9.16:19091/api/v1/query)"
+          python3 - "$result" <<'PY'
+          import json,sys
+          v=json.loads(sys.argv[1])
+          rows=v.get('data',{}).get('result',[])
+          assert rows, v
+          assert any(float(row['value'][1])==1.0 for row in rows), rows
+          print('PURE_ARB_UP_OK=1')
+          PY
+
+          echo '=== GRAFANA DASHBOARD ==='
+          search="$(curl -fsS --max-time 5 'http://127.0.0.1:3000/api/search?query=Pure%20Arbitrage')"
+          python3 - "$search" <<'PY'
+          import json,sys
+          rows=json.loads(sys.argv[1])
+          assert any(x.get('uid')=='polymarket-v7-pure-arb' for x in rows), rows
+          print('MAMMA_GRAFANA_SEARCH_OK=1')
+          PY
+          echo 'FINAL_MAMMA_GRAFANA_OK=1'
+          REMOTE
+
+      - name: Explicitly leave tailnet
+        if: always()
+        shell: bash
+        run: |
+          sudo tailscale logout >/dev/null 2>&1 || tailscale logout >/dev/null 2>&1 || true
