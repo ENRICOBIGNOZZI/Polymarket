@@ -11,6 +11,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace json = boost::json;
@@ -26,6 +27,7 @@ struct Options {
     int timeout_ms = 2'000;
     std::size_t samples = 200;
     std::size_t warmup = 8;
+    int interval_ms = 50;
     bool validate_only = false;
 };
 
@@ -70,6 +72,11 @@ struct Options {
             if (!parse_u64(next(), value) || value > 1'000)
                 throw std::invalid_argument("invalid warmup");
             out.warmup = static_cast<std::size_t>(value);
+        } else if (arg == "--interval-ms") {
+            std::uint64_t value = 0;
+            if (!parse_u64(next(), value) || value > 5'000)
+                throw std::invalid_argument("invalid interval");
+            out.interval_ms = static_cast<int>(value);
         } else if (arg == "--validate-only") out.validate_only = true;
         else throw std::invalid_argument("unknown argument");
     }
@@ -270,6 +277,10 @@ int main(int argc, char** argv) {
             record_serial(serial, first, second);
             const auto pair = transport.submit_parallel(frame, frame);
             record_parallel(parallel, pair);
+            if (options.interval_ms > 0) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(options.interval_ms));
+            }
         }
         transport.close();
 
@@ -280,6 +291,7 @@ int main(int argc, char** argv) {
             {"real_order_submission", false},
             {"endpoint", options.host + options.target},
             {"samples", options.samples},
+            {"interval_ms", options.interval_ms},
             {"scope", "PUBLIC_GET_TIME_TRANSPORT_ONLY_NOT_MATCHING_ENGINE"},
             {"connect", json::object{
                 {"yes_dns_ns", connected.yes.dns_ns},
