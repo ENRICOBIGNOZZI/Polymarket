@@ -50,6 +50,7 @@
     "scripts/v7_pure_arb_capital_allocator.py",
     "scripts/v7_pure_arb_deep_sizing_shadow.py",
     "scripts/v7_pure_arb_exchange_execution_shadow.py",
+    "scripts/v7_pure_arb_maker_policy.py",
     "scripts/v7_pure_arb_venue_mode.py",
     "scripts/v7_rtds_external_fair_monitor.py",
     "scripts/v7_runtime_artifacts.py",
