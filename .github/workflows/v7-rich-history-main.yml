@@ -1,0 +1,162 @@
+name: V7 rich-history crypto information research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-rich-history-main-request.json
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-rich-history-crypto-information
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      RESEARCH_BRANCH: rich-history-alpha-20260922
+      OUTPUT_DIR: docs/research/rich-history-alpha-2026-09-22
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate trusted-main request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-rich-history-main-request.json
+          python3 - "$request" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v['schema']=='polymarket_v7_rich_history_main_request_v1'
+          assert v['version']==1
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert re.fullmatch(r'i-[0-9a-f]+',v['instance_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',v['expected_research_sha'])
+          assert isinstance(v['minimum_wall_ns'],int) and v['minimum_wall_ns']>0
+          assert isinstance(v['maximum_history_hours'],(int,float)) and v['maximum_history_hours']>0
+          assert v['research_branch']=='rich-history-alpha-20260922'
+          assert v['output_directory']=='docs/research/rich-history-alpha-2026-09-22'
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          assert v['real_capital_at_risk'] is False
+          assert v['automatic_promotion'] is False
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          for k in expected_research_sha instance_id minimum_wall_ns maximum_history_hours; do
+            value="$(python3 -c 'import json;print(json.load(open("'"$request"'"))["'"$k"'"])')"
+            echo "$k=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Fetch exact frozen research source
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.expected_research_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$RESEARCH_BRANCH" --depth=250
+          branch_sha="$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$branch_sha"
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Install and compile frozen source
+        run: |
+          python3 -m pip install --disable-pip-version-check -q -r research/requirements-learning.txt
+          python3 -m py_compile \
+            research/walk_forward_v3/rich_history_information.py \
+            research/walk_forward_v3/multi_alpha_2h.py \
+            research/walk_forward_v3/direct_action.py \
+            ops/v7_rich_history_information_ssm.py
+
+      - name: Configure AWS credentials through trusted main OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-rich-history
+          aws-region: eu-west-2
+
+      - name: Run London PAPER rich-history research
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.expected_research_sha }}
+          INSTANCE_ID: ${{ steps.request.outputs.instance_id }}
+          MINIMUM_WALL_NS: ${{ steps.request.outputs.minimum_wall_ns }}
+          MAXIMUM_HISTORY_HOURS: ${{ steps.request.outputs.maximum_history_hours }}
+        run: |
+          set -euo pipefail
+          python3 ops/v7_rich_history_information_ssm.py \
+            --instance-id "$INSTANCE_ID" \
+            --source-sha "$SOURCE_SHA" \
+            --minimum-wall-ns "$MINIMUM_WALL_NS" \
+            --maximum-history-hours "$MAXIMUM_HISTORY_HOURS" \
+            --output-dir "$OUTPUT_DIR"
+
+      - name: Validate research package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv,gzip,json
+          from pathlib import Path
+          root=Path('docs/research/rich-history-alpha-2026-09-22')
+          m=json.load(open(root/'30_rich_history_manifest.json'))
+          cov=json.load(open(root/'31_rich_data_coverage_by_crypto.json'))
+          models=json.load(open(root/'32_rich_information_models.json'))
+          adequacy=json.load(open(root/'36_rich_fill_adequacy.json'))
+          assert m['paper_only'] is True
+          assert m['real_order_submission'] is False
+          assert m['automatic_promotion'] is False
+          assert m['window']['profitability_used_for_selection'] is False
+          assert m['selection_guards']['lambda_selected_on_test_pnl'] is False
+          assert m['selection_guards']['tau_tuned_on_test'] is False
+          assert len(cov['rows_by_asset'])>=6
+          assert models['model_receipts']
+          assert adequacy['minimum_evaluable_fills']==50
+          assert adequacy['minimum_preferred_fills']==100
+          pooled=list(csv.DictReader(open(root/'33_rich_pooled_grid.csv',newline='')))
+          crypto=list(csv.DictReader(open(root/'34_rich_crypto_grid.csv',newline='')))
+          assert pooled and crypto
+          assert len({r['asset'] for r in crypto})>=6
+          with gzip.open(root/'37_rich_equity_1m.csv.gz','rt',encoding='utf-8') as f:
+              assert 'cumulative_pnl' in f.readline()
+          PY
+
+      - name: Publish only to isolated research branch
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('docs/research/rich-history-alpha-2026-09-22')
+          for path in root.rglob('*.csv'):
+              raw=path.read_bytes()
+              normalized=raw.replace(b'\r\n',b'\n')
+              if normalized!=raw:
+                  path.write_bytes(normalized)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$OUTPUT_DIR"
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish rich-history crypto information research"
+          git push origin HEAD:"$RESEARCH_BRANCH"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-rich-history-${{ github.run_id }}
+          path: docs/research/rich-history-alpha-2026-09-22
+          retention-days: 30
