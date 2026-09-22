@@ -187,6 +187,10 @@ add_executable(polymarket_v7_pure_arb_handoff_bench src/v7_pure_arb_handoff_benc
 target_link_libraries(polymarket_v7_pure_arb_handoff_bench PRIVATE pm_v7_common Threads::Threads)
 target_compile_options(polymarket_v7_pure_arb_handoff_bench PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(polymarket_v7_paired_sign_bench src/v7_paired_sign_bench.cpp)
+target_link_libraries(polymarket_v7_paired_sign_bench PRIVATE pm_v7_clob_native Threads::Threads)
+target_compile_options(polymarket_v7_paired_sign_bench PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_feed_race_probe src/v7_feed_race_probe.cpp)
 target_link_libraries(polymarket_v7_feed_race_probe PRIVATE pm_v7_external)
 target_compile_options(polymarket_v7_feed_race_probe PRIVATE -Wall -Wextra -Wpedantic)
