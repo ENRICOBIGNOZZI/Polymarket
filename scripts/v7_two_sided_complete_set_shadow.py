@@ -137,6 +137,17 @@ def stable(*parts: Any) -> str:
     return hashlib.sha256("|".join(str(x) for x in parts).encode()).hexdigest()
 
 
+def wilson_lower(successes: int, n: int, z: float = 1.6448536269514722) -> float | None:
+    """One-sided 90% Wilson lower bound for a binomial probability."""
+    if n <= 0:
+        return None
+    p = successes / n
+    denom = 1.0 + z*z/n
+    center = p + z*z/(2*n)
+    radius = z * math.sqrt((p*(1-p) + z*z/(4*n))/n)
+    return max(0.0, (center-radius)/denom)
+
+
 class Shadow:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -399,20 +410,65 @@ class Shadow:
                 if r.get("total_shadow_pnl") is not None]
         legging = [float(r["legging_loss"]) for r in usable
                    if r.get("legging_loss") is not None]
-        by_context: dict[str, dict[str, Any]] = {}
+
         grouped: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+        by_ttl_rows: defaultdict[int, list[dict[str, Any]]] = defaultdict(list)
         for row in usable:
             grouped[f'{row.get("asset")}:{row.get("horizon")}'].append(row)
+            try:
+                by_ttl_rows[int(row.get("ttl_ms") or 0)].append(row)
+            except (TypeError, ValueError):
+                pass
+
+        by_context: dict[str, dict[str, Any]] = {}
+        mature_contexts = 0
         for key, rows in grouped.items():
             counts = Counter(str(r.get("state")) for r in rows)
-            values = [float(r["total_shadow_pnl"]) for r in rows if r.get("total_shadow_pnl") is not None]
+            values = [float(r["total_shadow_pnl"]) for r in rows
+                      if r.get("total_shadow_pnl") is not None]
+            paired = counts.get("BOTH_FULL", 0)
+            lower = wilson_lower(paired, len(rows))
+            if len(rows) >= self.args.maturity_min_cycles_per_context:
+                mature_contexts += 1
             by_context[key] = {
                 "cycles": len(rows),
-                "paired_full": counts.get("BOTH_FULL", 0),
+                "paired_full": paired,
                 "one_leg": counts.get("YES_ONLY", 0) + counts.get("NO_ONLY", 0),
-                "paired_fill_probability_direct": counts.get("BOTH_FULL", 0) / len(rows) if rows else None,
+                "paired_fill_probability_direct": paired / len(rows) if rows else None,
+                "paired_fill_probability_lower_90": lower,
                 "mean_total_shadow_pnl": sum(values) / len(values) if values else None,
             }
+
+        by_ttl: dict[str, dict[str, Any]] = {}
+        ttl_mature = True
+        for ttl in self.args.ttl_arms_ms:
+            rows = by_ttl_rows.get(ttl, [])
+            counts = Counter(str(r.get("state")) for r in rows)
+            paired = counts.get("BOTH_FULL", 0)
+            lower = wilson_lower(paired, len(rows))
+            values = [float(r["total_shadow_pnl"]) for r in rows
+                      if r.get("total_shadow_pnl") is not None]
+            one_leg = counts.get("YES_ONLY", 0) + counts.get("NO_ONLY", 0)
+            if len(rows) < self.args.maturity_min_cycles_per_ttl:
+                ttl_mature = False
+            by_ttl[str(ttl)] = {
+                "cycles": len(rows),
+                "paired_full": paired,
+                "one_leg": one_leg,
+                "paired_fill_probability_direct": paired / len(rows) if rows else None,
+                "paired_fill_probability_lower_90": lower,
+                "one_leg_probability_direct": one_leg / len(rows) if rows else None,
+                "mean_total_shadow_pnl": sum(values) / len(values) if values else None,
+                "sum_total_shadow_pnl": sum(values) if values else 0.0,
+            }
+
+        paired_total = states.get("BOTH_FULL", 0)
+        paired_lower = wilson_lower(paired_total, n)
+        research_mature = (
+            n >= self.args.maturity_min_cycles
+            and ttl_mature
+            and mature_contexts >= self.args.maturity_min_contexts
+        )
         atomic_json(self.args.status, {
             "schema": STATUS_SCHEMA,
             "model_sha": self.args.model_sha,
@@ -421,13 +477,15 @@ class Shadow:
             "real_order_submission": False,
             "real_capital_at_risk": False,
             "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+            "automatic_promotion": False,
             "timestamp_ms": time.time_ns() // 1_000_000,
             "started_ms": self.started_ms,
             "cycles": n,
             "censored_cycles": len(self.rows) - n,
             "active_cycles": len(self.active),
             "states": dict(states),
-            "paired_fill_probability_direct": states.get("BOTH_FULL", 0) / n if n else None,
+            "paired_fill_probability_direct": paired_total / n if n else None,
+            "paired_fill_probability_lower_90": paired_lower,
             "both_any_probability_direct": (
                 states.get("BOTH_FULL", 0) + states.get("BOTH_PARTIAL", 0)
             ) / n if n else None,
@@ -441,8 +499,17 @@ class Shadow:
             "funnel": dict(self.funnel),
             "cancels": dict(self.cancels),
             "by_context": by_context,
+            "by_ttl": by_ttl,
             "uses_product_of_marginals": False,
             "joint_probability_semantics": "DIRECT_EMPIRICAL_CYCLE_STATES_NOT_PRODUCT_OF_MARGINALS",
+            "confidence_semantics": "WILSON_ONE_SIDED_90_LOWER_ON_DIRECT_PAIRED_FULL",
+            "research_mature": research_mature,
+            "maturity_requirements": {
+                "minimum_cycles_total": self.args.maturity_min_cycles,
+                "minimum_cycles_per_ttl": self.args.maturity_min_cycles_per_ttl,
+                "minimum_cycles_per_context": self.args.maturity_min_cycles_per_context,
+                "minimum_mature_contexts": self.args.maturity_min_contexts,
+            },
             "ttl_arms_ms": self.args.ttl_arms_ms,
             "minimum_quote_shares": self.args.minimum_quote_shares,
             "maximum_quote_shares": self.args.maximum_quote_shares,
@@ -489,6 +556,10 @@ def main() -> int:
     ap.add_argument("--ttl-arms-ms", default="250,500,1000")
     ap.add_argument("--quote-refresh-ms", type=int, default=25)
     ap.add_argument("--interval-ms", type=int, default=5)
+    ap.add_argument("--maturity-min-cycles", type=int, default=300)
+    ap.add_argument("--maturity-min-cycles-per-ttl", type=int, default=75)
+    ap.add_argument("--maturity-min-cycles-per-context", type=int, default=20)
+    ap.add_argument("--maturity-min-contexts", type=int, default=2)
     args = ap.parse_args()
     args.ttl_arms_ms = sorted({int(x) for x in args.ttl_arms_ms.split(",") if int(x) > 0})
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
@@ -503,6 +574,11 @@ def main() -> int:
         raise SystemExit("invalid economics")
     if not (1 <= args.quote_refresh_ms <= 1000 and 1 <= args.interval_ms <= 1000):
         raise SystemExit("invalid timing")
+    if not (args.maturity_min_cycles > 0
+            and args.maturity_min_cycles_per_ttl > 0
+            and args.maturity_min_cycles_per_context > 0
+            and args.maturity_min_contexts > 0):
+        raise SystemExit("invalid maturity requirements")
     Shadow(args).run()
     return 0
 
