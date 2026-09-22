@@ -11,7 +11,7 @@ are share-sized. Unknown depth/fees fail closed.
 Unknown fees/books fail closed.
 """
 from __future__ import annotations
-import argparse,json,math,os,time,urllib.parse,urllib.request
+import argparse,json,math,os,time
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -24,43 +24,6 @@ def load(path:Path)->dict[str,Any]:
     try:v=json.loads(path.read_text(encoding="utf-8"))
     except (OSError,json.JSONDecodeError):return {}
     return v if isinstance(v,dict) else {}
-
-def get_json(url:str,timeout:float)->dict[str,Any]|None:
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url,headers={"User-Agent":"polymarket-v7-rfq-shadow"}),timeout=timeout) as r:
-            v=json.load(r)
-    except Exception:return None
-    return v if isinstance(v,dict) else None
-
-def book(base:str,token:str,timeout:float)->dict[str,float]|None:
-    v=get_json(base.rstrip("/")+"/book?"+urllib.parse.urlencode({"token_id":token}),timeout)
-    if not v:return None
-    def lv(rows):
-        out=[]
-        for x in rows or []:
-            if not isinstance(x,dict):continue
-            try:p=float(x["price"]);q=float(x["size"])
-            except Exception:continue
-            if 0<p<1 and q>0 and math.isfinite(p) and math.isfinite(q):out.append((p,q))
-        return out
-    bids,asks=lv(v.get("bids")),lv(v.get("asks"))
-    if not bids or not asks:return None
-    b=max(bids);a=min(asks)
-    return {"bid":b[0],"bid_q":b[1],"ask":a[0],"ask_q":a[1]}
-
-_FEE_CACHE:dict[str,tuple[float,float]]={}
-
-def fee_rate(base:str,token:str,timeout:float)->float|None:
-    now=time.monotonic()
-    cached=_FEE_CACHE.get(token)
-    if cached is not None and now-cached[1] <= 600.0:return cached[0]
-    v=get_json(base.rstrip("/")+"/fee-rate?"+urllib.parse.urlencode({"token_id":token}),timeout)
-    try:bps=int(v["base_fee"]) if v else -1
-    except Exception:return None
-    if not 0<=bps<=10_000:return None
-    rate=bps/10_000.0
-    _FEE_CACHE[token]=(rate,now)
-    return rate
 
 def batch_bbos(base:str,tokens:list[str],timeout:float)->dict[str,dict[str,float]|None]:
     raw=fetch_books(base,tokens,timeout,chunk_size=50,user_agent="polymarket-v7-rfq-shadow")
