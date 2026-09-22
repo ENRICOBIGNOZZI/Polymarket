@@ -54,6 +54,7 @@ struct OmsEvent {
     std::int64_t fill_delta_microunits = 0;
     std::int32_t fill_price_e4 = 0; // actual execution price; zero means legacy/unknown.
     std::int32_t fill_price_reserved = 0;
+    std::int64_t user_ws_match_monotonic_ns = 0;
     std::int64_t authoritative_filled_microunits = -1;
     std::int64_t authoritative_remaining_microunits = -1;
 };
@@ -82,6 +83,7 @@ struct OmsOrderRecord {
     std::int64_t wire_ns = 0;
     std::int64_t ack_ns = 0;
     std::int64_t live_ns = 0;
+    std::int64_t user_ws_match_ns = 0;
     std::int64_t delay_start_ns = 0;
     std::int64_t delay_release_ns = 0;
     std::int64_t cancel_request_ns = 0;
