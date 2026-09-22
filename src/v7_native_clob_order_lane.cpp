@@ -1,3 +1,4 @@
+// Pure-arb SOTA gate: restricted HTTP modes are explicit OMS rejects; no blind retries.
 #include "pm/v7_native_settlement_oms_endpoint.hpp"
 #include "pm/v7_native_clob_order_lane.hpp"
 
