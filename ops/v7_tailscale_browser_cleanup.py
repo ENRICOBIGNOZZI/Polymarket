@@ -60,15 +60,39 @@ def first_visible(locator):
 
 def wait_for_human_2sv(page, timeout_s: int=420) -> bool:
     deadline=time.monotonic()+timeout_s
+    prompt_triggered=False
+    last_url=""
     while time.monotonic()<deadline:
         try:
             url=page.url
             body=page.locator("body").inner_text(timeout=3000)
         except Exception:
             url,body="",""
+        if url != last_url:
+            print("tailnet_auth_url_stage="+url.split("?")[0][:160],flush=True)
+            last_url=url
         if "accounts.google.com" not in url:
             return True
         lower=body.lower()
+
+        # On Google's challenge-selection screen, explicitly choose the normal
+        # phone prompt so the user actually receives an approval request.
+        if not prompt_triggered and "/challenge/selection" in url:
+            chosen=None
+            for pattern in (
+                r"Google Prompt", r"Tap Yes", r"Check your phone",
+                r"Use your phone", r"Get a prompt",
+            ):
+                chosen=first_visible(page.get_by_text(re.compile(pattern,re.I)))
+                if chosen is not None:
+                    break
+            if chosen is not None:
+                chosen.click()
+                prompt_triggered=True
+                print("tailnet_auth_google_prompt_triggered=true",flush=True)
+                page.wait_for_timeout(1500)
+                continue
+
         if any(marker.lower() in lower for marker in (
             "2-step verification","verify it's you","confirm it's you",
             "check your phone","tap yes","google prompt","passkey",
