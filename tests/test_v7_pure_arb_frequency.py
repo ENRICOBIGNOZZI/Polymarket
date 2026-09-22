@@ -121,15 +121,17 @@ def test_runtime_wires_all_zero_authority_frequency_workers_once():
         "v7_cross_market_exact_arb_shadow.py",
         "v7_pure_arb_arrival_survival_shadow.py",
         "v7_pure_arb_deep_sizing_shadow.py",
+        "v7_polymarket_status_source.py",
         "v7_pure_arb_venue_mode.py",
         "v7_pure_arb_exchange_execution_shadow.py",
         "v7_fee_reward_registry.py",
         "v7_pure_arb_capital_allocator.py",
+        "v7_pure_arb_maker_policy.py",
     ]
     for worker in workers:
         assert loop.count(worker)==1,worker
     assert "--pure-arb-prefunded-complete-set-shares 1000" in loop
-    assert "v7_assert_registered_child_count 19" in loop
+    assert "v7_assert_registered_child_count 20" in loop
 
 
 
@@ -178,6 +180,12 @@ def test_london_runtime_bundle_contains_all_pure_arb_workers():
         "scripts/v7_cross_market_exact_arb_shadow.py",
         "scripts/v7_pure_arb_arrival_survival_shadow.py",
         "scripts/v7_pure_arb_deep_sizing_shadow.py",
+        "scripts/v7_polymarket_status_source.py",
+        "scripts/v7_pure_arb_venue_mode.py",
+        "scripts/v7_pure_arb_exchange_execution_shadow.py",
+        "scripts/v7_fee_reward_registry.py",
+        "scripts/v7_pure_arb_capital_allocator.py",
+        "scripts/v7_pure_arb_maker_policy.py",
     }
     assert expected <= entries
     assert "v7_two_sided_complete_set_shadow.py" not in manifest["forbidden_path_fragments"]
