@@ -973,6 +973,8 @@ int main(int argc, char** argv) {
                     [](const auto& window) { return window.active != 0; });
                 yes_book.valid = 0; yes_book.lineage_continuous = 0;
                 no_book.valid = 0; no_book.lineage_continuous = 0;
+                pure_arb_yes_epoch = pure_arb_no_epoch = 0;
+                pure_arb_buy_active = pure_arb_sell_active = false;
                 if (options.capture_native_observations || (options.capture_execution_windows && repricing_active)) {
                     if (!evidence_writer.publish_observation(observation(yes_book, kYes, 5))) ++adapter_handoff_failures;
                     if (!evidence_writer.publish_observation(observation(no_book, kNo, 5))) ++adapter_handoff_failures;
@@ -1563,6 +1565,22 @@ int main(int argc, char** argv) {
             {"native_full_observation_capture_enabled", options.capture_native_observations},
             {"execution_window_capture_enabled", options.capture_execution_windows},
             {"execution_window_ns", options.execution_window_ns},
+            {"pure_arb_shadow_enabled", options.pure_arb_shadow},
+            {"pure_arb_shadow_execution_authority", false},
+            {"pure_arb_shadow_reserve_per_share", options.pure_arb_reserve_per_share},
+            {"pure_arb_shadow_evaluations", pure_arb_shadow_evaluations},
+            {"pure_arb_shadow_buy_cycles", pure_arb_shadow_buy_cycles},
+            {"pure_arb_shadow_sell_cycles", pure_arb_shadow_sell_cycles},
+            {"pure_arb_shadow_invalid_pair", pure_arb_shadow_invalid_pair},
+            {"pure_arb_shadow_stale", pure_arb_shadow_stale},
+            {"pure_arb_shadow_below_minimum", pure_arb_shadow_below_minimum},
+            {"pure_arb_shadow_evidence_drops", pure_arb_shadow_evidence_drops},
+            {"pure_arb_shadow_prefunded_remaining_shares",
+                static_cast<double>(pure_arb_prefunded_remaining_microunits) / 1'000'000.0},
+            {"pure_arb_shadow_compute",
+                latency_distribution(std::move(pure_arb_shadow_compute))},
+            {"pure_arb_shadow_receive_to_decision",
+                latency_distribution(std::move(pure_arb_shadow_receive_to_decision))},
             {"repricing_origins", repricing_origins}, {"repricing_labels", repricing_labels},
             {"repricing_censors", repricing_censors},
             {"repricing_window_overflow", repricing_window_overflow},
