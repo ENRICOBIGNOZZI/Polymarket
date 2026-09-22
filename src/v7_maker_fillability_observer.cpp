@@ -1272,6 +1272,7 @@ public:
             auto& market = pure_arb_markets_[token.market_handle];
             const bool new_market = !market.market_id.empty()
                 && market.market_id != token.market_id;
+            if (new_market) market.minimum_order_shares = 0.0;
             market.market_id = token.market_id;
             market.asset = token.asset;
             market.horizon = token.horizon;
