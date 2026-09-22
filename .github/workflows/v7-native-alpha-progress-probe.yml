@@ -39,9 +39,13 @@ jobs:
           # Process listing is handled by shell after this script.
 
           cands=[]
-          for p in Path('/tmp').glob('polymarket-native-alpha-2h-*/output/21_native_alpha_grid.csv'):
-              if p.is_file():
-                  cands.append((p.stat().st_mtime_ns,p))
+          for pattern in (
+              'polymarket-native-alpha-2h-*/output/21_native_alpha_grid.csv',
+              'polymarket-multi-alpha-2h-*/output/21_native_alpha_grid.csv',
+          ):
+              for p in Path('/tmp').glob(pattern):
+                  if p.is_file():
+                      cands.append((p.stat().st_mtime_ns,p))
           if not cands:
               print("GRID_SUMMARY="+json.dumps({'state':'NO_GRID'}))
               raise SystemExit(0)
