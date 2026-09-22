@@ -105,6 +105,7 @@ def base_item(row,*,allowed=True,skew=2,order="YES_FIRST",target=1250):
         "market_id":"m1","kind":"BUY_COMPLETE_SET","receive_wall_ms":1000,
         "asset":"BTC","horizon":"M5",
         "executable_shares_local_deep":5.0,"executable_shares_l10":5.0,
+        "minimum_order_shares":1.0,
     }
     return {
         "scenario_id":"s","candidate":candidate,"market":row,
