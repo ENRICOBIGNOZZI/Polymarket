@@ -152,10 +152,12 @@ struct NativeClobOrderLane::Impl final {
     clob::DualPersistentTlsTransport transport;
     clob_transport::FixedHttp1Response response_parser{};
     clob::ClobRateLimiter rate_limiter{};
+    NativeLatencyTape* latency_tape = nullptr;
     bool valid = false;
 
     Impl(const NativeClobLaneConfig& config,
-         std::span<const std::uint8_t, 32> private_key) noexcept
+         std::span<const std::uint8_t, 32> private_key,
+         NativeLatencyTape* tape) noexcept
         : buy_order_hasher({config.chain_id, config.exchange_contract},
                            prepared_hash_view(config, 0)),
           sell_order_hasher({config.chain_id, config.exchange_contract},
@@ -180,7 +182,8 @@ struct NativeClobOrderLane::Impl final {
                     "SELL", 3, config.deposit_wallet, config.token_id_decimal, config.api_key,
                     clob_wire::MarketOrderType::FOK},
                    config.signer_eoa_address, config.api_key, config.passphrase, config.l2_secret_base64),
-          transport(config.host, config.port, config.timeout_ms) {
+          transport(config.host, config.port, config.timeout_ms),
+          latency_tape(tape) {
         std::array<char, 42> derived{};
         if (!deposit_wallet.assign(config.deposit_wallet)
             || !signer_eoa.assign(config.signer_eoa_address)
@@ -203,8 +206,9 @@ struct NativeClobOrderLane::Impl final {
 
 NativeClobOrderLane::NativeClobOrderLane(
     const NativeClobLaneConfig& config,
-    std::span<const std::uint8_t, 32> private_key) noexcept
-    : impl_(std::make_unique<Impl>(config, private_key)) {}
+    std::span<const std::uint8_t, 32> private_key,
+    NativeLatencyTape* latency_tape) noexcept
+    : impl_(std::make_unique<Impl>(config, private_key, latency_tape)) {}
 
 NativeClobOrderLane::~NativeClobOrderLane() = default;
 
@@ -233,6 +237,18 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     NativeClobSubmitResult out;
     out.client_order_id = command.client_order_id;
     out.latency.submit_start_monotonic_ns = now_ns();
+    const auto trace = [&](NativeLatencyStage stage, std::int64_t timestamp_ns) noexcept {
+        if (impl_ == nullptr || impl_->latency_tape == nullptr
+            || command.client_order_id == 0 || timestamp_ns <= 0) return;
+        NativeLatencyEvent event{};
+        event.trace_id = command.client_order_id;
+        event.client_order_id = command.client_order_id;
+        event.market_handle = command.market_handle;
+        event.instrument_handle = command.instrument_handle;
+        event.timestamp_ns = timestamp_ns;
+        event.stage = stage;
+        (void)impl_->latency_tape->publish(event);
+    };
     // No bytes may leave the lane for a mutated/unreserved command. Preserve
     // the real admitted order for reconciliation instead of rejecting a copy.
     if (!matches_pending_command(oms_owner, command)) {
@@ -302,6 +318,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         ? impl_->buy_order_hasher : impl_->sell_order_hasher;
     std::array<char, poly1271::kWrappedSignatureHexChars> order_signature;
     out.latency.sign_start_monotonic_ns = now_ns();
+    trace(NativeLatencyStage::SignStart, out.latency.sign_start_monotonic_ns);
     if (!poly1271::sign_prepared_poly1271_hex(
             order_hasher, impl_->poly_hasher, impl_->signer,
             salt, amounts.maker_amount, amounts.taker_amount,
@@ -310,6 +327,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                 NativeClobSubmitReason::PreWireFailure, out.latency);
     }
     out.latency.sign_complete_monotonic_ns = now_ns();
+    trace(NativeLatencyStage::SignDone, out.latency.sign_complete_monotonic_ns);
 
     clob_wire::MarketOrderDynamicView dynamic{};
     dynamic.maker_amount = maker_sv;
@@ -345,6 +363,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
                                 NativeClobSubmitReason::TransportFailure, out.latency);
     }
     out.latency.wire_start_monotonic_ns = now_ns();
+    trace(NativeLatencyStage::WireStart, out.latency.wire_start_monotonic_ns);
     const auto write = tls.write_all({frame.data(), frame_size});
     if (!write.ok) {
         return fail_after_wire(oms_owner, command.client_order_id,
@@ -352,6 +371,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
     }
     out.wire_monotonic_ns = write.completed_monotonic_ns;
     out.latency.wire_complete_monotonic_ns = write.completed_monotonic_ns;
+    trace(NativeLatencyStage::WireComplete, out.latency.wire_complete_monotonic_ns);
     OmsEvent wire_event{};
     wire_event.type = OmsEventType::WireSend;
     wire_event.timestamp_ns = write.completed_monotonic_ns;
@@ -404,6 +424,7 @@ NativeClobSubmitResult NativeClobOrderLane::submit(
         static_cast<std::uint8_t>(impl_->response_parser.rate_limit_warning());
     out.response_complete_monotonic_ns = response_complete_ns;
     out.latency.http_ack_monotonic_ns = response_complete_ns;
+    trace(NativeLatencyStage::HttpAck, response_complete_ns);
     impl_->rate_limiter.observe(
         clob::RateLane::Order, out.rate_limit_remaining, out.rate_limit_tier,
         out.rate_limit_reset_unix_seconds, out.rate_limit_warning != 0,
