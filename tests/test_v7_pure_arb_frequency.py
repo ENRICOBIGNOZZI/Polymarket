@@ -123,12 +123,13 @@ def test_runtime_wires_all_zero_authority_frequency_workers_once():
         "v7_pure_arb_deep_sizing_shadow.py",
         "v7_pure_arb_venue_mode.py",
         "v7_pure_arb_exchange_execution_shadow.py",
+        "v7_fee_reward_registry.py",
         "v7_pure_arb_capital_allocator.py",
     ]
     for worker in workers:
         assert loop.count(worker)==1,worker
     assert "--pure-arb-prefunded-complete-set-shares 1000" in loop
-    assert "v7_assert_registered_child_count 18" in loop
+    assert "v7_assert_registered_child_count 19" in loop
 
 
 
