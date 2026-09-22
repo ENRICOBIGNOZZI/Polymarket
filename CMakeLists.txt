@@ -379,6 +379,11 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_clob_pair_transport_driver PRIVATE pm_v7_clob_native)
   target_compile_options(pm_v7_clob_pair_transport_driver PRIVATE -UNDEBUG)
 
+  add_executable(pm_v7_clob_pair_transport_bench_driver
+    tests/v7_clob_pair_transport_bench_driver.cpp)
+  target_link_libraries(pm_v7_clob_pair_transport_bench_driver PRIVATE pm_v7_clob_native)
+  target_compile_options(pm_v7_clob_pair_transport_bench_driver PRIVATE -UNDEBUG)
+
   add_executable(pm_v7_user_oms_bridge_latency_tests
     tests/test_v7_user_oms_bridge_latency.cpp)
   target_link_libraries(pm_v7_user_oms_bridge_latency_tests PRIVATE pm_v7_account_native)
