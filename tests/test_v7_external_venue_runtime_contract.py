@@ -67,7 +67,7 @@ if __name__ == "__main__":
 
 def test_repricing_book_observer_is_optional_child() -> None:
     launcher = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text()
-    segment = launcher.split('v7_exec_class COLLECTOR "$FILLABILITY_OBSERVER"', 1)[1].split('v7_register_optional_child "$!"', 1)[0]
+    segment = launcher.split('v7_exec_class LATENCY_OBSERVER "$FILLABILITY_OBSERVER"', 1)[1].split('v7_register_optional_child "$!"', 1)[0]
     assert '--selection "$RUN_ROOT/universe/book_selection.json" --selection-only' in segment
     assert 'v7_register_child "$!"' not in segment
     assert 'for pid in "${fatal_pids[@]}"' in launcher
