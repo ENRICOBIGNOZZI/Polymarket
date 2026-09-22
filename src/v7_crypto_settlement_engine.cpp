@@ -6,6 +6,7 @@
 #include "pm/v7_crypto_decision_lane.hpp"
 #include "pm/v7_probability_model.hpp"
 #include "pm/v7_pure_arb_lane.hpp"
+#include "pm/v7_latency_trace.hpp"
 #include "pm/v7_external_ingress.hpp"
 #include "pm/v7_external_ws.hpp"
 #include "pm/v7_ingress_wakeup.hpp"
@@ -129,6 +130,7 @@ struct Options {
     std::int64_t paper_assumed_transport_delay_ns = 250'000'000LL;
     std::string paper_terms_sha256;
     std::string signal_policy_sha256;
+    std::string latency_trace_bin;
     bool strict_signal_policy = false;
     bool validate_only = false;
     bool observation_only = false;
@@ -194,6 +196,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--paper-assumed-transport-delay-ns") out.paper_assumed_transport_delay_ns = bounded_integer<std::int64_t>(next(), 1, 5'000'000'000LL);
         else if (arg == "--paper-terms-sha256") out.paper_terms_sha256 = next();
         else if (arg == "--signal-policy-sha256") out.signal_policy_sha256 = next();
+        else if (arg == "--latency-trace-bin") out.latency_trace_bin = next();
         else if (arg == "--strict-signal-policy") out.strict_signal_policy = true;
         else if (arg == "--validate-only") out.validate_only = true;
         else if (arg == "--observation-only") {
