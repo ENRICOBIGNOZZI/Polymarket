@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 29,
-  "expected_launcher_child_count": 28,
+  "expected_process_count": 30,
+  "expected_launcher_child_count": 29,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -411,6 +411,30 @@
       "launcher_log": "canonical_economics.log",
       "london_deployed": true,
       "runtime_class": "CONTROL"
+    },
+    {
+      "id": "multi_az_fencing_guard",
+      "executable": "scripts/v7_multi_az_fencing_guard.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "core",
+      "inputs": [
+        "control/az_fencing_lease.json",
+        "config/v7_failover_fencing.json"
+      ],
+      "outputs": [
+        "control/az_fencing_guard.json",
+        "az_fencing_guard.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "az_fencing_guard.log",
+      "london_deployed": true,
+      "runtime_class": "CONTROL",
+      "authority_overrides": {}
     },
     {
       "id": "pure_arb_oracle_hub",
@@ -854,8 +878,8 @@
       "authority_overrides": {}
     },
     {
-      "id": "pure_arb_maker_queue_calibration",
-      "executable": "scripts/v7_maker_queue_calibration.py",
+      "id": "pure_arb_maker_self_fill_calibration",
+      "executable": "scripts/v7_maker_self_fill_calibration.py",
       "arguments": [
         "--model-sha",
         "${SHA}"
@@ -863,18 +887,18 @@
       "profile": "observer",
       "inputs": [
         "process:pure_arb_maker_shadow",
-        "control/verified_maker_fill_receipts.jsonl"
+        "control/verified_self_fill_evidence.jsonl"
       ],
       "outputs": [
-        "research/repricing_book/maker_queue_calibration.json",
-        "research/repricing_book/maker_queue_calibration.log"
+        "research/repricing_book/maker_self_fill_calibration.json",
+        "research/repricing_book/maker_self_fill_calibration.log"
       ],
       "dependencies": [
         "pure_arb_maker_shadow"
       ],
       "exact_sha_required": true,
       "config_identity_required": true,
-      "launcher_log": "research/repricing_book/maker_queue_calibration.log",
+      "launcher_log": "research/repricing_book/maker_self_fill_calibration.log",
       "london_deployed": true,
       "runtime_class": "COLLECTOR",
       "authority_overrides": {}
