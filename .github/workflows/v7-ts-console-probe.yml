@@ -37,7 +37,7 @@ jobs:
           python3 - "$REQUEST_PATH" "$GITHUB_OUTPUT" <<'PY'
           import json,re,sys
           v=json.load(open(sys.argv[1]))
-          assert v=={"schema":"polymarket_v7_ts_console_probe_v1","read_only":True,"request_nonce":"ts-console-probe-20260922-v1"}
+          assert v=={"schema":"polymarket_v7_ts_console_probe_v1","read_only":True,"request_nonce":"ts-console-probe-20260922-v2"}
           with open(sys.argv[2],'a') as h: h.write("nonce="+v["request_nonce"]+"\n")
           PY
 
@@ -198,7 +198,7 @@ jobs:
                           pass
 
                   if host.endswith("accounts.google.com"):
-                      em=page.locator('input[type="email"]:visible')
+                      em=page.locator('input[type="email"]:visible, input[name="identifier"]:visible')
                       pw=page.locator('input[type="password"]:visible')
                       if em.count():
                           em.first.fill(email)
