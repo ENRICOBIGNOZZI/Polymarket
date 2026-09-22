@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pm/v7_market_state.hpp"
+#include "pm/v7_execution_plan.hpp"
 
 #include <algorithm>
 #include <array>
@@ -237,6 +238,7 @@ struct PairInput {
 struct LegPlan {
     std::uint64_t instrument_handle = 0;
     std::uint64_t market_state_version = 0;
+    std::int64_t exchange_event_ns = 0;
     std::int64_t quantity_microunits = 0;
     std::int32_t limit_price_e4 = 0;
     std::int32_t tick_size_e4 = 0;
@@ -358,6 +360,7 @@ struct PureArbExecutionPlan {
     out.yes = LegPlan{
         input.yes_instrument_handle,
         input.yes.state_version,
+        input.yes.exchange_event_ns,
         selected->shares_microunits,
         selected->yes_limit_e4,
         input.yes.tick_size_e4,
@@ -365,12 +368,62 @@ struct PureArbExecutionPlan {
     out.no = LegPlan{
         input.no_instrument_handle,
         input.no.state_version,
+        input.no.exchange_event_ns,
         selected->shares_microunits,
         selected->no_limit_e4,
         input.no.tick_size_e4,
         side};
     out.accepted = 1;
     return out;
+}
+
+[[nodiscard]] inline bool make_execution_plan(
+    const PureArbExecutionPlan& pair,
+    bool yes_leg,
+    std::uint64_t intent_id,
+    ExecutionPlan& out) noexcept {
+    out = {};
+    if (pair.accepted == 0 || pair.reason != DecisionReason::Accepted
+        || intent_id == 0 || pair.market_handle == 0
+        || pair.decision_monotonic_ns <= 0
+        || pair.trigger_receive_monotonic_ns <= 0) {
+        return false;
+    }
+    const auto& leg = yes_leg ? pair.yes : pair.no;
+    if (leg.instrument_handle == 0 || leg.market_state_version == 0
+        || leg.quantity_microunits <= 0 || leg.limit_price_e4 <= 0
+        || leg.limit_price_e4 >= 10'000 || leg.tick_size_e4 <= 0
+        || leg.limit_price_e4 % leg.tick_size_e4 != 0
+        || (leg.side != Side::Buy && leg.side != Side::Sell)) {
+        return false;
+    }
+    StrategyIntent intent{};
+    intent.intent_id = intent_id;
+    intent.market_handle = pair.market_handle;
+    intent.event_handle = pair.event_handle;
+    intent.instrument_handle = leg.instrument_handle;
+    intent.state_version = leg.market_state_version;
+    intent.causal_trigger_receive_monotonic_ns =
+        pair.trigger_receive_monotonic_ns;
+    intent.signal_ready_monotonic_ns = pair.decision_monotonic_ns;
+    intent.decision_monotonic_ns = pair.decision_monotonic_ns;
+    intent.exchange_event_ns = leg.exchange_event_ns;
+    intent.price_tick = leg.limit_price_e4 / leg.tick_size_e4;
+    intent.quantity_microunits = leg.quantity_microunits;
+    intent.strategy_id = StrategyId::HardArbitrage;
+    intent.type = IntentType::TargetPosition;
+    intent.side = leg.side;
+    intent.urgency = Urgency::Aggressive;
+    intent.purpose = IntentPurpose::Alpha;
+    intent.passive = 0;
+    intent.post_only = 0;
+    intent.expected_edge = pair.economics.conservative_edge_per_share();
+    intent.expected_ev = pair.economics.conservative_locked_pnl;
+    out.intent = intent;
+    out.tick_size_e4 = leg.tick_size_e4;
+    out.market_state_version = leg.market_state_version;
+    out.policy = ExecutionPolicyId::PureArbFok;
+    return true;
 }
 
 static_assert(std::is_trivially_copyable_v<PairInput>);
