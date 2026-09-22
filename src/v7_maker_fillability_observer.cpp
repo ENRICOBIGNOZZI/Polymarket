@@ -796,6 +796,56 @@ public:
         }
     }
 
+    void maybe_queue_pure_arb_deep(
+        const MarketWsEvent& event, const pm::fast::FeedReceiveStamp& receive) noexcept {
+        if (!pure_arb_paper_ || event.instrument_handle == 0
+            || event.instrument_handle >= pure_arb_pair_by_handle_.size()
+            || event.book.valid == 0 || event.book.lineage_continuous == 0) {
+            return;
+        }
+        const auto binding = pure_arb_pair_by_handle_[event.instrument_handle];
+        if (binding.market_handle == 0 || binding.yes_handle == 0 || binding.no_handle == 0
+            || binding.market_handle >= pure_arb_deep_trigger_active_.size()) {
+            return;
+        }
+        const auto yes_hot = decoder_->snapshot(binding.yes_handle);
+        const auto no_hot = decoder_->snapshot(binding.no_handle);
+        if (yes_hot.valid == 0 || no_hot.valid == 0
+            || yes_hot.lineage_continuous == 0 || no_hot.lineage_continuous == 0) {
+            pure_arb_deep_trigger_active_[binding.market_handle] = 0;
+            return;
+        }
+        const double raw_buy = 1.0 - e4_price(yes_hot.best_ask_e4) - e4_price(no_hot.best_ask_e4);
+        const double raw_sell = e4_price(yes_hot.best_bid_e4) + e4_price(no_hot.best_bid_e4) - 1.0;
+        const bool candidate = raw_buy > pure_arb_reserve_per_share_ + 1e-12
+            || raw_sell > pure_arb_reserve_per_share_ + 1e-12;
+        if (!candidate) {
+            pure_arb_deep_trigger_active_[binding.market_handle] = 0;
+            return;
+        }
+        if (pure_arb_deep_trigger_active_[binding.market_handle] != 0) return;
+
+        PureArbDeepEvidence deep{};
+        deep.market_handle = binding.market_handle;
+        deep.connection_epoch = connection_epoch_.load(std::memory_order_relaxed);
+        deep.receive_wall_ms = receive.wall_ms;
+        deep.trigger_receive_monotonic_ns = receive.monotonic_ns;
+        deep.yes = decoder_->deep_snapshot(binding.yes_handle);
+        deep.no = decoder_->deep_snapshot(binding.no_handle);
+        if (deep.yes.valid == 0 || deep.no.valid == 0
+            || deep.yes.bid_truncated != 0 || deep.yes.ask_truncated != 0
+            || deep.no.bid_truncated != 0 || deep.no.ask_truncated != 0) {
+            ++pure_arb_deep_snapshot_rejections_;
+            return;
+        }
+        if (!pure_arb_deep_queue_->try_push(deep)) {
+            ++pure_arb_deep_queue_drops_;
+            return;
+        }
+        pure_arb_deep_trigger_active_[binding.market_handle] = 1;
+        ++pure_arb_deep_candidates_;
+    }
+
     void on_frame(std::string_view payload, const pm::fast::FeedReceiveStamp& receive) {
         std::array<MarketWsEvent, kWsOutputCapacity> events{};
         const auto result = decoder_->process_frame(payload, receive, events);
@@ -876,6 +926,7 @@ public:
             row.quantity_microunits = event.quantity_microunits;
             row.aggressor_side = event.side;
             row.lineage_continuous = event.book.lineage_continuous;
+            maybe_queue_pure_arb_deep(event, receive);
             row.enqueue_monotonic_ns = monotonic_ns();
             if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
         }
