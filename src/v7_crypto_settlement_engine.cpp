@@ -1,5 +1,6 @@
 #include "pm/v7_native_settlement_oms_endpoint.hpp"
 #include "pm/v7_native_paper_execution.hpp"
+#include "pm/v7_native_paper_pair_execution.hpp"
 #include "pm/v7_native_runtime_evidence.hpp"
 #include "pm/fast_ws.hpp"
 #include "pm/v7_coinbase_l2_observer.hpp"
@@ -126,6 +127,7 @@ struct Options {
     double pure_arb_reserve_per_share = 0.0005;
     std::int64_t pure_arb_max_leg_skew_ns = 100'000'000LL;
     bool pure_arb_native_shadow = false;
+    bool pure_arb_native_paper_execution = false;
     int duration_seconds = 0;
     std::int64_t paper_venue_delay_ns = -1;
     std::int64_t paper_assumed_transport_delay_ns = 250'000'000LL;
@@ -193,6 +195,10 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--pure-arb-reserve-per-share") out.pure_arb_reserve_per_share = bounded_double(next(), 0.0, 0.25);
         else if (arg == "--pure-arb-max-leg-skew-ns") out.pure_arb_max_leg_skew_ns = bounded_integer<std::int64_t>(next(), 1'000, 5'000'000'000LL);
         else if (arg == "--pure-arb-native-shadow") out.pure_arb_native_shadow = true;
+        else if (arg == "--pure-arb-native-paper-execution") {
+            out.pure_arb_native_shadow = true;
+            out.pure_arb_native_paper_execution = true;
+        }
         else if (arg == "--duration-seconds") out.duration_seconds = bounded_integer<int>(next(), 0, 86'400);
         else if (arg == "--paper-venue-delay-ns") out.paper_venue_delay_ns = bounded_integer<std::int64_t>(next(), -1, 5'000'000'000LL);
         else if (arg == "--paper-assumed-transport-delay-ns") out.paper_assumed_transport_delay_ns = bounded_integer<std::int64_t>(next(), 1, 5'000'000'000LL);
@@ -439,6 +445,9 @@ int main(int argc, char** argv) {
             : options.paper_venue_delay_ns + options.paper_assumed_transport_delay_ns;
         NativePaperExecutionAdapter paper_execution(adapter_endpoint, 100'000'000LL,
             paper_taker_delay_ns, decision_policy.maximum_book_age_ns);
+        NativePaperPairExecutionAdapter pure_arb_pair_execution(
+            adapter_endpoint, paper_taker_delay_ns,
+            decision_policy.maximum_book_age_ns);
         NativeRuntimeEvidenceConfig evidence_config{};
         evidence_config.run_root = options.run_root;
         evidence_config.model_sha = options.model_sha;
