@@ -618,7 +618,7 @@ public:
           pure_arb_paper_(pure_arb_paper),
           pure_arb_reserve_per_share_(pure_arb_reserve_per_share),
           pure_arb_max_leg_skew_ms_(pure_arb_max_leg_skew_ms),
-          pure_arb_max_receive_to_decision_ns_(pure_arb_max_receive_to_decision_ns) {
+          pure_arb_receive_to_decision_limit_ns_(pure_arb_max_receive_to_decision_ns) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_handle = 0;
         std::size_t max_market_handle = 0;
@@ -1195,7 +1195,7 @@ public:
         pure_arb_receive_latency_.add(pure_arb_last_receive_to_decision_ns_);
 
         const bool fresh_decision =
-            pure_arb_last_receive_to_decision_ns_ <= pure_arb_max_receive_to_decision_ns_;
+            pure_arb_last_receive_to_decision_ns_ <= pure_arb_receive_to_decision_limit_ns_;
         if (!fresh_decision) {
             ++pure_arb_funnel_.stale_decision_rejections;
             market.buy.active = false;
@@ -1315,7 +1315,7 @@ public:
             {"conservative_locked_pnl_after_reserve_total", pure_arb_conservative_total_pnl_},
             {"reserve_per_share", pure_arb_reserve_per_share_},
             {"maximum_leg_skew_ms", pure_arb_max_leg_skew_ms_},
-            {"maximum_receive_to_decision_ns", pure_arb_max_receive_to_decision_ns_},
+            {"maximum_receive_to_decision_ns", pure_arb_receive_to_decision_limit_ns_},
             {"funnel", json::object{
                 {"book_updates", pure_arb_funnel_.book_updates},
                 {"handles_ready", pure_arb_funnel_.handles_ready},
@@ -1773,7 +1773,7 @@ private:
     bool pure_arb_paper_ = false;
     double pure_arb_reserve_per_share_ = 0.0005;
     std::int64_t pure_arb_max_leg_skew_ms_ = 100;
-    std::int64_t pure_arb_max_receive_to_decision_ns_ = 50'000'000LL;
+    std::int64_t pure_arb_receive_to_decision_limit_ns_ = 50'000'000LL;
     fs::path pure_arb_status_path_;
     fs::path pure_arb_trades_path_;
     std::ofstream pure_arb_output_;
