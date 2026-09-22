@@ -156,6 +156,9 @@ public:
 
     [[nodiscard]] bool publish(const NativeEvidenceEvent& event) noexcept;
     [[nodiscard]] bool publish_observation(const NativeObservation& event) noexcept;
+    // Zero-authority diagnostics must never stop or quarantine the execution
+    // owner merely because their bounded evidence queue is full.
+    [[nodiscard]] bool publish_optional_observation(const NativeObservation& event) noexcept;
     void stop() noexcept;
 
     [[nodiscard]] bool healthy() const noexcept {
