@@ -4,10 +4,10 @@
 Consumes captured RFQ_REQUEST messages.  It never authenticates, signs, quotes,
 confirms or cancels.  Exact hedge bounds use the conjunction semantics of Combo
 legs:
-  - sell Combo YES: buy the cheapest constituent leg;
-  - sell Combo NO: buy all constituent complements;
-  - buy Combo YES: Combo YES + all complements guarantees >= 1;
-  - buy Combo NO: Combo NO + any constituent leg guarantees >= 1.
+  - requester BUY YES: maker sells Combo YES and buys one constituent leg;
+  - requester SELL YES: maker buys Combo YES and buys all complements.
+Current RFQ side is YES-only. BUY requests are notional-sized; SELL requests
+are share-sized. Unknown depth/fees fail closed.
 Unknown fees/books fail closed.
 """
 from __future__ import annotations
@@ -70,21 +70,36 @@ def taker_cost(price:float,shares:float,rate:float)->float:
     fee=raw_fee_per_share(price,rate,1.0)
     return shares*(price+fee) if math.isfinite(fee) else math.nan
 
+def _requested_size(req:dict[str,Any],direction:str)->tuple[str,float]|None:
+    row=req.get("requested_size")
+    if not isinstance(row,dict):return None
+    unit=str(row.get("unit") or "").lower()
+    raw=row.get("value_e6")
+    try:value_e6=int(str(raw))
+    except (TypeError,ValueError):return None
+    if value_e6<=0:return None
+    expected="notional" if direction=="BUY" else "shares"
+    if unit!=expected:return None
+    return unit,value_e6/1_000_000.0
+
+
 def evaluate(req:dict[str,Any],catalog:dict[str,Any],args:argparse.Namespace)->dict[str,Any]:
     now=int(req.get("receive_wall_ms") or time.time_ns()//1_000_000)
     rid=str(req.get("rfq_id") or "");direction=str(req.get("direction") or "").upper()
     side=str(req.get("side") or "").upper();legs=[str(x) for x in req.get("leg_position_ids") or []]
     try:deadline=int(req.get("submission_deadline") or 0)
     except Exception:deadline=0
+    requested=_requested_size(req,direction)
     base={"rfq_id":rid,"direction":direction,"side":side,"leg_count":len(legs),
           "receive_wall_ms":now,"submission_deadline":deadline,
           "quote_budget_ms":deadline-now if deadline else None,"state":"CENSORED"}
-    if not rid or direction not in {"BUY","SELL"} or side not in {"YES","NO"} or not legs:
-        base["state"]="INVALID_REQUEST";return base
+    if not rid or direction not in {"BUY","SELL"} or side!="YES" or not legs or requested is None:
+        base["state"]="INVALID_OR_UNSUPPORTED_REQUEST";return base
     if deadline<=now:base["state"]="SUBMISSION_WINDOW_CLOSED";return base
+    unit,requested_value=requested
+    base["requested_size_unit"]=unit;base["requested_size_value"]=requested_value
     index=catalog.get("position_index") if isinstance(catalog.get("position_index"),dict) else {}
-    metas=[]
-    tokens=[]
+    metas=[];tokens=[]
     for pid in legs:
         meta=index.get(pid)
         if not isinstance(meta,dict):base["state"]="UNKNOWN_LEG";return base
@@ -95,33 +110,56 @@ def evaluate(req:dict[str,Any],catalog:dict[str,Any],args:argparse.Namespace)->d
     resolved=[]
     for pid,comp in metas:
         b=books.get(pid);cb=books.get(comp)
-        r=fee_rate(args.clob_url,pid,args.timeout_seconds);cr=fee_rate(args.clob_url,comp,args.timeout_seconds)
-        if b is None or cb is None or r is None or cr is None:
+        meta=index.get(pid) or {};cmeta=index.get(comp) or {}
+        r=meta.get("fee_rate");cr=cmeta.get("fee_rate")
+        try:r=float(r);cr=float(cr)
+        except (TypeError,ValueError):
+            base["state"]="CENSORED_FEE_METADATA";return base
+        if b is None or cb is None or not(0<=r<=1 and 0<=cr<=1):
             base["state"]="CENSORED_HEDGE_DATA";return base
         resolved.append({"position_id":pid,"complement_position_id":comp,
                          "book":b,"complement_book":cb,"fee_rate":r,"complement_fee_rate":cr})
-    q=args.reference_shares
-    if side=="YES" and direction=="BUY":
-        # requester buys YES -> maker sells YES; one constituent YES superhedges.
-        hedges=[taker_cost(x["book"]["ask"],q,x["fee_rate"]) for x in resolved]
-        hedge=min(hedges);bound=hedge/q
+    if direction=="BUY":
+        # User buys YES; maker sells YES. Safe quote lower bound is the cheapest
+        # constituent YES hedge. BUY RFQs specify pUSD notional, so quote size is
+        # floor(notional_e6 * 1e6 / price_e6). Evaluate at the conservative
+        # lower quote bound, which maximizes required shares.
+        per_share=[]
+        for x in resolved:
+            unit_cost=taker_cost(x["book"]["ask"],1.0,x["fee_rate"])
+            if math.isfinite(unit_cost):per_share.append((unit_cost,x))
+        if not per_share:base["state"]="CENSORED_HEDGE_DATA";return base
+        hedge_unit,chosen=min(per_share,key=lambda z:z[0])
+        quote=max(0.0,hedge_unit+args.reserve_per_share)
+        price_e6=max(1,int(math.ceil(quote*1_000_000.0-1e-12)))
+        shares_e6=(int(round(requested_value*1_000_000.0))*1_000_000)//price_e6
+        q=shares_e6/1_000_000.0
+        if q<=0 or chosen["book"]["ask_q"]+1e-12<q:
+            base["state"]="CENSORED_BBO_DEPTH";return base
+        bound=hedge_unit;actionable=price_e6/1_000_000.0
         relation="SHORT_COMBO_YES_PLUS_LONG_ONE_LEG_YES_NONNEGATIVE"
-    elif side=="NO" and direction=="BUY":
-        hedge=sum(taker_cost(x["complement_book"]["ask"],q,x["complement_fee_rate"]) for x in resolved)
-        bound=hedge/q;relation="SHORT_COMBO_NO_PLUS_LONG_ALL_LEG_COMPLEMENTS_NONNEGATIVE"
-    elif side=="YES" and direction=="SELL":
-        hedge=sum(taker_cost(x["complement_book"]["ask"],q,x["complement_fee_rate"]) for x in resolved)
-        bound=1.0-hedge/q;relation="LONG_COMBO_YES_PLUS_ALL_LEG_COMPLEMENTS_GUARANTEES_ONE"
+        base["hedge_position_id"]=chosen["position_id"]
     else:
-        hedges=[taker_cost(x["book"]["ask"],q,x["fee_rate"]) for x in resolved]
-        bound=1.0-min(hedges)/q;relation="LONG_COMBO_NO_PLUS_ONE_LEG_YES_GUARANTEES_ONE"
-    actionable=(bound+args.reserve_per_share if direction=="BUY" else bound-args.reserve_per_share)
-    feasible=(0.0<=actionable<=1.0)
+        # User sells exact YES shares; maker buys YES. Buying all constituent
+        # complements guarantees at least 1 pUSD together with Combo YES.
+        q=requested_value
+        if any(x["complement_book"]["ask_q"]+1e-12<q for x in resolved):
+            base["state"]="CENSORED_BBO_DEPTH";return base
+        hedge=sum(taker_cost(x["complement_book"]["ask"],1.0,x["complement_fee_rate"])
+                  for x in resolved)
+        bound=1.0-hedge
+        actionable=max(0.0,bound-args.reserve_per_share)
+        relation="LONG_COMBO_YES_PLUS_ALL_LEG_COMPLEMENTS_GUARANTEES_ONE"
+    feasible=(0.0<actionable<1.0 and q>0)
     base.update(
         state="PRICED_EXACT_BOUND" if feasible else "NO_FEASIBLE_QUOTE_DOMAIN",
         reference_quote_bound=bound,exact_relation=relation,
         reserve_per_share=args.reserve_per_share,actionable_bound=actionable,
-        quote_domain_feasible=feasible,legs=resolved)
+        quote_domain_feasible=feasible,quote_size_shares=q,
+        sizing_semantics=("BUY_NOTIONAL_FLOOR_AT_QUOTE_PRICE" if direction=="BUY"
+                          else "SELL_EXACT_SHARES"),
+        hedge_depth_semantics="BBO_ONLY_FAIL_CLOSED_IF_INSUFFICIENT",
+        legs=resolved)
     return base
 
 class RfqTail:
@@ -157,7 +195,7 @@ def main()->int:
     ap.add_argument("--model-sha",required=True);ap.add_argument("--catalog",type=Path,required=True)
     ap.add_argument("--rfq-tape",type=Path,required=True);ap.add_argument("--output",type=Path,required=True)
     ap.add_argument("--clob-url",default="https://clob.polymarket.com")
-    ap.add_argument("--timeout-seconds",type=float,default=1.0);ap.add_argument("--reference-shares",type=float,default=5.0)
+    ap.add_argument("--timeout-seconds",type=float,default=1.0)
     ap.add_argument("--reserve-per-share",type=float,default=0.001);ap.add_argument("--maximum-rows",type=int,default=1000)
     ap.add_argument("--seen-rfq-limit",type=int,default=100000)
     ap.add_argument("--interval-seconds",type=float,default=0.05)
