@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 22,
-  "expected_launcher_child_count": 21,
+  "expected_process_count": 23,
+  "expected_launcher_child_count": 22,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -670,6 +670,34 @@
       "authority_overrides": {}
     },
     {
+      "id": "pure_arb_complete_set_merge",
+      "executable": "scripts/v7_complete_set_merge_shadow.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:pure_arb_exchange_execution",
+        "process:crypto_universe"
+      ],
+      "outputs": [
+        "research/repricing_book/complete_set_merge_cycles.jsonl",
+        "research/repricing_book/complete_set_merge_status.json",
+        "research/repricing_book/complete_set_merge.log"
+      ],
+      "dependencies": [
+        "pure_arb_exchange_execution",
+        "crypto_universe"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/complete_set_merge.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
       "id": "pure_arb_capital_allocator",
       "executable": "scripts/v7_pure_arb_capital_allocator.py",
       "arguments": [
@@ -682,7 +710,8 @@
         "process:pure_arb_maker_shadow",
         "process:pure_arb_postfix",
         "process:pure_arb_cross_market",
-        "process:pure_arb_fee_reward_registry"
+        "process:pure_arb_fee_reward_registry",
+        "process:pure_arb_complete_set_merge"
       ],
       "outputs": [
         "research/repricing_book/capital_allocator_status.json",
@@ -693,7 +722,8 @@
         "pure_arb_maker_shadow",
         "pure_arb_postfix",
         "pure_arb_cross_market",
-        "pure_arb_fee_reward_registry"
+        "pure_arb_fee_reward_registry",
+        "pure_arb_complete_set_merge"
       ],
       "exact_sha_required": true,
       "config_identity_required": true,
