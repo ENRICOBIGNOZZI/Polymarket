@@ -109,6 +109,9 @@ enum OmsLatencyLeg : std::uint32_t {
     WireToAck = 1U << 5,
     TriggerToWire = 1U << 6,
     TriggerToAck = 1U << 7,
+    QueueToDelay = 1U << 8,
+    DelayDuration = 1U << 9,
+    DelayToWire = 1U << 10,
 };
 
 struct OmsLatencySnapshot {
@@ -119,6 +122,9 @@ struct OmsLatencySnapshot {
     std::int64_t decision_to_queue_ns = 0;
     std::int64_t queue_to_wire_ns = 0;
     std::int64_t wire_to_ack_ns = 0;
+    std::int64_t queue_to_delay_ns = 0;
+    std::int64_t delay_duration_ns = 0;
+    std::int64_t delay_to_wire_ns = 0;
     std::int64_t trigger_to_wire_ns = 0;
     std::int64_t trigger_to_ack_ns = 0;
 };
