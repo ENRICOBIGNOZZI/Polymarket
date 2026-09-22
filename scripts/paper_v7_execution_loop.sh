@@ -609,6 +609,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_capital_allocator.py \
   --postfix-cycles "$PURE_ARB_DIR/settlement_source_arb_cycles.jsonl" \
   --cross-status "$PURE_ARB_DIR/cross_market_exact_arb_status.json" \
   --fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json" \
+  --merge-evidence "$RUN_ROOT/control/verified_complete_set_merge_evidence.json" \
   --output "$PURE_ARB_DIR/capital_allocator_status.json" \
   --model-sha "$SHA" --interval-seconds 5 \
   >> "$PURE_ARB_DIR/capital_allocator.log" 2>&1 &
