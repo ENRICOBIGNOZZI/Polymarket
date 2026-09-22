@@ -40,6 +40,7 @@
     "scripts/v7_multi_crypto_oracle_hub.py",
     "scripts/v7_native_crypto_engine_manager.py",
     "scripts/v7_native_paper_settlement.py",
+    "scripts/v7_polymarket_status_source.py",
     "scripts/v7_portfolio_guard.py",
     "scripts/v7_probability_evaluation_gate.py",
     "scripts/v7_probability_promotion.py",
