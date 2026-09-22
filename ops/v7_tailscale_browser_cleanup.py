@@ -58,6 +58,43 @@ def first_visible(locator):
             pass
     return None
 
+def is_google_accounts_url(url: str) -> bool:
+    return bool(re.match(r"^https://accounts\.google\.[^/]+(?:/|$)", str(url or ""), re.I))
+
+def resume_tailscale_after_google(page) -> bool:
+    """Finish the post-2SV Google SetSID handoff without bypassing authentication."""
+    try:
+        url=str(page.url or "")
+    except Exception:
+        url=""
+    if not is_google_accounts_url(url):
+        return "/admin/machines" in url and "login.tailscale.com" in url
+    if "/accounts/SetSID" not in url and "/SetSID" not in url:
+        return False
+
+    print("tailnet_auth_google_setsid=true", flush=True)
+    page.wait_for_timeout(3000)
+
+    # Some Google locale domains leave the browser on SetSID after the user
+    # approved 2SV. Re-entering the original Tailscale URL in the same browser
+    # context completes the already-authenticated OAuth handoff.
+    page.goto(
+        "https://login.tailscale.com/admin/machines",
+        wait_until="domcontentloaded",
+        timeout=60000,
+    )
+    page.wait_for_timeout(1200)
+    if "/admin/machines" in page.url and "login.tailscale.com" in page.url:
+        print("tailnet_auth_setsid_resume_ok=true", flush=True)
+        return True
+
+    google=first_visible(page.get_by_text(re.compile(r"Sign in with Google", re.I)))
+    if google is not None:
+        google.click()
+        print("tailnet_auth_setsid_google_reentry=true", flush=True)
+        page.wait_for_timeout(1800)
+    return "/admin/machines" in page.url and "login.tailscale.com" in page.url
+
 def wait_for_human_2sv(page, timeout_s: int=420) -> bool:
     deadline=time.monotonic()+timeout_s
     prompt_triggered=False
@@ -71,8 +108,14 @@ def wait_for_human_2sv(page, timeout_s: int=420) -> bool:
         if url != last_url:
             print("tailnet_auth_url_stage="+url.split("?")[0][:160],flush=True)
             last_url=url
-        if "accounts.google.com" not in url:
+        if not is_google_accounts_url(url):
             return True
+
+        if "/accounts/SetSID" in url or "/SetSID" in url:
+            if resume_tailscale_after_google(page):
+                return True
+            page.wait_for_timeout(1000)
+            continue
         lower=body.lower()
 
         # On Google's challenge-selection screen, explicitly choose the normal
@@ -128,7 +171,7 @@ def login(page,email,password):
 
     page.wait_for_timeout(1200)
     print("tailnet_cleanup_post_click_url="+page.url.split("?")[0][:180], flush=True)
-    if "accounts.google.com" in page.url:
+    if is_google_accounts_url(page.url):
         email_locator=page.locator('input[name="identifier"], input[type="email"]')
         try:
             email_locator.first.wait_for(state="visible",timeout=20000)
@@ -186,13 +229,13 @@ def login(page,email,password):
                 if "enter a valid email" in lower or "inserisci un indirizzo email valido" in lower:
                     raise RuntimeError("google_identifier_invalid")
                 raise RuntimeError("google_identifier_did_not_advance")
-            if "accounts.google.com" in page.url:
+            if is_google_accounts_url(page.url):
                 # Google may insert challenge/passkey/account-selection screens
                 # before or instead of the password screen. Wait through those
                 # flows rather than treating them as a missing password field.
                 if not wait_for_human_2sv(page,timeout_s=900):
                     raise RuntimeError("interactive_auth_timeout")
-                if "accounts.google.com" not in page.url:
+                if not is_google_accounts_url(page.url):
                     password_box=None
                 else:
                     password_box=page.locator('input[name="Passwd"]')
@@ -227,14 +270,32 @@ def login(page,email,password):
                 body=page.locator("body").inner_text(timeout=3000)
             except Exception:
                 body=""
-            if "accounts.google.com" in page.url and any(marker.lower() in body.lower() for marker in INTERACTIVE_MARKERS):
+            if is_google_accounts_url(page.url) and any(marker.lower() in body.lower() for marker in INTERACTIVE_MARKERS):
                 if not wait_for_human_2sv(page):
                     raise RuntimeError("interactive_auth_timeout")
 
-    deadline=time.monotonic()+60
+    deadline=time.monotonic()+90
+    google_reentry_attempted=False
     while time.monotonic()<deadline:
-        if "/admin/machines" in page.url and "login.tailscale.com" in page.url:
+        url=str(page.url or "")
+        if "/admin/machines" in url and "login.tailscale.com" in url:
             return
+
+        if is_google_accounts_url(url) and ("/accounts/SetSID" in url or "/SetSID" in url):
+            if resume_tailscale_after_google(page):
+                return
+            page.wait_for_timeout(1000)
+            continue
+
+        if "login.tailscale.com" in url and not google_reentry_attempted:
+            google=first_visible(page.get_by_text(re.compile(r"Sign in with Google",re.I)))
+            if google is not None:
+                google.click()
+                google_reentry_attempted=True
+                print("tailnet_cleanup_google_reentry_clicked=true", flush=True)
+                page.wait_for_timeout(1800)
+                continue
+
         page.wait_for_timeout(1000)
     raise RuntimeError("tailscale_admin_login_timeout")
 
