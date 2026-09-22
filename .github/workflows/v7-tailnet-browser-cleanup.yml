@@ -1,0 +1,100 @@
+name: V7 Tailscale encrypted browser cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-tailnet-login.envelope.json
+      - .github/workflows/v7-tailnet-browser-cleanup.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+
+      - name: Decrypt one-shot Tailscale login
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.POLYMARKET_SERVER_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/deploy-key"
+          python3 scripts/v7_ssh_envelope.py \
+            --private-key "$RUNNER_TEMP/deploy-key" \
+            --input deploy/v7-tailnet-login.envelope.json \
+            --output "$RUNNER_TEMP/tailnet-login.json"
+          rm -f "$RUNNER_TEMP/deploy-key"
+          parent_sha="$(git rev-parse HEAD^)"
+          python3 - "$RUNNER_TEMP/tailnet-login.json" "$parent_sha" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert set(v)=={'schema','purpose','expected_parent_sha','email','password','maximum_deletions'}
+          assert v['schema']=='polymarket_v7_tailnet_login_handoff_v2'
+          assert v['purpose']=='TAILNET_CI_QUOTA_RECOVERY'
+          assert v['expected_parent_sha']==sys.argv[2]
+          assert isinstance(v['email'],str) and '@' in v['email']
+          assert isinstance(v['password'],str) and v['password']
+          assert 1 <= int(v['maximum_deletions']) <= 120
+          PY
+
+      - name: Install browser automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check playwright
+          command -v google-chrome >/dev/null 2>&1
+          command -v Xvfb >/dev/null 2>&1
+
+      - name: Remove stale CI helper nodes only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1440x1000x24 >"$RUNNER_TEMP/xvfb.log" 2>&1 &
+          xvfb_pid=$!
+          profile="$RUNNER_TEMP/v7-tailnet-chrome"
+          mkdir -p "$profile"
+          google-chrome \
+            --remote-debugging-port=9222 \
+            --user-data-dir="$profile" \
+            --no-first-run \
+            --no-default-browser-check \
+            --disable-dev-shm-usage \
+            about:blank >"$RUNNER_TEMP/chrome.log" 2>&1 &
+          chrome_pid=$!
+          cleanup_browser(){ kill "$chrome_pid" "$xvfb_pid" >/dev/null 2>&1 || true; }
+          trap cleanup_browser EXIT
+          ready=0
+          for _ in $(seq 1 80); do
+            if curl -fsS http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          test "$ready" = 1
+          python3 ops/v7_tailscale_browser_cleanup.py \
+            --credentials "$RUNNER_TEMP/tailnet-login.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --github-token "$GH_TOKEN" \
+            --cdp-url http://127.0.0.1:9222
+
+      - name: Destroy plaintext login
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          shred -u "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key" 2>/dev/null || \
+            rm -f "$RUNNER_TEMP/tailnet-login.json" "$RUNNER_TEMP/deploy-key"
