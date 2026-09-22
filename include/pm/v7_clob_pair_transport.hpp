@@ -19,6 +19,8 @@ struct PairTransportLegResult {
     std::int64_t wire_complete_monotonic_ns = 0;
     std::int64_t ack_complete_monotonic_ns = 0;
     int http_status = 0;
+    int incoming_cpu = -1;
+    int incoming_napi_id = -1;
     TlsTransportError transport_error = TlsTransportError::None;
     std::uint8_t wire_ok = 0;
     std::uint8_t response_ok = 0;
@@ -43,6 +45,8 @@ struct BatchTransportResult {
     std::int64_t wire_complete_monotonic_ns = 0;
     std::int64_t ack_complete_monotonic_ns = 0;
     int http_status = 0;
+    int incoming_cpu = -1;
+    int incoming_napi_id = -1;
     TlsTransportError transport_error = TlsTransportError::None;
     std::uint8_t wire_ok = 0;
     std::uint8_t response_ok = 0;
@@ -66,7 +70,8 @@ class PairPersistentTlsTransport final {
 public:
     PairPersistentTlsTransport(std::string_view host,
                                std::uint16_t port = 443,
-                               int timeout_ms = 2'000) noexcept;
+                               int timeout_ms = 2'000,
+                               int socket_busy_poll_us = 0) noexcept;
     ~PairPersistentTlsTransport();
 
     PairPersistentTlsTransport(const PairPersistentTlsTransport&) = delete;
