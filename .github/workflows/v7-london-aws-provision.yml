@@ -90,8 +90,19 @@ jobs:
             test -n "${AWS_SECRET_ACCESS_KEY:-}"
             test -n "${AWS_SESSION_TOKEN:-}"
             aws sts get-caller-identity --region eu-west-2 --output json >/dev/null
+            python3 scripts/v7_cutover_contract.py \
+              --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
+          else
+            # Latency hosts deliberately keep the PAPER runtime disabled.
+            # A cutover-readiness contract is therefore the wrong gate here.
+            # Validate exact code identity and benchmark-only safety instead.
+            test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+            test -x ops/v7_london_latency_lab.sh
+            python3 -m py_compile \
+              ops/v7_london_ssm_benchmark.py \
+              ops/v7_london_ssm_bootstrap.py \
+              ops/v7_london_multipath_ssm.py
           fi
-          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$EXPECTED_SHA" >/dev/null
           python3 - <<'PY'
           import json
           from pathlib import Path
