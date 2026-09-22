@@ -164,6 +164,95 @@ print('V7_RESULT='+json.dumps({{'probe':p,'manifest':m}},sort_keys=True,separato
 PY'''
 
 
+def latency_command(sha: str, zone_id: str, service_user: str, samples: int) -> str:
+    if not _valid_sha(sha):
+        raise ValueError("invalid exact SHA")
+    if zone_id not in ZONE_OUTPUTS:
+        raise ValueError("invalid physical zone id")
+    if not 100 <= samples <= 20000:
+        raise ValueError("latency samples out of range")
+    return f'''set -euo pipefail
+APP=/home/{service_user}/polymarket
+OUT=/mnt/polymarket-data/benchmarks/latency-{zone_id}-{sha}
+[[ "$(sudo -u {service_user} git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
+! systemctl is-active --quiet polymarket-v7-paper.service
+rm -rf "$OUT"
+install -d -o {service_user} -g {service_user} "$OUT"
+sudo -u {service_user} env POLYMARKET_APP_DIR="$APP" \
+  bash "$APP/ops/v7_london_latency_lab.sh" \
+    --sha "{sha}" --samples "{samples}" --output-dir "$OUT"
+python3 - "$OUT/summary.json" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1],encoding='utf-8'))
+assert v['schema']=='polymarket_v7_london_latency_lab_v1'
+assert v['sha']=='{sha}'
+assert v['paper_only'] is True
+assert v['authenticated_execution'] is False
+assert v['real_order_submission'] is False
+v['physical_zone_id']='{zone_id}'
+print('V7_LATENCY='+json.dumps(v,sort_keys=True,separators=(',',':')))
+PY'''
+
+
+def parse_latency(stdout: str) -> dict[str, Any]:
+    rows = [line[len("V7_LATENCY="):] for line in stdout.splitlines()
+            if line.startswith("V7_LATENCY=")]
+    if len(rows) != 1:
+        raise ValueError("exactly one V7_LATENCY result required")
+    value = json.loads(rows[0])
+    if not isinstance(value, dict):
+        raise ValueError("malformed V7_LATENCY result")
+    return value
+
+
+def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any]:
+    if set(rows) != set(ZONE_OUTPUTS):
+        raise ValueError("latency result must cover exactly three physical zones")
+    measurements = []
+    for zone_id in sorted(rows):
+        row = rows[zone_id]
+        if row.get("sha") != sha or row.get("physical_zone_id") != zone_id:
+            raise ValueError(f"{zone_id} latency identity mismatch")
+        if row.get("paper_only") is not True \
+                or row.get("authenticated_execution") is not False \
+                or row.get("real_order_submission") is not False:
+            raise ValueError(f"{zone_id} latency safety boundary invalid")
+        network = row["public_transport"]["parallel_two_persistent_lanes"]
+        pair = network["pair_completion_ns"]
+        measurements.append({
+            "physical_zone_id": zone_id,
+            "pair_p99_ns": int(pair["p99"]),
+            "pair_p999_ns": int(pair["p999"]),
+            "wire_start_skew_p99_ns": int(network["wire_start_skew_ns"]["p99"]),
+            "wire_complete_skew_p99_ns": int(network["wire_complete_skew_ns"]["p99"]),
+            "ack_skew_p99_ns": int(network["ack_skew_ns"]["p99"]),
+            "direct_p99_ns": int(row["handoff"]["direct"]["p99"]),
+            "spsc_p99_ns": int(row["handoff"]["spsc_decision_core"]["p99"]),
+            "ipo_sign_p99_ns": int(row["signing"]["ipo"]["p99"]),
+            "ipo_sign_p999_ns": int(row["signing"]["ipo"]["p999"]),
+            "pgo_sign_p99_ns": int(row["signing"]["pgo"]["p99"]),
+            "pgo_sign_p999_ns": int(row["signing"]["pgo"]["p999"]),
+            "ipo_promotion_candidate": bool(row["signing"]["ipo_promotion_candidate"]),
+            "pgo_promotion_candidate": bool(row["signing"]["pgo_promotion_candidate"]),
+        })
+    ordered = sorted(measurements, key=lambda x: (
+        x["pair_p99_ns"], x["pair_p999_ns"], x["physical_zone_id"]))
+    return {
+        "schema": "polymarket_v7_london_latency_shootout_v1",
+        "expected_sha": sha,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+        "automatic_cutover": False,
+        "authenticated_order_latency_observed": False,
+        "matching_engine_latency_observed": False,
+        "selection_metric": "public paired TLS GET /time p99 then p999",
+        "selected_physical_zone_id": ordered[0]["physical_zone_id"],
+        "measurements": measurements,
+        "raw": rows,
+    }
+
+
 def parse_result(stdout: str) -> tuple[dict[str, Any], dict[str, Any]]:
     rows = [line[len("V7_RESULT="):] for line in stdout.splitlines() if line.startswith("V7_RESULT=")]
     if len(rows) != 1:
@@ -236,13 +325,14 @@ def _validate_probe(zone_id: str, sha: str, stdout: str) -> tuple[dict[str, Any]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("smoke", "formal", "collect"))
+    parser.add_argument("mode", choices=("smoke", "formal", "collect", "latency"))
     parser.add_argument("--expected-sha", required=True)
     parser.add_argument("--stack-name", default="polymarket-v7-london-shootout")
     parser.add_argument("--region", default="eu-west-2")
     parser.add_argument("--service-user", default="ubuntu")
     parser.add_argument("--output-dir", type=Path, default=Path.home() / "polymarket-london")
     parser.add_argument("--receipt", type=Path)
+    parser.add_argument("--latency-samples", type=int, default=1000)
     args = parser.parse_args()
     if args.region != "eu-west-2":
         raise SystemExit("eu-west-2 required")
@@ -252,6 +342,44 @@ def main() -> int:
     stack = aws_json(args.region, ["cloudformation", "describe-stacks", "--stack-name", args.stack_name])
     instances = stack_instances(stack)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.mode == "latency":
+        if not 100 <= args.latency_samples <= 20000:
+            raise SystemExit("--latency-samples must be in [100,20000]")
+        timeout_s = 3600
+        submitted: dict[str, dict[str, str]] = {}
+        for zone_id, instance_id in instances.items():
+            command = latency_command(
+                args.expected_sha, zone_id, args.service_user,
+                args.latency_samples)
+            submitted[zone_id] = {
+                "instance_id": instance_id,
+                "command_id": send(args.region, instance_id, command, timeout_s),
+            }
+        deadline = time.monotonic() + timeout_s + 900
+        results: dict[str, dict[str, Any]] = {}
+        for zone_id in sorted(submitted):
+            identity = submitted[zone_id]
+            invocation = wait_one(
+                args.region, identity["command_id"], identity["instance_id"],
+                deadline, 10.0)
+            if invocation.get("Status") != "Success":
+                error = str(invocation.get("StandardErrorContent") or "").strip()
+                raise RuntimeError(
+                    f"{zone_id} latency lab failed command={identity['command_id']}: "
+                    f"{error[-3000:] or invocation.get('StatusDetails') or invocation.get('Status')}")
+            value = parse_latency(str(invocation.get("StandardOutputContent") or ""))
+            results[zone_id] = value
+            (args.output_dir / f"latency.{zone_id}.json").write_text(
+                json.dumps(value, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8")
+        shootout = evaluate_latency(results, args.expected_sha)
+        output = args.output_dir / f"latency.{args.expected_sha}.shootout.json"
+        output.write_text(
+            json.dumps(shootout, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8")
+        print(f"shootout={output}")
+        return 0
 
     if args.mode == "formal":
         run_id = f"{args.expected_sha[:12]}-{time.time_ns()}"
