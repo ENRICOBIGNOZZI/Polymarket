@@ -67,6 +67,57 @@ def test_transport_modes_have_distinct_arrival_semantics():
     assert bat=={"YES":1000,"NO":1000}
 
 
+def test_deep_replay_uses_latest_same_episode_snapshot():
+    deep=execution.DeepReplayTimeline(Path("/nonexistent"),SHA)
+    common={
+        "schema":"polymarket_v7_pure_arb_deep_book_snapshot_v1",
+        "model_sha":SHA,"paper_only":True,"authenticated_execution":False,
+        "real_order_submission":False,
+        "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+        "observer_session_id":"s","connection_epoch":1,
+        "capture_origin_wall_ms":1_000,"market_id":"m",
+        "yes_token":"y","no_token":"n",
+        "yes_bid_levels":[{"price":0.39,"size":10}],
+        "no_bid_levels":[{"price":0.49,"size":10}],
+        "no_ask_levels":[{"price":0.50,"size":10}],
+    }
+    deep.ingest({**common,"receive_wall_ms":1_000,
+                 "yes_ask_levels":[{"price":0.40,"size":10}]})
+    deep.ingest({**common,"receive_wall_ms":1_100,
+                 "yes_ask_levels":[{"price":0.43,"size":10}]})
+    class Book:
+        session="s";epoch=1
+        def between(self,*_args):return []
+    levels=deep.levels_at("m","y",1_000,1_150,"BUY",Book())
+    assert levels is not None and levels[0]==(0.43,10.0)
+
+
+def test_deep_replay_fails_closed_across_unreanchored_reset():
+    deep=execution.DeepReplayTimeline(Path("/nonexistent"),SHA)
+    deep.ingest({
+        "schema":"polymarket_v7_pure_arb_deep_book_snapshot_v1",
+        "model_sha":SHA,"paper_only":True,"authenticated_execution":False,
+        "real_order_submission":False,
+        "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+        "observer_session_id":"s","connection_epoch":1,
+        "capture_origin_wall_ms":1_000,"receive_wall_ms":1_000,"market_id":"m",
+        "yes_token":"y","no_token":"n",
+        "yes_bid_levels":[{"price":0.39,"size":10}],
+        "yes_ask_levels":[{"price":0.40,"size":10}],
+        "no_bid_levels":[{"price":0.49,"size":10}],
+        "no_ask_levels":[{"price":0.50,"size":10}],
+    })
+    class Book:
+        session="s";epoch=1
+        def between(self,*_args):
+            return [{
+                "observer_session_id":"s","connection_epoch":1,
+                "valid":True,"lineage_continuous":True,
+                "deep_replay_reset":True,"book_change":None,
+            }]
+    assert deep.levels_at("m","y",1_000,1_100,"BUY",Book()) is None
+
+
 def test_taker_tier_schedule_and_unknown_is_zero():
     assert econ.taker_tier(1_999)["rebate_fraction"]==0.0
     assert econ.taker_tier(2_000)["rebate_fraction"]==0.03
@@ -194,6 +245,10 @@ def test_causal_observer_persists_l10_ladders_and_runtime_wires_all_modes():
     assert '"bid_levels_l10"' in observer
     assert '"ask_levels_l10"' in observer
     assert "--transport-modes SEQUENTIAL,PARALLEL,BATCH" in runtime
+    assert '--deep-book-snapshots "$PURE_ARB_DIR/pure_arb_deep_book_snapshots.jsonl"' in runtime
+    assert "kPureArbDeepEvidenceArmsMs" in observer
+    assert "5000, 5500" in observer
+    assert "capture_origin_wall_ms" in observer
     assert runtime.count("v7_complete_set_merge_shadow.py")==1
     assert "v7_assert_registered_child_count 22" in runtime
     assert '--merge-evidence "$RUN_ROOT/control/verified_complete_set_merge_evidence.json"' in runtime
