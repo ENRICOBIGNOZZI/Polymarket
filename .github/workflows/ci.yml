@@ -238,6 +238,7 @@ jobs:
           python3 -m json.tool config/v7_exact_arb_relations.json >/dev/null
           python3 -m json.tool config/v7_exchange_semantics.json >/dev/null
           python3 -m json.tool config/v7_pure_arb_capital_policy.json >/dev/null
+          python3 -m json.tool config/v7_pure_arb_performance_slo.json >/dev/null
           python3 -m json.tool artifacts/github_main_ruleset.json >/dev/null
           python3 -m json.tool monitoring/v7_monitoring_manifest.json >/dev/null
           python3 -m json.tool monitoring/grafana/dashboards/polymarket-v7-latency.json >/dev/null
@@ -397,6 +398,26 @@ jobs:
           ctest --test-dir build-pure-arb-${{ matrix.build_type }} --output-on-failure \
             -R 'pm_v7_(causal_book_observer_tests|market_state_tests|market_ws_tests|oms_tests|native_runtime_evidence_tests|execution_mode_tests|native_paper_execution_tests|execution_admission_tests|native_settlement_authority_tests|paper_queue_tests|clob_rate_limit_tests)'
           ccache --show-stats
+
+      - name: Pure-arb native performance gate
+        if: matrix.build_type == 'Release'
+        run: |
+          set -euo pipefail
+          cmake --build build-pure-arb-Release --parallel "$(nproc)" --target \
+            polymarket_v7_native_clob_full_prewire_bench \
+            polymarket_v7_crypto_to_oms_bench
+          build-pure-arb-Release/polymarket_v7_native_clob_full_prewire_bench 100000 \
+            > build-pure-arb-Release/pure-arb-prewire-bench.json
+          build-pure-arb-Release/polymarket_v7_crypto_to_oms_bench --samples 100000 \
+            > build-pure-arb-Release/pure-arb-signal-to-oms-bench.json
+          python3 scripts/v7_pure_arb_performance_gate.py \
+            --config config/v7_pure_arb_performance_slo.json \
+            --prewire build-pure-arb-Release/pure-arb-prewire-bench.json \
+            --signal-to-oms build-pure-arb-Release/pure-arb-signal-to-oms-bench.json \
+            --output build-pure-arb-Release/pure-arb-performance-gate.json
+          cat build-pure-arb-Release/pure-arb-prewire-bench.json
+          cat build-pure-arb-Release/pure-arb-signal-to-oms-bench.json
+          cat build-pure-arb-Release/pure-arb-performance-gate.json
 
   pure-arb-sota-sanitizer:
     name: pure-arb-sota-sanitizer
