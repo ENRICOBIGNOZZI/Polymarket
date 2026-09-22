@@ -703,6 +703,17 @@ bool NativeRuntimeEvidenceWriter::publish_observation(const NativeObservation& e
     return true;
 }
 
+bool NativeRuntimeEvidenceWriter::publish_optional_observation(
+    const NativeObservation& event) noexcept {
+    if (!healthy() || stopping_.load(std::memory_order_acquire)) return false;
+    if (!observations_->try_push(event)) {
+        observations_dropped_.fetch_add(1, std::memory_order_release);
+        return false;
+    }
+    observations_published_.fetch_add(1, std::memory_order_release);
+    return true;
+}
+
 void NativeRuntimeEvidenceWriter::stop() noexcept {
     if (!impl_) return;
     stopping_.store(true, std::memory_order_release);
