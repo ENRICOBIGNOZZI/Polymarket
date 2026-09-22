@@ -108,6 +108,13 @@ def taker_observations(path:Path|None,policy:dict[str,Any])->list[dict[str,Any]]
     groups=defaultdict(list)
     for r in rows(path):
         if r.get("schema")!="polymarket_v7_pure_arb_exchange_execution_cycle_v1":continue
+        # Allocation uses only execution evidence that the observed venue mode
+        # would actually admit. Counterfactual NORMAL simulations remain useful
+        # for research but can never allocate capital.
+        if r.get("observed_venue_taker_allowed") is not True:
+            continue
+        if r.get("allocation_eligible") is not True:
+            continue
         if int(r.get("transport_delay_ms") or -1)!=transport or int(r.get("inter_leg_skew_ms") or -1)!=skew:continue
         key=(str(r.get("market_id") or ""),str(r.get("kind") or ""),
              int(r.get("revalidation_wall_ms") or r.get("detected_wall_ms") or 0))
