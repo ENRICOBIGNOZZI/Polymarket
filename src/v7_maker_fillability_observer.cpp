@@ -408,7 +408,8 @@ fair_observation_pairs(const Options& options) {
     throw std::runtime_error("fillability observer stopped before cold-start books became available");
 }
 
-void apply_selection_windows(std::vector<SelectedToken>& tokens, const fs::path& path) {
+void apply_selection_windows(std::vector<SelectedToken>& tokens, const fs::path& path,
+                             bool require_complete = true) {
     const auto root = read_json(path);
     if (!root.is_object()) throw std::runtime_error("selection window source must be object");
     const auto* raw = find_value(root.as_object(), "markets");
@@ -461,7 +462,51 @@ void apply_selection_windows(std::vector<SelectedToken>& tokens, const fs::path&
             }
         }
     }
-    if (assigned != tokens.size()) throw std::runtime_error("selection window coverage incomplete");
+    if (require_complete && assigned != tokens.size()) {
+        throw std::runtime_error("selection window coverage incomplete");
+    }
+}
+
+[[nodiscard]] bool defer_pure_arb_membership_reload(
+    const fs::path& selection,
+    const std::vector<std::pair<std::string, std::pair<std::string, std::string>>>& subscribed,
+    std::int64_t now_ms,
+    std::int64_t rollover_grace_ms = 30'000) {
+    try {
+        const auto root = read_json(selection);
+        if (!root.is_object()) return false;
+        const auto* raw = find_value(root.as_object(), "markets");
+        if (raw == nullptr || !raw->is_array()) return false;
+        std::size_t active = 0;
+        std::int64_t youngest_age_ms = std::numeric_limits<std::int64_t>::max();
+        for (const auto& item : raw->as_array()) {
+            if (!item.is_object()) continue;
+            const auto& row = item.as_object();
+            const auto start_ms = integer64(find_value(row, "start_timestamp_ms"));
+            const auto end_ms = integer64(find_value(row, "end_timestamp_ms"));
+            if (!(start_ms <= now_ms && now_ms < end_ms)) continue;
+            const auto market_id = text(find_value(row, "market_id"));
+            const auto event_id = text(find_value(row, "event_id"));
+            const auto yes = text(find_value(row, "yes_token"));
+            const auto no = text(find_value(row, "no_token"));
+            if (market_id.empty() || yes.empty() || no.empty()) return false;
+            const auto key = market_id + "\n" + event_id;
+            const bool covered = std::any_of(subscribed.begin(), subscribed.end(),
+                [&](const auto& pair) {
+                    return pair.first == key && pair.second.first == yes && pair.second.second == no;
+                });
+            if (!covered) return false;
+            ++active;
+            youngest_age_ms = std::min(youngest_age_ms, now_ms - start_ms);
+        }
+        // The active execution/observation contract remains exactly 30 contexts.
+        // If all newly-active pairs were already preloaded, keep the socket hot
+        // through the boundary. Reload later, away from the boundary, to preload
+        // the next generation.
+        return active == 30 && youngest_age_ms >= 0 && youngest_age_ms < rollover_grace_ms;
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 struct TradeEvidence {
@@ -972,7 +1017,7 @@ public:
 
     void refresh_pure_arb_metadata(const fs::path& selection) {
         if (!pure_arb_paper_) return;
-        apply_selection_windows(tokens_, selection);
+        apply_selection_windows(tokens_, selection, false);
         for (const auto& token : tokens_) {
             auto& market = pure_arb_markets_[token.market_handle];
             market.market_id = token.market_id;
@@ -1922,7 +1967,14 @@ int main(int argc, char** argv) {
                         reload = true;
                     }
                     if (!options.fair_only) {
-                        reload = reload || load_selected_pairs(options.selection, options.selection_only, options.model_sha) != selected_pairs;
+                        const auto latest_pairs = load_selected_pairs(
+                            options.selection, options.selection_only, options.model_sha);
+                        if (latest_pairs != selected_pairs) {
+                            const bool defer_rollover = options.pure_arb_paper
+                                && defer_pure_arb_membership_reload(
+                                    options.selection, selected_pairs, now);
+                            reload = reload || !defer_rollover;
+                        }
                     }
                 }
                 if (options.pure_arb_paper) {
