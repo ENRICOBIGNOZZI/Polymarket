@@ -189,15 +189,48 @@ def test_capital_allocator_uses_capital_time_not_edge():
     assert stats["A"]["mean_pnl_per_capital_second"]>stats["B"]["mean_pnl_per_capital_second"]
 
 
+
+def test_verified_maker_reward_is_ancillary_and_unverified_is_zero():
+    with tempfile.TemporaryDirectory() as d:
+        root=Path(d)
+        registry=root/"registry.json"
+        now=1_000
+        write(registry,{
+            "schema":"polymarket_v7_fee_reward_registry_v1",
+            "model_sha":SHA,"paper_only":True,
+            "authenticated_execution":False,"real_order_submission":False,
+            "unknown_reward_policy":"ZERO_EXPECTED_VALUE",
+            "markets":[
+                {"market_id":"m1","reward":{
+                    "verified":True,
+                    "source":"verified_realized_maker_reward_rate",
+                    "realized_pnl_pusd_per_capital_second":0.001,
+                    "expires_at_ms":2_000,
+                }},
+                {"market_id":"m2","reward":{
+                    "verified":False,
+                    "source":"unknown_reward_forced_zero",
+                    "realized_pnl_pusd_per_capital_second":999.0,
+                    "expires_at_ms":2_000,
+                }},
+            ],
+        })
+        rates=allocator.verified_maker_reward_rates(registry,SHA,now)
+        assert rates=={"m1":0.001}
+
+
+
 def test_runtime_remains_zero_authority():
     loop=(ROOT/"scripts/paper_v7_execution_loop.sh").read_text()
     for worker in (
         "v7_pure_arb_venue_mode.py",
         "v7_pure_arb_exchange_execution_shadow.py",
+        "v7_fee_reward_registry.py",
         "v7_pure_arb_capital_allocator.py",
     ):
         assert loop.count(worker)==1
-    assert "v7_assert_registered_child_count 18" in loop
+    assert "v7_assert_registered_child_count 19" in loop
+    assert '--fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json"' in loop
     assert '"authenticated_execution":false' in loop.replace(" ", "")
     assert '"real_order_submission":false' in loop.replace(" ", "")
 
