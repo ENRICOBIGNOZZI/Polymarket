@@ -349,7 +349,7 @@ def test_runtime_remains_zero_authority():
         "v7_pure_arb_maker_policy.py",
     ):
         assert loop.count(worker)==1
-    assert "v7_assert_registered_child_count 27" in loop
+    assert "v7_assert_registered_child_count 28" in loop
     assert '--fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json"' in loop
     assert '"authenticated_execution":false' in loop.replace(" ", "")
     assert '"real_order_submission":false' in loop.replace(" ", "")
