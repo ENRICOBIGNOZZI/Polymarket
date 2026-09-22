@@ -75,6 +75,16 @@ struct NativePaperSubmitResult {
     std::uint8_t censored = 0;
 };
 
+struct NativePaperPairResult {
+    NativePaperSubmitResult yes{};
+    NativePaperSubmitResult no{};
+    std::uint8_t accepted = 0;
+    std::uint8_t paired_fill = 0;
+    std::uint8_t one_leg_fill = 0;
+    std::uint8_t invalid = 0;
+};
+
+
 struct NativePaperTradeResult {
     std::array<NativePaperFillRecord, kNativePaperOrderCapacity> records{};
     std::size_t fills = 0;
@@ -113,6 +123,16 @@ public:
         const BookHotSnapshot& book,
         std::int64_t now_monotonic_ns) noexcept;
 
+    // PAPER-only paired FOK: both legs are preflighted before any OMS mutation.
+    // If either leg cannot fill its full quantity at its submitted limit, both
+    // commands are rejected unsent and no synthetic one-leg fill is created.
+    [[nodiscard]] NativePaperPairResult submit_pair(
+        const NativeOrderCommand& yes_command,
+        const BookHotSnapshot& yes_book,
+        const NativeOrderCommand& no_command,
+        const BookHotSnapshot& no_book,
+        std::int64_t now_monotonic_ns) noexcept;
+
     [[nodiscard]] bool request_cancel(
         const NativeCancelCommand& command,
         std::int64_t now_monotonic_ns) noexcept;
@@ -143,6 +163,9 @@ private:
     [[nodiscard]] NativePaperSubmitResult match_now(
         const NativeOrderCommand& command, const BookHotSnapshot& book,
         std::int64_t now_monotonic_ns) noexcept;
+    [[nodiscard]] bool fok_fully_executable(
+        const NativeOrderCommand& command,
+        const BookHotSnapshot& book) const noexcept;
     [[nodiscard]] ConsumedTop* available_top(
         const NativeOrderCommand& command, const BookHotSnapshot& book) noexcept;
     struct Slot {
