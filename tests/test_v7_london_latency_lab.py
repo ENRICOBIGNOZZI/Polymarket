@@ -115,6 +115,14 @@ def test_london_runtime_staging_and_ci_receipts_are_service_user_owned():
     assert 'sudo install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP"' in bootstrap
 
 
+def test_latency_failure_surfaces_bounded_partial_evidence():
+    ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
+    assert 'latency_lab_rc=$lab_rc' in ssm
+    assert 'public-paired-clob.json' in ssm
+    assert 'tail -c 12000' in ssm
+    assert 'exit "$lab_rc"' in ssm
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
