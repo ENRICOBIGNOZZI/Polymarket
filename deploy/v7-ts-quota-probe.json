@@ -1,0 +1,6 @@
+{
+  "login_success": true,
+  "machine_names": [],
+  "mfa_required": false,
+  "schema": "polymarket_v7_ts_quota_probe_v1"
+}
