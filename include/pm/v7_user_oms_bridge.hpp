@@ -3,6 +3,7 @@
 #include "pm/v7_clob_order_identity.hpp"
 #include "pm/v7_oms.hpp"
 #include "pm/v7_user_ws.hpp"
+#include "pm/v7_native_latency_tape.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -43,7 +44,7 @@ struct UserOmsBridgeSnapshot {
 // pending storage until the ACK arrives; it is never guessed or discarded.
 class UserOmsBridge final {
 public:
-    UserOmsBridge();
+    explicit UserOmsBridge(NativeLatencyTape* latency_tape = nullptr);
     ~UserOmsBridge();
     UserOmsBridge(const UserOmsBridge&) = delete;
     UserOmsBridge& operator=(const UserOmsBridge&) = delete;
