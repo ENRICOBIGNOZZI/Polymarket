@@ -119,8 +119,8 @@ int main() {
                == no_execution.intent.quantity_microunits);
 
         auto stale = input;
-        stale.no.receive_monotonic_ns =
-            stale.yes.receive_monotonic_ns - stale.maximum_leg_skew_ns - 1;
+        stale.yes.receive_monotonic_ns = stale.maximum_leg_skew_ns + 2;
+        stale.no.receive_monotonic_ns = 1;
         assert(evaluate_pair(stale).reason == DecisionReason::LegSkewExceeded);
 
         auto no_fee = input;
