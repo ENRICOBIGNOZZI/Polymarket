@@ -35,12 +35,21 @@ LOG="$BENCH/bootstrap.$SHA.$RUN_ID.log"
 mkdir -p "$BENCH"
 [[ -d "$APP/.git" ]]
 ! systemctl is-active --quiet polymarket-v7-paper.service
+dirty_before="$(sudo -u {service_user} git -C "$APP" status --porcelain)"
+if [[ -n "$dirty_before" ]]; then
+  echo "benchmark_source_checkout_dirty=1"
+  printf '%s\n' "$dirty_before" | head -50
+  sudo -u {service_user} git -C "$APP" reset --hard HEAD
+  sudo -u {service_user} git -C "$APP" clean -fd
+fi
+[[ -z "$(sudo -u {service_user} git -C "$APP" status --porcelain)" ]]
 sudo -u {service_user} git -C "$APP" fetch --no-tags origin main
 sudo -u {service_user} git -C "$APP" cat-file -e "$SHA^{{commit}}"
 sudo -u {service_user} git -C "$APP" show "$SHA:ops/v7_london_bootstrap.sh" > /tmp/v7_london_bootstrap.$SHA.sh
 chmod 755 /tmp/v7_london_bootstrap.$SHA.sh
 if ! env POLYMARKET_EXPECTED_SHA="$SHA" POLYMARKET_SERVICE_USER={service_user} \
   POLYMARKET_APP_DIR="$APP" PM_V7_RUN_ROOT="$RUN" \
+  POLYMARKET_REUSE_EXACT_SHA_CI=1 PM_V7_CI_REPOSITORY=ENRICOBIGNOZZI/Polymarket \
   POLYMARKET_INSTALL_TAILSCALE=1 POLYMARKET_INSTALL_GRAFANA=1 \
   bash /tmp/v7_london_bootstrap.$SHA.sh >"$LOG" 2>&1; then
   tail -200 "$LOG" >&2 || true
