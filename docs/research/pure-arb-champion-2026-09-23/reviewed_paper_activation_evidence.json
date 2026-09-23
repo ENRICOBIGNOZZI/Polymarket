@@ -1,0 +1,55 @@
+{
+  "schema": "polymarket_v7_pure_arb_paper_activation_review_v1",
+  "version": 1,
+  "review_date_utc": "2026-09-23",
+  "purpose": "Authorize forward PAPER evidence collection for the frozen PureArb champion only; not evidence of profitability and not authorization for real order submission.",
+  "champion_semantic_sha": "6003f263937a75f83a12e8d1e13f72743f5716b0",
+  "champion_branch": "champion/pure-arb-20260923",
+  "operator_instruction": "Freeze the current model as champion; run PAPER 24/7 from London without changing parameters; record complete book, theoretical/net edge, size, latency stages, survival at 1/5/10/25/50ms, counterfactual fills, leg risk and PnL.",
+  "selected_az_validation": {
+    "workflow_run_id": 35841553464,
+    "artifact_name": "v7-selected-az-pure-arb-35841553464",
+    "instance_id": "i-04042ca7da7a23215",
+    "physical_zone_id": "euw2-az1",
+    "region": "eu-west-2",
+    "expected_sha": "6003f263937a75f83a12e8d1e13f72743f5716b0",
+    "duration_seconds": 180,
+    "market_count": 30,
+    "frames": 130846,
+    "decoded_events": 227785,
+    "evaluations": 227785,
+    "pair_admissions": 0,
+    "paired_fills": 0,
+    "one_leg_fills": 0,
+    "invalid_pairs": 0,
+    "latency_dropped": 0,
+    "lineage_faults": 1713,
+    "pm_errors": 1,
+    "pm_reconnects": 1,
+    "clean": true
+  },
+  "selected_az_latency_evidence": {
+    "event_receive_to_decode_p99_ns": 14671,
+    "event_receive_to_wire_start_p99_ns": 14851,
+    "event_receive_to_http_ack_p99_ns": 21276806,
+    "pair_p99_ns": 25003488,
+    "direct_handoff_p99_ns": 50,
+    "spsc_decision_core_p99_ns": 7860,
+    "authenticated_order_latency_observed": false,
+    "matching_engine_latency_observed": false
+  },
+  "review_conclusions": [
+    "The frozen PureArb code path completed the bounded selected-AZ public-data PAPER validation cleanly with zero invalid pairs, zero one-leg fills and zero latency drops.",
+    "The selected-AZ evidence is sufficient to proceed with forward PAPER collection on euw2-az1.",
+    "The 180-second validation observed zero pair admissions and zero paired fills, so it is not evidence of profitability.",
+    "Authenticated order-to-matching-engine latency was not observed and remains outside the evidence claimed by this review.",
+    "The runtime maker artifact used to bootstrap the full PAPER supervisor must remain a COLD_START baseline with no learned rich model; it is infrastructure for PAPER collection, not a newly approved trading alpha."
+  ],
+  "safety_contract": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false,
+    "real_capital_at_risk": false,
+    "automatic_promotion": false
+  }
+}
