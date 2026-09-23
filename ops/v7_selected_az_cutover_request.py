@@ -45,11 +45,16 @@ def main()->int:
     p.add_argument("--role-arn",required=True)
     p.add_argument("--shootout",type=Path)
     p.add_argument("--output",type=Path)
+    p.add_argument("--github-output",type=Path)
     a=p.parse_args()
     v=request(a.request,a.parent_sha,a.role_arn)
     if a.shootout: shootout(a.shootout,v["target_sha"],v["selected_physical_zone_id"])
     if a.output:
       a.output.write_text(json.dumps(v,sort_keys=True,indent=2)+"\n")
+    if a.github_output:
+      with a.github_output.open("a",encoding="utf-8") as h:
+        for key in ("request_id","target_sha","latency_run_id","selected_physical_zone_id","expected_instance_id"):
+          h.write(f"{key}={v[key]}\n")
     print(json.dumps(v,sort_keys=True,separators=(",",":")))
     return 0
 if __name__=="__main__": raise SystemExit(main())
