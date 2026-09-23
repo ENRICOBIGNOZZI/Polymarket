@@ -42,6 +42,24 @@ jobs:
             --output json
           payload="$(cat <<'SH'
           set -euo pipefail
+          echo "=== PROMETHEUS SCRAPE DEBUG ==="
+          systemctl is-active prometheus.service || true
+          systemctl show prometheus.service -p MainPID -p ExecMainStatus -p Result -p Environment --no-pager 2>/dev/null || true
+          systemctl cat prometheus.service 2>/dev/null || true
+          echo "--- prometheus ready ---"
+          curl -sS http://127.0.0.1:9090/-/ready 2>/dev/null || true
+          echo
+          echo "--- exporter health ---"
+          curl -sS http://127.0.0.1:9108/healthz 2>/dev/null || true
+          echo
+          echo "--- exporter sample ---"
+          curl -sS http://127.0.0.1:9108/metrics 2>/dev/null | head -40 || true
+          echo "--- prometheus targets ---"
+          curl -sS http://127.0.0.1:9090/api/v1/targets 2>/dev/null || true
+          echo
+          echo "--- prometheus up query ---"
+          curl -sS --get --data-urlencode 'query=up{job="polymarket-v7"}' http://127.0.0.1:9090/api/v1/query 2>/dev/null || true
+          echo
           echo "=== CPU VISIBILITY ==="
           echo "nproc=$(nproc 2>/dev/null || true) nproc_all=$(nproc --all 2>/dev/null || true)"
           lscpu -e=CPU,ONLINE,NODE,CORE,SOCKET 2>/dev/null || true
