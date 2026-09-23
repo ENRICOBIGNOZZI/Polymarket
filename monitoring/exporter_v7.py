@@ -565,6 +565,27 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
     return lines
 
 
+def _render_unified_exact_arb_graph_execution_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (status.get("schema") == "polymarket_v7_pure_arb_exchange_execution_status_v1"
+            and status.get("paper_only") is True and status.get("authenticated_execution") is False
+            and status.get("real_order_submission") is False and status.get("real_capital_at_risk") is False
+            and status.get("execution_authority") == "ZERO_AUTHORITY_EXCHANGE_EXECUTION_SHADOW")
+    lines = [_metric("exact_arb_graph_execution_shadow_up", safe and status.get("state") == "COLLECTING"),
+             _metric("exact_arb_graph_counterfactual_scenarios_total", status.get("evaluated")),
+             _metric("exact_arb_graph_counterfactual_only_total", status.get("counterfactual_only_scenarios"))]
+    if not safe:
+        return lines
+    for state, count in sorted((status.get("states") or {}).items()):
+        lines.append(_metric("exact_arb_graph_counterfactual_state_total", count, {"state": state}))
+    for mode, summary in sorted((status.get("by_execution_mode") or {}).items()):
+        if not isinstance(summary, dict):
+            continue
+        lines.append(_metric("exact_arb_graph_counterfactual_fills_total", summary.get("paired"), {"mode": mode}))
+        lines.append(_metric("exact_arb_graph_counterfactual_one_leg_unwound_total", summary.get("one_leg_unwound"), {"mode": mode}))
+        lines.append(_metric("exact_arb_graph_counterfactual_pnl_usd", summary.get("sum_pnl_after_reserve"), {"mode": mode}))
+    return lines
+
+
 def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now: int | None = None, multi_crypto_shadow_run_root: Path | None = None, include_profit_experiment_report: bool = True) -> dict[str, Any]:
     live_observation_clock = now is None
     now = int(time.time()) if now is None else int(now)
@@ -718,6 +739,8 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         run_root / "research/repricing_book/cross_market_exact_arb_status.json")
     snapshot["unified_exact_arb_graph"] = _json(
         run_root / "research/repricing_book/unified_exact_arb_graph_status.json")
+    snapshot["unified_exact_arb_graph_execution"] = _json(
+        run_root / "research/repricing_book/unified_exact_arb_graph_execution_status.json")
     return snapshot
 
 
@@ -1095,6 +1118,7 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     lines.extend(_render_complete_set_maker_metrics(snapshot.get("complete_set_maker_shadow") or {}))
     lines.extend(_render_cross_market_exact_arb_metrics(snapshot.get("cross_market_exact_arb") or {}))
     lines.extend(_render_unified_exact_arb_graph_metrics(snapshot.get("unified_exact_arb_graph") or {}))
+    lines.extend(_render_unified_exact_arb_graph_execution_metrics(snapshot.get("unified_exact_arb_graph_execution") or {}))
     retention=operations.get('retention') or {}
     storage=retention.get('hft_storage') or {}
     population=retention.get('hft_opportunity_preservation') or {}

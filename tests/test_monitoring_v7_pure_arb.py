@@ -168,6 +168,19 @@ def test_unified_graph_exports_near_arb_distribution() -> None:
     assert "exact_arb_distance_to_arbitrage" in rendered and 'percentile="p50"' in rendered
 
 
+def test_unified_graph_execution_metrics_remain_zero_authority_only() -> None:
+    status={"schema":"polymarket_v7_pure_arb_exchange_execution_status_v1","state":"COLLECTING",
+      "paper_only":True,"authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,
+      "execution_authority":"ZERO_AUTHORITY_EXCHANGE_EXECUTION_SHADOW","evaluated":3,
+      "counterfactual_only_scenarios":2,"states":{"COMPLETE_PAIRED":1,"ONE_LEG_UNWOUND":1},
+      "by_execution_mode":{"SEQUENTIAL":{"paired":1,"one_leg_unwound":1,"sum_pnl_after_reserve":.2}}}
+    rendered="\n".join(exporter._render_unified_exact_arb_graph_execution_metrics(status))
+    assert "exact_arb_graph_execution_shadow_up 1" in rendered
+    assert "exact_arb_graph_counterfactual_one_leg_unwound_total" in rendered
+    status["real_order_submission"]=True
+    assert "exact_arb_graph_execution_shadow_up 0" in "\n".join(exporter._render_unified_exact_arb_graph_execution_metrics(status))
+
+
 if __name__ == "__main__":
     test_canonical_exporter_emits_pure_arb_metrics()
     test_unsafe_status_never_exports_context_economics()
