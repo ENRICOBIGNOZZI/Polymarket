@@ -253,7 +253,7 @@ def validate_ledger(
     try:
         handle = path.open("rb")
     except FileNotFoundError:
-        return 0, hashlib.sha256(b"").hexdigest(), {}
+        return 0, hashlib.sha256(b"").hexdigest(), {}, {}
     digest = hashlib.sha256()
     rows = 0
     model_sha_counts: dict[str, int] = {}
