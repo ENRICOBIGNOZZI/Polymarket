@@ -55,7 +55,8 @@ public:
     explicit PersistentTlsSession(std::string_view host,
                                   std::uint16_t port = 443,
                                   int timeout_ms = 2'000,
-                                  int socket_busy_poll_us = 0) noexcept;
+                                  int socket_busy_poll_us = 0,
+                                  bool capture_rx_metadata = false) noexcept;
     ~PersistentTlsSession();
 
     PersistentTlsSession(const PersistentTlsSession&) = delete;
@@ -78,6 +79,7 @@ private:
     std::uint16_t port_ = 443;
     int timeout_ms_ = 2'000;
     int socket_busy_poll_us_ = 0;
+    bool capture_rx_metadata_ = false;
     int fd_ = -1;
     ssl_ctx_st* ctx_ = nullptr;
     ssl_st* ssl_ = nullptr;
