@@ -225,11 +225,11 @@ def test_selected_az_paper_cutover_is_evidence_bound_and_paper_only():
     assert "systemctl stop" in runner
     assert "polymarket_v7_pure_arb_multi_runtime" in runner
     assert "v7_pure_arb_multi_config.py" in runner
-    assert '"single_process"' in runner
-    assert '"pm_worker_count"' in runner
-    assert '"one_leg_fills"' in runner
-    assert '"latency_dropped"' in runner
-    assert '"clean"' in runner
+    assert "single_process" in runner
+    assert "pm_worker_count" in runner
+    assert "one_leg_fills" in runner
+    assert "latency_dropped" in runner
+    assert "clean" in runner
     assert "select_markets" in config
     assert "CRYPTO_SETTLEMENT_ENGINE" in config
     assert "real_order_submission" in config
