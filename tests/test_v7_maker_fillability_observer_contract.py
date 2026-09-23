@@ -53,6 +53,21 @@ class V7MakerFillabilityObserverContractTest(unittest.TestCase):
         self.assertIn("v7_two_sided_complete_set_shadow.py", loop)
         self.assertIn("fillability_ws_status.json", (ROOT / "src" / "v7_maker_fillability_observer.cpp").read_text(encoding="utf-8"))
 
+    def test_exact_arb_hotset_reuses_causal_observer_without_pure_arb_economics(self) -> None:
+        source = (ROOT / "src" / "v7_maker_fillability_observer.cpp").read_text(encoding="utf-8")
+        loop = (ROOT / "scripts" / "paper_v7_execution_loop.sh").read_text(encoding="utf-8")
+        self.assertIn("polymarket_v7_exact_arb_hotset_selection_v1", source)
+        self.assertIn("CAUSAL_HOT_OBSERVATION_PRIORITY_ONLY", source)
+        self.assertIn("if (pure_arb_paper_ || graph_deep_evidence_)", source)
+        self.assertIn("(!pure_arb_paper_ && !graph_deep_evidence_)", source)
+        marker = 'GRAPH_HOTSET_DIR="$PURE_ARB_DIR/graph_hotset"'
+        self.assertIn(marker, loop)
+        segment = loop.split(marker, 1)[1].split('v7_register_optional_child "$!"', 1)[0]
+        self.assertIn("--graph-deep-evidence", segment)
+        self.assertIn("--selection-only", segment)
+        self.assertNotIn("--pure-arb-paper", segment)
+
+
     def test_build_contains_exact_ws_observer(self) -> None:
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn("add_executable(polymarket_v7_maker_fillability_observer", cmake)
