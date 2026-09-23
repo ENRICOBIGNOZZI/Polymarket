@@ -17,7 +17,7 @@ RUN_ROOT="${PM_V7_RUN_ROOT:-runs/paper_v7_live}"
 RECORDER="${PM_TRADE_RECORDER:-build/polymarket_v7_trade_recorder}"
 FILLABILITY_OBSERVER="${PM_V7_MAKER_FILLABILITY_OBSERVER:-build/polymarket_v7_maker_fillability_observer}"
 EXTERNAL_VENUE_RUNTIME="${PM_V7_EXTERNAL_VENUE_RUNTIME:-build/polymarket_v7_external_venue_runtime}"
-CRYPTO_SETTLEMENT_ENGINE="${PM_V7_CRYPTO_SETTLEMENT_ENGINE:-build/polymarket_v7_crypto_settlement_engine}"
+PURE_ARB_MULTI_RUNTIME="${PM_V7_PURE_ARB_MULTI_RUNTIME:-build/polymarket_v7_pure_arb_multi_runtime}"
 SHA="${PM_V7_MODEL_SHA:-$(cat deploy/london/runtime_sha 2>/dev/null || git rev-parse HEAD)}"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact 40-character runtime SHA required" >&2; exit 78; }
 CRYPTO_SIGNAL_POLICY="${PM_V7_CRYPTO_SIGNAL_POLICY:-$ROOT/config/v7_crypto_signal_policy.json}"
@@ -440,8 +440,8 @@ if [[ ! -x "$FILLABILITY_OBSERVER" ]]; then
   echo "missing V7 maker exact-WS fillability observer executable: $FILLABILITY_OBSERVER" >&2
   exit 78
 fi
-if [[ ! -x "$CRYPTO_SETTLEMENT_ENGINE" ]]; then
-  echo "missing canonical native V7 crypto settlement engine: $CRYPTO_SETTLEMENT_ENGINE" >&2
+if [[ ! -x "$PURE_ARB_MULTI_RUNTIME" ]]; then
+  echo "missing canonical native V7 PureArb multi-market runtime: $PURE_ARB_MULTI_RUNTIME" >&2
   exit 80
 fi
 # One canonical exhaustive metadata plane. The venue terminates pagination;
@@ -758,30 +758,16 @@ v7_exec_class CONTROL python3 scripts/v7_ledger_spool.py \
   >> "$RUN_ROOT/ledger_router.log" 2>&1 &
 v7_register_child "$!"
 
-# Cold-plane lifecycle manager. It discovers every registered active crypto
-# context and grants each native PAPER worker a bounded partition of the one
-# canonical CRYPTO_SETTLEMENT_ENGINE envelope. The sum of partitions may never
-# exceed the allocator-owned engine budget; real submission remains impossible.
-PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_native_crypto_engine_manager.py \
+# One cold-plane manager owns exactly one PureArb native process. The 30
+# CURRENT crypto contexts are fixed state machines inside that process; there
+# is no one-process-per-context fanout and no decision SPSC hop.
+PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_pure_arb_multi_manager.py \
   --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
   --run-id "$RUN_ID" --server-id "$SERVER_ID" \
-  --universe "$RUN_ROOT/universe/current.json" \
-  --allocation "$RUN_ROOT/control/allocations/crypto_settlement_engine.json" \
-  --market-registry "$ROOT/config/v7_crypto_settlement_markets.json" \
-  --signal-policy "$CRYPTO_SIGNAL_POLICY" \
-  "${PROBABILITY_MODEL_ARGS[@]}" \
-  "${PROBABILITY_EVALUATION_ARGS[@]}" \
-  --legacy-claims "$RUN_ROOT/control/legacy_native_claims.json" \
-  --engine "$CRYPTO_SETTLEMENT_ENGINE" \
-  --settler "$ROOT/scripts/v7_native_paper_settlement.py" \
-  --engine-log "$RUN_ROOT/native_crypto_settlement_engine.log" \
-  --target-quantity-microunits 5000000 \
-  --maximum-entry-price-e4 7500 \
-  --minimum-tte-ns 105000000000 --maximum-tte-ns 120000000000 \
-  --maker-share-cap-microunits 1000000 \
-  --observation-only \
-  --capture-native-decisions --capture-execution-windows --execution-window-ns 5000000000 \
-  --asynchronous-settlement \
+  --selection "$RUN_ROOT/universe/book_selection.json" \
+  --allocation "$RUN_ROOT/control/allocations/manifest.json" \
+  --risk-policy "$ROOT/config/v7_native_risk_policy.json" \
+  --engine "$PURE_ARB_MULTI_RUNTIME" \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"
 
