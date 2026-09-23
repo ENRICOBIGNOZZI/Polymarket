@@ -208,6 +208,16 @@ def test_invalid_inequality_and_unverified_components_remain_non_actionable() ->
     assert any(row["relation_family"]=="LEGACY_COMPONENT" for row in graph["unverified_candidates"])
 
 
+def test_combo_catalog_and_rfq_gateway_are_retained_as_unverified_component_sources() -> None:
+    inputs=[{"schema":"polymarket_v7_combo_market_source_v1","model_sha":"a"*40,"paper_only":True,
+             "authenticated_execution":False,"real_order_submission":False},
+            {"schema":"polymarket_v7_combo_rfq_gateway_status_v1","model_sha":"a"*40,"paper_only":True,
+             "authenticated_execution":False,"real_order_submission":False}]
+    graph=compile_graph([_registry([])],_universe(),"a"*40,inputs)
+    assert len(graph["component_provenance"])==2
+    assert {row["source_schema"] for row in graph["unverified_candidates"] if row["relation_family"]=="LEGACY_COMPONENT"}=={x["schema"] for x in inputs}
+
+
 def test_verified_component_attestation_compiles_and_bad_directions_reject() -> None:
     attested={"id":"neg","enabled":True,"relation_family":"NEGRISK_TRANSFORMATION","directions":["BUY_BASKET"],
               "states":["a","b"],"guaranteed_payout":1,"legs":[

@@ -363,6 +363,9 @@ def component_sources(inputs: list[dict[str, Any]], model_sha: str) -> tuple[lis
         if schema in {
             "polymarket_v7_cross_market_exact_arb_status_v1",
             "polymarket_v7_complete_set_merge_shadow_status_v1",
+            "polymarket_v7_two_sided_complete_set_shadow_status_v2",
+            "polymarket_v7_combo_market_source_v1",
+            "polymarket_v7_combo_rfq_gateway_status_v1",
             "polymarket_v7_combo_rfq_shadow_v1",
             "polymarket_v7_combo_collateral_return_shadow_v1",
         } and not isinstance(attestations, list):

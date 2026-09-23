@@ -502,6 +502,9 @@ v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph.py \
   --registry "$PURE_ARB_DIR/exact_arb_relations.generated.json" \
   --component-status "$PURE_ARB_DIR/cross_market_exact_arb_status.json" \
   --component-status "$PURE_ARB_DIR/complete_set_merge_status.json" \
+  --component-status "$PURE_ARB_DIR/two_sided_complete_set_status.json" \
+  --component-status "$PURE_ARB_DIR/combo_market_source.json" \
+  --component-status "$PURE_ARB_DIR/combo_rfq_gateway_status.json" \
   --component-status "$PURE_ARB_DIR/combo_rfq_shadow_status.json" \
   --component-status "$PURE_ARB_DIR/combo_collateral_return_status.json" \
   --model-sha "$SHA" --output "$PURE_ARB_DIR/unified_exact_arb_graph.json" \
