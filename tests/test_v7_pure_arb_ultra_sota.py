@@ -203,10 +203,10 @@ def test_ultra_sota_runtime_is_registered_fail_closed():
         "v7_multi_az_fencing_supervisor.py",
     ):
         assert loop.count(name)==1
-    assert "v7_assert_registered_child_count 35" in loop
+    assert "v7_assert_registered_child_count 37" in loop
     manifest=json.loads((ROOT/"config/v7_process_manifest.json").read_text())
-    assert manifest["expected_process_count"]==36
-    assert manifest["expected_launcher_child_count"]==35
+    assert manifest["expected_process_count"]==38
+    assert manifest["expected_launcher_child_count"]==37
     ids={p["id"] for p in manifest["processes"]}
     assert {"pure_arb_exact_relation_discovery","combo_market_source","combo_rfq_shadow",
             "combo_collateral_return_shadow","clock_guard","pure_arb_maker_self_fill_calibration","multi_az_fencing_supervisor",
