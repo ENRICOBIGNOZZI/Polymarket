@@ -4,6 +4,7 @@
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
+  "real_capital_at_risk": false,
   "automatic_promotion": false,
   "semantics": "Only finite-state payout relations with an explicit algebraic proof are admissible. Empty until a relation is independently verified.",
   "relations": []

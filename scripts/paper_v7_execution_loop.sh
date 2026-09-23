@@ -494,6 +494,16 @@ v7_exec_class COLLECTOR python3 scripts/v7_exact_relation_discovery.py \
   >> "$PURE_ARB_DIR/exact_relation_discovery.log" 2>&1 &
 v7_register_optional_child "$!"
 
+# Compiled graph generations are immutable, exact-proof-only and observer-only.
+# This process has no order, wallet, authenticated endpoint or capital authority.
+v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph.py \
+  --universe "$RUN_ROOT/universe/current.json" \
+  --registry "$ROOT/config/v7_exact_arb_relations.json" \
+  --registry "$PURE_ARB_DIR/exact_arb_relations.generated.json" \
+  --model-sha "$SHA" --output "$PURE_ARB_DIR/unified_exact_arb_graph.json" \
+  >> "$PURE_ARB_DIR/unified_exact_arb_graph.log" 2>&1 &
+v7_register_optional_child "$!"
+
 # Public Combo catalog. No credentials and no quoting authority.
 v7_exec_class COLLECTOR python3 scripts/v7_combo_market_source.py \
   --model-sha "$SHA" --output "$PURE_ARB_DIR/combo_market_source.json" \
@@ -805,7 +815,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 30
+v7_assert_registered_child_count 31
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do

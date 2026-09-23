@@ -137,6 +137,7 @@ def build(universe:dict[str,Any],model_sha:str)->dict[str,Any]:
     return {
         "schema":SCHEMA,"version":1,"paper_only":True,
         "authenticated_execution":False,"real_order_submission":False,
+        "real_capital_at_risk":False,
         "automatic_promotion":False,"model_sha":model_sha,
         "generated_at_ms":time.time_ns()//1_000_000,
         "semantics":"AUTO_DISCOVERY_ONLY_FOR_PAYOFF_IDENTICAL_DUPLICATES; ALL_RELATIONS_EXACT_RATIONAL_PROOF",
@@ -159,6 +160,7 @@ def main()->int:
         except Exception as exc:
             value={"schema":SCHEMA,"version":1,"paper_only":True,
                    "authenticated_execution":False,"real_order_submission":False,
+                   "real_capital_at_risk":False,
                    "automatic_promotion":False,"model_sha":args.model_sha,
                    "generated_at_ms":time.time_ns()//1_000_000,
                    "state":"UNIVERSE_OR_PROOF_ERROR","error":type(exc).__name__,"relations":[]}

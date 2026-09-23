@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 31,
-  "expected_launcher_child_count": 30,
+  "expected_process_count": 32,
+  "expected_launcher_child_count": 31,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -923,6 +923,21 @@
       "exact_sha_required": true,
       "config_identity_required": true,
       "launcher_log": "research/repricing_book/maker_self_fill_calibration.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "unified_exact_arb_graph_compiler",
+      "executable": "scripts/v7_unified_exact_arb_graph.py",
+      "arguments": ["--universe", "${RUN_ROOT}/universe/current.json", "--registry", "config/v7_exact_arb_relations.json", "--registry", "${RUN_ROOT}/research/repricing_book/exact_arb_relations.generated.json", "--model-sha", "${SHA}", "--output", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json"],
+      "profile": "observer",
+      "inputs": ["universe/current.json", "research/repricing_book/exact_arb_relations.generated.json", "config/v7_exact_arb_relations.json"],
+      "outputs": ["research/repricing_book/unified_exact_arb_graph.json", "research/repricing_book/unified_exact_arb_graph.log"],
+      "dependencies": ["pure_arb_exact_relation_discovery"],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/unified_exact_arb_graph.log",
       "london_deployed": true,
       "runtime_class": "COLLECTOR",
       "authority_overrides": {}
