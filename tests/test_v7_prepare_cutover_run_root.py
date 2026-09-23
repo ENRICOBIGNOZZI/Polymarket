@@ -395,3 +395,66 @@ def test_bootstrap_receipt_requires_ancestor_code_sha():
         _bootstrap_receipt(root)
         with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'bootstrap_receipt_invalid'):
             cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:False)
+
+def _failed_activation_fixture(root: Path, *, safe: bool = True, deployed_sha: str = OLD) -> None:
+    root.mkdir(parents=True,exist_ok=True)
+    _bootstrap_receipt(root)
+    (root/'control').mkdir(parents=True,exist_ok=True)
+    (root/'control/deployed_sha').write_text(deployed_sha+'\n',encoding='utf-8')
+    write(root/'control/supervisor_status.json',{
+        'schema':'polymarket_v7_supervisor_status_v1',
+        'expected_sha':deployed_sha,
+        'state':'failed',
+        'paper_only':True,
+        'authenticated_execution':False if safe else True,
+        'real_order_submission':False,
+        'child_pid':0,
+        'supervisor_pid':99999998,
+    })
+
+
+def test_verified_failed_first_activation_is_archived_without_runtime_state():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_failed_activation_fixture(root)
+        result=cutover.prepare(
+            root,base/'archives',base,NEW,now=126,
+            ancestor_check=lambda *_:True)
+        assert result['state']=='ARCHIVED_PRIOR_SHA'
+        assert result['archived'] is True
+        assert result['prior_failed_activation_residue'] is True
+        assert result['prior_inventory_contract']=='FAILED_ACTIVATION_NO_RUNTIME'
+        assert result['prior_open_positions']=={
+            'paper_account':0,'maker_active_orders':0,'native_open_orders':0,
+            'native_unsettled_markets':0,'native_carryover_microdollars':0}
+
+
+def test_verified_failed_same_sha_activation_is_archived_not_reused():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_failed_activation_fixture(root,deployed_sha=NEW)
+        result=cutover.prepare(
+            root,base/'archives',base,NEW,now=127,
+            ancestor_check=lambda *_:True)
+        assert result['state']=='ARCHIVED_PRIOR_SHA'
+        assert result['prior_failed_activation_residue'] is True
+
+
+def test_failed_activation_residue_stays_fail_closed_when_unsafe_or_stateful():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_failed_activation_fixture(root,safe=False)
+        with unittest.TestCase().assertRaisesRegex(
+            cutover.CutoverArchiveError,'prior_runtime_safety_contract_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_failed_activation_fixture(root)
+        ledger=root/'ledger/execution.jsonl';ledger.parent.mkdir(parents=True)
+        ledger.write_text('x\n',encoding='utf-8')
+        with unittest.TestCase().assertRaisesRegex(
+            cutover.CutoverArchiveError,'prior_runtime_safety_contract_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_failed_activation_fixture(root)
+        write(root/'control/portfolio_state.json',{'paper_only':True})
+        with unittest.TestCase().assertRaisesRegex(
+            cutover.CutoverArchiveError,'prior_runtime_safety_contract_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+
