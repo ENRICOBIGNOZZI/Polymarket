@@ -5,18 +5,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_native_decision_loop_is_event_driven_and_router_free():
-    source = (ROOT / 'src/v7_crypto_settlement_engine.cpp').read_text()
+    source = (ROOT / 'src/v7_pure_arb_multi_runtime.cpp').read_text()
+    engine = (ROOT / 'src/v7_pure_arb_multi_engine.cpp').read_text()
     loop = (ROOT / 'scripts/paper_v7_execution_loop.sh').read_text()
-    assert 'NativeCryptoDecisionLane' in source
-    assert 'ExternalVenueWsClient' in source
     assert 'MarketWebSocketFeed' in source
-    assert 'lane.construct_candidate' in source
-    assert 'authority.submit' in source
+    assert 'MultiMarketEngine engine' in source
+    assert 'engine.on_market_event' in source
+    assert 'paper.submit_pair_fok' in source
+    assert 'authority_.submit_pair' in engine
     assert 'v7_external_fair_research.py' not in loop
-    assert 'scripts/v7_native_crypto_engine_manager.py' in loop
-    assert '--allocation "$RUN_ROOT/control/allocations/crypto_settlement_engine.json"' in loop
-    assert '--market-registry "$ROOT/config/v7_crypto_settlement_markets.json"' in loop
-    assert '--engine "$CRYPTO_SETTLEMENT_ENGINE"' in loop
+    assert 'scripts/v7_pure_arb_multi_manager.py' in loop
+    assert 'scripts/v7_native_crypto_engine_manager.py' not in loop
+    assert '--allocation "$RUN_ROOT/control/allocations/manifest.json"' in loop
+    assert '--risk-policy "$ROOT/config/v7_native_risk_policy.json"' in loop
+    assert '--engine "$PURE_ARB_MULTI_RUNTIME"' in loop
 
 
 def test_repricing_book_observer_covers_all_runtime_contexts_outside_hot_path():
@@ -94,11 +96,13 @@ def test_retrospective_analytics_are_off_london_and_complete_on_research_plane()
 
 
 def test_native_rollover_settlement_failure_is_fail_closed():
-    manager = (ROOT / 'scripts/v7_native_crypto_engine_manager.py').read_text()
-    assert 'SETTLEMENT_BLOCKED' in manager
-    assert 'NATIVE_PAPER_SETTLEMENT_INCOMPLETE' in manager
-    assert 'return 79' in manager
-    assert 'self._terminate_all()' in manager
+    manager = (ROOT / 'scripts/v7_pure_arb_multi_manager.py').read_text()
+    assert 'remaining_capital_lease' in manager
+    assert 'native_capital_fully_reserved_by_unsettled_exposure' in manager
+    assert 'start_settlements' in manager
+    assert 'elif rc == 79' in manager
+    assert 'settlement_retry_after' in manager
+    assert 'settlement_failures' in manager
 
 
 if __name__ == "__main__":
