@@ -423,14 +423,14 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
     return graph
 
 
-def levels(raw: Any) -> list[tuple[Fraction, Fraction]]:
+def levels(raw: Any, descending: bool = False) -> list[tuple[Fraction, Fraction]]:
     out = []
     if not isinstance(raw, list): return out
     for value in raw[:1024]:
         try: price, size = frac(value[0]), frac(value[1])
         except (IndexError, TypeError, GraphError): continue
         if 0 < price < 1 and size > 0: out.append((price, size))
-    return sorted(out)
+    return sorted(out, reverse=descending)
 
 
 def round_fee(value: Fraction, increment: Fraction | None, mode: str) -> Fraction:
@@ -468,6 +468,9 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
              inventory_limit: Fraction | str | None = None) -> dict[str, Any]:
     """Exact full-depth sizing with depth breakpoints; never treats missing fees/depth as zero."""
     if relation.get("enabled") is not True: return {"accepted": False, "reason": "disabled_relation"}
+    permitted = set(relation.get("directions") or ["BUY_BASKET"])
+    buy_requested = "BUY_COMPLETE_SET" in permitted or "BUY_BASKET" in permitted
+    sell_requested = "SELL_COMPLETE_SET" in permitted or "SELL_INVENTORY_BASKET" in permitted
     prepared, candidates, times = [], set(), []
     for leg in relation.get("legs") or []:
         book = books.get(str(leg.get("token_id")))
@@ -479,24 +482,37 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
             raw_exponent = book.get("fee_exponent") if book.get("fee_exponent") is not None else leg.get("fee_exponent")
             exponent = frac(0 if raw_exponent is None else raw_exponent)
         except (KeyError, TypeError, ValueError, GraphError): return {"accepted": False, "reason": "fee_or_timestamp_missing"}
-        asks, bids = levels(book.get("asks")), levels(book.get("bids"))
-        if fee < 0 or exponent < 0 or exponent.denominator != 1 or not asks: return {"accepted": False, "reason": "fee_or_depth_invalid"}
+        asks, bids = levels(book.get("asks")), levels(book.get("bids"), descending=True)
+        if fee < 0 or exponent < 0 or exponent.denominator != 1 or (not asks and not bids):
+            return {"accepted": False, "reason": "fee_or_depth_invalid"}
         if stamp <= 0 or now_ms - stamp > maximum_age_ms: return {"accepted": False, "reason": "stale_book"}
-        cumulative = Fraction(0)
-        for _, size in asks: cumulative += size; candidates.add(cumulative / coefficient)
+        if asks:
+            cumulative = Fraction(0)
+            for _, size in asks: cumulative += size; candidates.add(cumulative / coefficient)
         prepared.append((leg, asks, bids, fee, int(exponent), coefficient)); times.append(stamp)
     if not prepared: return {"accepted": False, "reason": "empty_relation"}
     if max(times) - min(times) > maximum_skew_ms: return {"accepted": False, "reason": "leg_skew"}
+    buy_enabled = buy_requested and all(bool(asks) for _,asks,_,_,_,_ in prepared)
+    sell_enabled = sell_requested and all(bool(bids) for _,_,bids,_,_,_ in prepared)
+    if not buy_enabled and not sell_enabled: return {"accepted": False, "reason": "fee_or_depth_invalid"}
     guarantee, reserve, best = frac(relation["guaranteed_payout"]), frac(relation.get("reserve_per_unit", 0)), None
     minimum=max((frac(leg.get("minimum_order",0))/coefficient for leg,_,_,_,_,coefficient in prepared),default=Fraction(0))
     cap=frac(capital_limit)
-    raw_touch=sum((depth[0][0]*coefficient for _,depth,_,_,_,coefficient in prepared),Fraction(0))
-    fee_touch=sum(((depth[0][0] + fee_per_share(depth[0][0], fee, exponent))*coefficient
-                   for _,depth,_,fee,exponent,coefficient in prepared),Fraction(0))
-    distances={"distance_to_raw_arbitrage":fstr(raw_touch-guarantee),
-               "distance_to_after_fee_arbitrage":fstr(fee_touch-guarantee),
-               "distance_to_after_reserve_arbitrage":fstr(fee_touch+reserve-guarantee)}
-    permitted = set(relation.get("directions") or ["BUY_BASKET"])
+    def distances_for(direction: str) -> dict[str, str]:
+        if direction == "BUY":
+            raw_touch=sum((asks[0][0]*coefficient for _,asks,_,_,_,coefficient in prepared),Fraction(0))
+            fee_touch=sum(((asks[0][0] + fee_per_share(asks[0][0], fee, exponent))*coefficient
+                           for _,asks,_,fee,exponent,coefficient in prepared),Fraction(0))
+            return {"distance_to_raw_arbitrage":fstr(raw_touch-guarantee),
+                    "distance_to_after_fee_arbitrage":fstr(fee_touch-guarantee),
+                    "distance_to_after_reserve_arbitrage":fstr(fee_touch+reserve-guarantee)}
+        raw_proceeds=sum((bids[0][0]*coefficient for _,_,bids,_,_,coefficient in prepared),Fraction(0))
+        net_proceeds=sum(((bids[0][0] - fee_per_share(bids[0][0], fee, exponent))*coefficient
+                         for _,_,bids,fee,exponent,coefficient in prepared),Fraction(0))
+        return {"distance_to_raw_arbitrage":fstr(guarantee-raw_proceeds),
+                "distance_to_after_fee_arbitrage":fstr(guarantee-net_proceeds),
+                "distance_to_after_reserve_arbitrage":fstr(guarantee+reserve-net_proceeds)}
+    distances=distances_for("BUY" if buy_enabled else "SELL")
     saw_order, saw_depth, saw_capital, inventory_unavailable, transformation_limited = False, False, False, False, False
     transform = relation.get("transformation") if isinstance(relation.get("transformation"), dict) else None
     try: transformation_capacity = frac(transform["capacity"]) if transform is not None else None
@@ -506,6 +522,8 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
         required = "BUY_COMPLETE_SET" if direction == "BUY" else "SELL_COMPLETE_SET"
         alias = "BUY_BASKET" if direction == "BUY" else "SELL_INVENTORY_BASKET"
         if required not in permitted and alias not in permitted: continue
+        if direction == "BUY" and not buy_enabled: continue
+        if direction == "SELL" and not sell_enabled: continue
         local_candidates = set(candidates)
         if direction == "SELL":
             if inventory_limit is None:
@@ -545,6 +563,7 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
         return {"accepted": False, "reason": reason, **distances}
     if best[2] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
     direction, quantity, cost, pnl, capital = best
+    distances=distances_for(direction)
     lock = relation.get("capital_lock_time_ms")
     if lock is None and transform is not None: lock = transform.get("capital_lock_time_ms")
     try: lock_value = int(lock) if lock is not None else None

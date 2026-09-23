@@ -136,6 +136,15 @@ def test_sell_inventory_direction_requires_inventory_and_uses_bids() -> None:
     assert evaluate(relation,books,1)["reason"]=="inventory_unavailable"
     out=evaluate(relation,books,1,inventory_limit="3")
     assert out["accepted"] is True and out["direction"]=="SELL" and out["quantity"]=="3"
+    assert out["distance_to_raw_arbitrage"]=="-1/5"
+
+
+def test_missing_bid_does_not_suppress_a_valid_buy_direction() -> None:
+    relation={"enabled":True,"directions":["BUY_COMPLETE_SET","SELL_COMPLETE_SET"],"guaranteed_payout":"1",
+              "legs":[{"token_id":"y","coefficient":"1"},{"token_id":"n","coefficient":"1"}]}
+    books={token:{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0",
+                  "asks":[["2/5","1"]]} for token in ("y","n")}
+    assert evaluate(relation,books,1)["direction"]=="BUY"
 
 
 def test_fee_rounding_is_exact_and_missing_bid_depth_fails_closed() -> None:
