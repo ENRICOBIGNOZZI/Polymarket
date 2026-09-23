@@ -230,7 +230,7 @@ def validate(root: Path, expected_head: str | None) -> dict[str, str]:
         fail("V7 cutover blocked: canonical typed execution mode is invalid")
     runtime_supervision = load_json(root / "config/v7_runtime_supervision.json")
     if (runtime_supervision.get("schema") != "polymarket_v7_runtime_supervision_v1"
-            or runtime_supervision.get("version") != 7
+            or runtime_supervision.get("version") != 8
             or runtime_supervision.get("execution_mode") != "PAPER_SIMULATED"
             or runtime_supervision.get("execution_modes_policy") != "config/v7_execution_modes.json"
             or runtime_supervision.get("paper_only") is not True
