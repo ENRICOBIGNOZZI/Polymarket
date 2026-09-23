@@ -434,13 +434,15 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
                "distance_to_after_fee_arbitrage":fstr(fee_touch-guarantee),
                "distance_to_after_reserve_arbitrage":fstr(fee_touch+reserve-guarantee)}
     permitted = set(relation.get("directions") or ["BUY_BASKET"])
+    saw_order, saw_depth, saw_capital, inventory_unavailable = False, False, False, False
     for direction in ("BUY", "SELL"):
         required = "BUY_COMPLETE_SET" if direction == "BUY" else "SELL_COMPLETE_SET"
         alias = "BUY_BASKET" if direction == "BUY" else "SELL_INVENTORY_BASKET"
         if required not in permitted and alias not in permitted: continue
         local_candidates = set(candidates)
         if direction == "SELL":
-            if inventory_limit is None: continue
+            if inventory_limit is None:
+                inventory_unavailable = True; continue
             local_candidates = set()
             for _, _, bids, _, _, coefficient in prepared:
                 cumulative = Fraction(0)
@@ -450,6 +452,7 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
         for quantity in sorted(local_candidates):
             if quantity <= 0 or quantity < minimum: continue
             if direction == "SELL" and quantity > frac(inventory_limit): continue
+            saw_order = True
             total = Fraction(0)
             for leg, asks, bids, fee, exponent, coefficient in prepared:
                 book = asks if direction == "BUY" else bids
@@ -459,15 +462,18 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
                                  str(leg.get("fee_rounding_mode") or "EXACT"))
                 except GraphError:
                     return {"accepted": False, "reason": "fee_rounding_invalid", **distances}
-                if value is None: break
+                if value is None: saw_depth = True; break
                 total += value[0]
             else:
                 capital = total + quantity * reserve if direction == "BUY" else quantity * reserve
-                if capital > cap: continue
+                if capital > cap: saw_capital = True; continue
                 pnl = (quantity * guarantee - total - quantity * reserve if direction == "BUY"
                        else total - quantity * guarantee - quantity * reserve)
                 if best is None or pnl > best[3]: best = (direction, quantity, total, pnl, capital)
-    if best is None: return {"accepted": False, "reason": "minimum_order_or_capital",**distances}
+    if best is None:
+        reason = ("capital_limit" if saw_capital else "depth_insufficient" if saw_depth
+                  else "inventory_unavailable" if inventory_unavailable else "minimum_order")
+        return {"accepted": False, "reason": reason, **distances}
     if best[2] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
     direction, quantity, cost, pnl, capital = best
     lock = relation.get("capital_lock_time_ms")

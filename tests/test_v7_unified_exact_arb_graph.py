@@ -83,9 +83,9 @@ def test_proven_inequality_is_retained_but_never_actionable() -> None:
 def test_minimum_order_and_capital_are_fail_closed() -> None:
     relation={"enabled":True,"guaranteed_payout":"1","reserve_per_unit":"0","legs":[{"token_id":"a","coefficient":"1","minimum_order":"10"}]}
     books={"a":{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0","asks":[[".5","5"]]}}
-    assert evaluate(relation,books,1)["reason"]=="minimum_order_or_capital"
+    assert evaluate(relation,books,1)["reason"]=="minimum_order"
     relation["legs"][0]["minimum_order"]="0";books["a"]["asks"]=[[".5","10"]]
-    assert evaluate(relation,books,1,capital_limit="1")["reason"]=="minimum_order_or_capital"
+    assert evaluate(relation,books,1,capital_limit="1")["reason"]=="capital_limit"
 
 
 def test_n_way_and_fractional_coefficients_size_at_every_depth_breakpoint() -> None:
@@ -107,7 +107,7 @@ def test_sell_inventory_direction_requires_inventory_and_uses_bids() -> None:
         {"token_id":"n","coefficient":"1","minimum_order":"0"}]}
     books={token:{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0",
                   "asks":[[".7","4"]],"bids":[[".6","4"]]} for token in ("y","n")}
-    assert evaluate(relation,books,1)["reason"]=="minimum_order_or_capital"
+    assert evaluate(relation,books,1)["reason"]=="inventory_unavailable"
     out=evaluate(relation,books,1,inventory_limit="3")
     assert out["accepted"] is True and out["direction"]=="SELL" and out["quantity"]=="3"
 
@@ -168,7 +168,7 @@ def test_incremental_shadow_deduplicates_changed_leg_paths_and_records_funnel(tm
                       {"selector":{"market_id":"a"},"outcome":"NO","payout_vector":[0,1]}]}
     graph=compile_graph([_registry([relation])],_universe(),"a"*40)
     args=SimpleNamespace(graph=tmp_path/"graph.json", tape=tmp_path/"tape", status=tmp_path/"status",
-                         opportunities=tmp_path/"opportunities", model_sha="a"*40, interval_ms=10)
+                         opportunities=tmp_path/"opportunities", model_sha="a"*40, interval_ms=10, capital_limit="100")
     shadow=Shadow(args);shadow.generation=graph["graph_generation"];shadow.relations=graph["relations"];shadow.index=graph["dependency_index"]
     row={"schema":"polymarket_v7_pure_arb_deep_book_snapshot_v1","model_sha":"a"*40,**SAFETY,
          "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","receive_wall_ms":10,"market_id":"a",

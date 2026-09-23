@@ -20,7 +20,18 @@ def atomic(path:Path,value:dict[str,Any])->None:
 
 class Shadow:
  def __init__(self,a:argparse.Namespace):
-  self.a=a;self.offset=0;self.books={};self.generation="";self.relations=[];self.index={};self.funnel=Counter();self.funnel_by_family=defaultdict(Counter);self.rejects=Counter();self.rejects_by_family=defaultdict(Counter);self.dist=defaultdict(list);self.seen=set();self.pending=[];self.claims={};self.latency_us=[]
+  self.a=a;self.offset=0;self.books={};self.generation="";self.relations=[];self.index={};self.funnel=Counter();self.funnel_by_family=defaultdict(Counter);self.rejects=Counter();self.rejects_by_family=defaultdict(Counter);self.dist=defaultdict(list);self.seen=set();self.pending=[];self.claims={};self.latency_us=[];self.capital_limit="0"
+ def capital(self):
+  path=getattr(self.a,"capital_policy",None)
+  if path is None:return str(getattr(self.a,"capital_limit","0"))
+  value=load(path)
+  if (value.get("schema")!="polymarket_v7_pure_arb_capital_policy_v1" or value.get("paper_only") is not True
+      or value.get("authenticated_execution") is not False or value.get("real_order_submission") is not False):return "0"
+  try:
+   limit=float(value["paper_budget_pusd"])
+   if limit<=0 or limit!=limit:return "0"
+   return str(value["paper_budget_pusd"])
+  except (KeyError,TypeError,ValueError):return "0"
  def graph(self):
   g=load(self.a.graph)
   if g.get("schema")!="polymarket_v7_unified_exact_arb_graph_v1" or any(g.get(k) is not v for k,v in SAFETY.items()):return
@@ -48,7 +59,7 @@ class Shadow:
     relation=self.relations[h];family=str(relation.get("relation_family") or "UNKNOWN")
     self.funnel["relations_considered"]+=1;self.funnel_by_family[family]["relations_considered"]+=1
     started=time.perf_counter_ns()
-    try:r=evaluate(relation,self.books,now)
+    try:r=evaluate(relation,self.books,now,capital_limit=self.capital())
     except Exception:r={"accepted":False,"reason":"evaluation_error"}
     self.latency_us.append((time.perf_counter_ns()-started)/1000.0)
     if len(self.latency_us)>100000:self.latency_us=self.latency_us[-50000:]
@@ -58,6 +69,7 @@ class Shadow:
     stages=("books_ready","lineage_ready","fee_ready","freshness_ready","leg_skew_ready")
     failed={"lineage_or_book_missing":0,"truncated_depth":0,"fee_or_timestamp_missing":2,
             "fee_or_depth_invalid":2,"fee_rounding_invalid":2,"stale_book":3,"leg_skew":4,
+            "depth_insufficient":5,"minimum_order":5,"capital_limit":5,"inventory_unavailable":5,
             "empty_relation":0,"disabled_relation":0}.get(reason,5)
     if not r.get("accepted"):
      for stage in stages[:failed]:self.funnel[stage]+=1;self.funnel_by_family[family][stage]+=1
@@ -103,10 +115,10 @@ class Shadow:
    if time.monotonic()>=next_status:
     def pct(v):
      v=sorted(v);return {str(p):v[min(len(v)-1,max(0,int(len(v)*p/100)-1))] for p in (.1,1,5,10,25,50,90,99)}|{"min":v[0]} if v else {}
-    atomic(self.a.status,{"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":"COLLECTING","graph_generation":self.generation,"relations_compiled":len(self.relations),"relations_evaluated":self.funnel["relations_considered"],"funnel":dict(self.funnel),"funnel_by_family":{k:dict(v) for k,v in self.funnel_by_family.items()},"rejection_reasons":dict(self.rejects),"rejection_reasons_by_family":{k:dict(v) for k,v in self.rejects_by_family.items()},"near_arbitrage":{k:pct(v) for k,v in self.dist.items()},"evaluation_latency_us":pct(self.latency_us),"counterfactual":{"filled":0,"one_leg_exposure":0,"unwind":0,"unwind_loss":0,"realized_pnl":0},"timestamp_ms":time.time_ns()//1_000_000});next_status=time.monotonic()+1
+    atomic(self.a.status,{"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":"COLLECTING","graph_generation":self.generation,"relations_compiled":len(self.relations),"relations_evaluated":self.funnel["relations_considered"],"capital_limit_pusd":self.capital(),"funnel":dict(self.funnel),"funnel_by_family":{k:dict(v) for k,v in self.funnel_by_family.items()},"rejection_reasons":dict(self.rejects),"rejection_reasons_by_family":{k:dict(v) for k,v in self.rejects_by_family.items()},"near_arbitrage":{k:pct(v) for k,v in self.dist.items()},"evaluation_latency_us":pct(self.latency_us),"counterfactual":{"filled":0,"one_leg_exposure":0,"unwind":0,"unwind_loss":0,"realized_pnl":0},"timestamp_ms":time.time_ns()//1_000_000});next_status=time.monotonic()+1
    time.sleep(max(.001,self.a.interval_ms/1000))
 def main()->int:
- p=argparse.ArgumentParser();p.add_argument("--graph",type=Path,required=True);p.add_argument("--tape",type=Path,required=True);p.add_argument("--status",type=Path,required=True);p.add_argument("--opportunities",type=Path,required=True);p.add_argument("--model-sha",required=True);p.add_argument("--interval-ms",type=int,default=10);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument("--graph",type=Path,required=True);p.add_argument("--tape",type=Path,required=True);p.add_argument("--status",type=Path,required=True);p.add_argument("--opportunities",type=Path,required=True);p.add_argument("--capital-policy",type=Path,required=True);p.add_argument("--model-sha",required=True);p.add_argument("--interval-ms",type=int,default=10);a=p.parse_args()
  if len(a.model_sha)!=40 or not 1<=a.interval_ms<=1000:raise SystemExit("invalid arguments")
  Shadow(a).run();return 0
 if __name__=="__main__":raise SystemExit(main())

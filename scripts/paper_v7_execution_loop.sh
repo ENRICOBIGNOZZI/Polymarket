@@ -513,6 +513,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph_shadow.py \
   --tape "$PURE_ARB_DIR/pure_arb_deep_book_snapshots.jsonl" \
   --status "$PURE_ARB_DIR/unified_exact_arb_graph_status.json" \
   --opportunities "$PURE_ARB_DIR/unified_exact_arb_graph_opportunities.jsonl" \
+  --capital-policy "$ROOT/config/v7_pure_arb_capital_policy.json" \
   --model-sha "$SHA" >> "$PURE_ARB_DIR/unified_exact_arb_graph_shadow.log" 2>&1 &
 v7_register_optional_child "$!"
 
