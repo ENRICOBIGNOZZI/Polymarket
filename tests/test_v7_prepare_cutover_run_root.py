@@ -458,14 +458,14 @@ def test_failed_activation_residue_stays_fail_closed_when_unsafe_or_stateful():
             cutover.CutoverArchiveError,'prior_runtime_safety_contract_invalid'):
             cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
 
-def _cooldown_activation_fixture(root: Path, *, safe: bool = True) -> None:
+def _cooldown_activation_fixture(root: Path, *, safe: bool = True, state: str = 'restart_budget_cooldown') -> None:
     root.mkdir(parents=True,exist_ok=True)
     (root/'control').mkdir(parents=True,exist_ok=True)
     (root/'control/deployed_sha').write_text(OLD+'\n',encoding='utf-8')
     write(root/'control/supervisor_status.json',{
         'schema':'polymarket_v7_supervisor_status_v1',
         'expected_sha':OLD,
-        'state':'restart_budget_cooldown',
+        'state':state,
         'paper_only':True,
         'authenticated_execution':False,
         'real_order_submission':False,
@@ -496,6 +496,18 @@ def test_verified_zero_state_restart_cooldown_is_archived_from_lineage():
         base=Path(d);root=base/'run';_cooldown_activation_fixture(root)
         result=cutover.prepare(
             root,base/'archives',base,NEW,now=128,
+            ancestor_check=lambda *_:True)
+        assert result['state']=='ARCHIVED_PRIOR_SHA'
+        assert result['prior_failed_activation_residue'] is True
+        assert result['prior_inventory_contract']=='FAILED_ACTIVATION_NO_RUNTIME'
+        assert result['ledger_rows']==0
+
+
+def test_verified_zero_state_stopped_supervisor_is_archived_from_lineage():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_cooldown_activation_fixture(root,state='stopped')
+        result=cutover.prepare(
+            root,base/'archives',base,NEW,now=129,
             ancestor_check=lambda *_:True)
         assert result['state']=='ARCHIVED_PRIOR_SHA'
         assert result['prior_failed_activation_residue'] is True
