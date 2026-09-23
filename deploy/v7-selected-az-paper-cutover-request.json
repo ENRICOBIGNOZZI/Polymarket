@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_selected_az_paper_cutover_request_v1",
   "version": 1,
-  "request_id": "pure-arb-paper-6003f263-az1-r5",
+  "request_id": "pure-arb-paper-6003f263-az1-r6",
   "target_sha": "6003f263937a75f83a12e8d1e13f72743f5716b0",
   "latency_run_id": 35828671003,
   "selected_physical_zone_id": "euw2-az1",
