@@ -22,7 +22,7 @@ jobs:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
       ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
-      INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+      INSTANCE_ID: i-04042ca7da7a23215
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -63,6 +63,18 @@ jobs:
           UNIT=polymarket-v7-paper.service
           ROOT="$(systemctl show "$UNIT" -p Environment --value | python3 -c 'import shlex,sys; print(next(x.split("=",1)[1] for x in shlex.split(sys.stdin.read()) if x.startswith("PM_V7_RUN_ROOT=")))')"
           STATUS="$ROOT/research/repricing_book/pure_arb_status.json"
+          EVID="$ROOT/research/repricing_book"
+          systemctl is-active --quiet "$UNIT"
+          systemctl is-enabled --quiet "$UNIT"
+          test -s "$EVID/book_observations/current.jsonl"
+          test -e "$EVID/pure_arb_trades.jsonl"
+          test -e "$EVID/pure_arb_deep_book_snapshots.jsonl"
+          for f in pure_arb_arrival_survival_status.json exchange_execution_status.json capital_allocator_status.json; do
+            test -s "$EVID/$f"
+          done
+          pgrep -af 'v7_pure_arb_arrival_survival_shadow.py' | grep -F -- '--delay-arms-ms 1,2,5,10,25,50,100,200,250,275,300,400,500,750,1000'
+          pgrep -af 'v7_pure_arb_exchange_execution_shadow.py' | grep -F -- '--inter-leg-skew-ms 0,1,2,5,10'
+          pgrep -af 'v7_pure_arb_exchange_execution_shadow.py' | grep -F -- '--transport-modes SEQUENTIAL,PARALLEL,BATCH'
           for i in $(seq 1 40); do
             if [[ -s "$STATUS" ]] && python3 - "$STATUS" "__SHA__" <<'PYSTAT' >/dev/null 2>&1
           import json,sys,time
@@ -84,10 +96,15 @@ jobs:
           import json,sys,time
           v=json.load(open(sys.argv[1]))
           assert v.get('model_sha')==sys.argv[2]
+          for key in ('receive_to_decode_ns','decode_to_enqueue_ns','receive_to_enqueue_ns',
+                      'queue_wait_ns','receive_to_decision_ns','decision_compute_ns'):
+            assert isinstance(v.get(key),dict),key
           out={k:v.get(k) for k in (
             'state','expected_contexts','fee_ready_contexts','evaluations','fee_blocked_evaluations',
-            'cycles_total','paper_locked_pnl_pre_gas_total','last_decision_compute_ns',
-            'max_decision_compute_ns','last_receive_to_decision_ns','max_receive_to_decision_ns')}
+            'cycles_total','paper_locked_pnl_pre_gas_total','conservative_locked_pnl_after_reserve_total',
+            'deep_candidates_total','deep_evaluations_total','deep_queue_drops_total',
+            'last_decision_compute_ns','max_decision_compute_ns',
+            'last_receive_to_decision_ns','max_receive_to_decision_ns')}
           active=[]
           for r in v.get('contexts') or []:
             for key,kind in [('buy_complete_set','BUY'),('sell_complete_set','SELL')]:
