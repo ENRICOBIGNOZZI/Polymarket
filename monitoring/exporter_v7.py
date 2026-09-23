@@ -514,6 +514,74 @@ def _render_cross_market_exact_arb_metrics(status: dict[str, Any]) -> list[str]:
     ]
 
 
+def _render_exact_arb_exchange_universe_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_exact_arb_exchange_universe_status_v1"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+        and status.get("automatic_promotion") is False
+        and status.get("execution_authority") is False
+    )
+    lines = [
+        _metric("exact_arb_exchange_universe_up",
+                safe and status.get("state") in {"READY", "BOUNDED_PARTIAL"}),
+        _metric("exact_arb_exchange_universe_events", status.get("events")),
+        _metric("exact_arb_exchange_universe_markets", status.get("markets")),
+        _metric("exact_arb_exchange_universe_negrisk_events", status.get("negrisk_events")),
+        _metric("exact_arb_exchange_universe_verified_negrisk_events",
+                status.get("verified_negrisk_events")),
+        _metric("exact_arb_exchange_universe_discovery_exhaustive",
+                status.get("discovery_exhaustive")),
+        _metric("exact_arb_exchange_universe_pagination_guard_hit",
+                status.get("pagination_loop_guard_hit")),
+        _metric("exact_arb_exchange_universe_scan_milliseconds", status.get("scan_duration_ms")),
+    ]
+    return lines
+
+
+def _render_exact_arb_warm_screen_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_exact_arb_warm_screen_status_v1"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+        and status.get("automatic_promotion") is False
+        and status.get("execution_authority") is False
+        and status.get("evidence_quality") == "NONATOMIC_PUBLIC_REST_SCREEN_ONLY"
+        and status.get("actionable_candidates") == 0
+    )
+    lines = [
+        _metric("exact_arb_warm_screen_up", safe and status.get("state") == "SCREENING"),
+        _metric("exact_arb_warm_relations_selected", status.get("relations_selected")),
+        _metric("exact_arb_warm_relations_screened", status.get("relations_screened")),
+        _metric("exact_arb_warm_tokens_requested", status.get("tokens_requested")),
+        _metric("exact_arb_warm_books_missing", status.get("books_missing")),
+        _metric("exact_arb_warm_raw_positive_screen_only_total",
+                status.get("raw_positive_screen_only")),
+        _metric("exact_arb_warm_after_fee_positive_screen_only_total",
+                status.get("after_fee_positive_screen_only")),
+        _metric("exact_arb_warm_after_reserve_positive_screen_only_total",
+                status.get("after_reserve_positive_screen_only")),
+        _metric("exact_arb_warm_hotset_relations", status.get("hotset_relations")),
+        _metric("exact_arb_warm_hotset_tokens", status.get("hotset_tokens")),
+        _metric("exact_arb_warm_scan_milliseconds", status.get("scan_duration_ms")),
+    ]
+    for family, count in sorted((status.get("relations_by_family") or {}).items()):
+        lines.append(_metric("exact_arb_warm_relations_by_family", count, {"family": family}))
+    for stage, values in sorted((status.get("near_arbitrage") or {}).items()):
+        if not isinstance(values, dict):
+            continue
+        for percentile, value in sorted(values.items()):
+            lines.append(_metric("exact_arb_warm_distance_to_arbitrage", value,
+                                 {"stage": stage, "percentile": percentile}))
+    for reason, count in sorted((status.get("rejection_reasons") or {}).items()):
+        lines.append(_metric("exact_arb_warm_rejections_total", count, {"reason": reason}))
+    return lines
+
+
 def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]:
     safe = (status.get("schema") == "polymarket_v7_unified_exact_arb_graph_shadow_status_v1"
             and status.get("paper_only") is True and status.get("authenticated_execution") is False
@@ -748,6 +816,10 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         run_root / "research/repricing_book/two_sided_complete_set_status.json")
     snapshot["cross_market_exact_arb"] = _json(
         run_root / "research/repricing_book/cross_market_exact_arb_status.json")
+    snapshot["exact_arb_exchange_universe"] = _json(
+        run_root / "research/repricing_book/exact_arb_exchange_universe_status.json")
+    snapshot["exact_arb_warm_screen"] = _json(
+        run_root / "research/repricing_book/unified_exact_arb_warm_status.json")
     snapshot["unified_exact_arb_graph"] = _json(
         run_root / "research/repricing_book/unified_exact_arb_graph_status.json")
     snapshot["unified_exact_arb_graph_execution"] = _json(
@@ -1128,6 +1200,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     lines.extend(_render_settlement_source_arb_metrics(snapshot.get("settlement_source_arb") or {}))
     lines.extend(_render_complete_set_maker_metrics(snapshot.get("complete_set_maker_shadow") or {}))
     lines.extend(_render_cross_market_exact_arb_metrics(snapshot.get("cross_market_exact_arb") or {}))
+    lines.extend(_render_exact_arb_exchange_universe_metrics(snapshot.get("exact_arb_exchange_universe") or {}))
+    lines.extend(_render_exact_arb_warm_screen_metrics(snapshot.get("exact_arb_warm_screen") or {}))
     lines.extend(_render_unified_exact_arb_graph_metrics(snapshot.get("unified_exact_arb_graph") or {}))
     lines.extend(_render_unified_exact_arb_graph_execution_metrics(snapshot.get("unified_exact_arb_graph_execution") or {}))
     retention=operations.get('retention') or {}
