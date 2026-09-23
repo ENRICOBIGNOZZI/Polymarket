@@ -210,9 +210,9 @@ def test_stage8_reducer_accepts_compact_host_tuning_profiles():
     ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
     assert 'p.get("name")' in ssm
     assert 'p.get("promotion_candidate"' in ssm
-    assert 'p.get("p99_improvement_pct"' in ssm
-    assert 'p.get("p999_improvement_pct"' in ssm
-    assert 'p.get("failure_delta"' in ssm
+    assert '"p99_improvement_pct": p.get(' in ssm
+    assert '"p999_improvement_pct": p.get(' in ssm
+    assert '"failure_delta": p.get(' in ssm
     assert 'p["profile"]["name"]' not in ssm
 
 
