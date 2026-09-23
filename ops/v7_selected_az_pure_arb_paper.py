@@ -51,6 +51,7 @@ rm -rf "$SRC"
 sudo -u {service_user} git -C "$APP" worktree prune
 sudo -u {service_user} git -C "$APP" worktree add --detach "$SRC" "{sha}" >/dev/null
 [[ "$(sudo -u {service_user} git -C "$SRC" rev-parse HEAD)" == "{sha}" ]]
+cd "$SRC"
 STEP=capital_allocator
 sudo -u {service_user} python3 "$SRC/scripts/v7_capital_allocator.py"   --config "$SRC/config/paper_v7.json" --output-dir "$OUT/alloc" > "$OUT/allocator.log"
 STEP=universe
