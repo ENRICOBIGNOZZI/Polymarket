@@ -72,6 +72,21 @@ def test_machine_attested_n_way_partition_is_a_single_hyperedge() -> None:
     assert relation["relation_family"]=="N_WAY_COMPLETE_PARTITION" and len(relation["legs"])==3
 
 
+def test_machine_attested_negrisk_event_compiles_only_when_every_member_is_verified() -> None:
+    model, semantic="d"*40,"e"*64
+    members=[]
+    for mid in ("n1","n2","n3"):
+        members.append({"market_id":mid,"event_id":"event","condition_id":"c"+mid,"active":True,"closed":False,
+          "neg_risk":True,"neg_risk_complete_set_verified":True,"asset":"BTC","horizon":"M5",
+          "contract_family":"negrisk","settlement_semantic_hash":semantic,"fee_schedule":{"rate":0},
+          "clob_token_ids":[mid+"y",mid+"n"],"outcomes":["YES","NO"]})
+    graph=compile_graph([_registry([])],{**SAFETY,"model_sha":model,"markets":members},model)
+    assert graph["relations"][0]["relation_family"]=="NEGRISK_COMPLETE_SET"
+    members[-1]["neg_risk_complete_set_verified"]=False
+    graph=compile_graph([_registry([])],{**SAFETY,"model_sha":model,"markets":members},model)
+    assert not graph["relations"] and graph["unverified_candidates"]
+
+
 def test_proven_inequality_is_retained_but_never_actionable() -> None:
     model, semantic="f"*40,"a"*64
     universe={**SAFETY,"model_sha":model,"markets":[{"market_id":"m","active":True,"closed":False,"asset":"BTC","horizon":"M5","contract_family":"binary","settlement_semantic_hash":semantic,"clob_token_ids":["y","n"],"outcomes":["YES","NO"]}]}

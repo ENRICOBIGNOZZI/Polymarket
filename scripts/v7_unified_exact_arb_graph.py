@@ -275,6 +275,34 @@ def automatic_partition_relations(markets: list[dict[str, Any]]) -> list[dict[st
     return result
 
 
+def automatic_negrisk_relations(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compile a NegRisk event complete set only from per-member attestation."""
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for market in markets:
+        if (market.get("neg_risk") is True or market.get("negRisk") is True) and str(market.get("event_id") or ""):
+            groups[str(market["event_id"])].append(market)
+    result=[]
+    for event_id, members in groups.items():
+        members=sorted(members,key=lambda value:str(value.get("market_id") or ""))
+        if (len(members)<2 or any(row.get("neg_risk_complete_set_verified") is not True for row in members)
+                or any(outcome_map(row) is None or "YES" not in outcome_map(row) for row in members)):
+            continue
+        states=[str(row["market_id"]) for row in members]
+        legs=[]
+        for index,row in enumerate(members):
+            vector=[0]*len(members);vector[index]=1
+            legs.append({"selector":{"market_id":str(row["market_id"])},"outcome":"YES",
+                         "coefficient":1,"payout_vector":vector})
+        raw={"id":"negrisk-complete:"+event_id,"enabled":True,"relation_family":"NEGRISK_COMPLETE_SET",
+             "discovery":"AUTO_VERIFIED_NEGRISK_COMPLETE_SET","directions":["BUY_BASKET"],
+             "states":states,"guaranteed_payout":1,"legs":legs,
+             "capital_transformation_semantics":"NEGRISK_REDEMPTION_LOCKED"}
+        try:prove_relation(raw)
+        except ValueError:continue
+        result.append(raw)
+    return result
+
+
 def component_sources(inputs: list[dict[str, Any]], model_sha: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Adapt legacy shadows into the one graph control-plane without trusting them.
 
@@ -340,6 +368,7 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
                and row.get("active") is True and row.get("closed") is not True]
     sources.extend(automatic_binary_relations(markets))
     sources.extend(automatic_partition_relations(markets))
+    sources.extend(automatic_negrisk_relations(markets))
     component_rows, component_candidates, component_provenance = component_sources(component_inputs or [], model_sha)
     sources.extend(component_rows)
     relations, nodes, rejected = [], {}, []
