@@ -144,6 +144,18 @@ def test_frequency_expansion_shadow_metrics_are_fail_closed() -> None:
     assert "polymarket_complete_set_maker_state_total" not in unsafe
 
 
+def test_unified_exact_graph_metrics_are_zero_authority_only() -> None:
+    status={"schema":"polymarket_v7_unified_exact_arb_graph_shadow_status_v1","state":"COLLECTING",
+            "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+            "real_capital_at_risk":False,"automatic_promotion":False,
+            "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","relations_compiled":4,
+            "relations_evaluated":12,"funnel":{"candidate_emitted":2},"rejection_reasons":{"truncated_depth":3}}
+    rendered="\n".join(exporter._render_unified_exact_arb_graph_metrics(status))
+    assert "exact_arb_graph_up 1" in rendered and "exact_arb_candidates_total 2" in rendered
+    status["real_order_submission"]=True
+    assert "exact_arb_graph_up 0" in "\n".join(exporter._render_unified_exact_arb_graph_metrics(status))
+
+
 if __name__ == "__main__":
     test_canonical_exporter_emits_pure_arb_metrics()
     test_unsafe_status_never_exports_context_economics()
