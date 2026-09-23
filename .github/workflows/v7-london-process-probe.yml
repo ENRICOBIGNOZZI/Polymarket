@@ -18,7 +18,7 @@ jobs:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
       ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
-      INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
+      INSTANCE_ID: i-04042ca7da7a23215
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Validate request
@@ -49,11 +49,27 @@ jobs:
           systemctl --no-pager --full status polymarket-v7-paper.service || true
           echo "=== SUPERVISOR CONTROL ==="
           ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
-          for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json; do
+          for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json runtime_artifact_receipt.json; do
             echo "--- $name ---"
             cat "$ROOT/control/$name" 2>/dev/null || true
             echo
           done
+          echo "=== ACTIVE MODEL IDENTITY ==="
+          python3 - "$ROOT/control/runtime_artifact_receipt.json" "$ROOT/micro_maker/execution_model.json" <<'PYMODEL'
+          import hashlib,json,sys
+          rp,mp=sys.argv[1:3]
+          r=json.load(open(rp));m=json.load(open(mp))
+          ignored={"version","generated_ts_ms","model_sha","code_sha","training_source_model_shas","training_window","validation_window"}
+          payload={k:v for k,v in m.items() if k not in ignored}
+          mh=hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False).encode()).hexdigest()
+          ident_payload={"maker_economic_sha256":mh,"rich_state":str(r.get("rich_model_state") or "UNAVAILABLE"),"rich_model_hash":r.get("rich_model_hash")}
+          eid=hashlib.sha256(json.dumps(ident_payload,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False).encode()).hexdigest()
+          print(json.dumps({"maker_model_sha":m.get("model_sha"),"maker_model_state":m.get("model_state"),
+                            "maker_policy_hash":m.get("policy_hash"),"maker_config_hash":m.get("config_hash"),
+                            "maker_economic_sha256":mh,"rich_model_state":r.get("rich_model_state"),
+                            "rich_model_path":r.get("rich_model_path"),"economic_model_identity_sha256":eid},
+                           sort_keys=True,separators=(",",":")))
+          PYMODEL
           echo "--- KILL ---"
           if [[ -e "$ROOT/control/KILL" ]]; then
             ls -l "$ROOT/control/KILL"
