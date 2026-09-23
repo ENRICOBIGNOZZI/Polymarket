@@ -423,7 +423,7 @@ done
 [[ "$scrape_ready" == 1 ]] || { echo "Prometheus is not scraping the V7 exporter" >&2; exit 72; }
 
 # Explicitly prove no research/training process is resident on London.
-if pgrep -af 'v7_(external_rich_train|external_residual_train|maker_durable_learning|pm_repricing_shadow|two_sided_complete_set_shadow|generate_economic_artifacts|profit_attribution|profit_report|economic_decision_report|lossless_data_compaction|permanent_evidence)\.py' >/tmp/polymarket-v7-forbidden-processes 2>/dev/null; then
+if pgrep -af 'v7_(external_rich_train|external_residual_train|maker_durable_learning|pm_repricing_shadow|generate_economic_artifacts|profit_attribution|profit_report|economic_decision_report|lossless_data_compaction|permanent_evidence)\.py' >/tmp/polymarket-v7-forbidden-processes 2>/dev/null; then
   cat /tmp/polymarket-v7-forbidden-processes >&2
   rm -f /tmp/polymarket-v7-forbidden-processes
   echo "forbidden research process active on London" >&2
