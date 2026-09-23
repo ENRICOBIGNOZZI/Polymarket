@@ -270,6 +270,17 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
             raise ValueError(f"{zone_id} latency safety boundary invalid")
         network = row["public_transport"]["parallel_persistent_legs"]
         pair = network["pair_completion_ns"]
+        reaction = row.get("event_to_public_wire")
+        if not isinstance(reaction, dict) \
+                or reaction.get("schema") != "polymarket_v7_public_event_to_wire_probe_v1" \
+                or reaction.get("paper_only") is not True \
+                or reaction.get("authenticated_execution") is not False \
+                or reaction.get("real_order_submission") is not False:
+            raise ValueError(f"{zone_id} causal event-to-wire evidence invalid")
+        reaction_latency = reaction.get("latency_ns") or {}
+        receive_to_wire = reaction_latency.get("frame_receive_to_write_start") or {}
+        receive_to_ack = reaction_latency.get("frame_receive_to_http_ack") or {}
+        receive_to_decode = reaction_latency.get("frame_receive_to_decode_done") or {}
         measurements.append({
             "physical_zone_id": zone_id,
             "pair_p99_ns": int(pair["p99"]),
@@ -277,6 +288,15 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
             "wire_start_skew_p99_ns": int(network["wire_start_skew_ns"]["p99"]),
             "wire_complete_skew_p99_ns": int(network["wire_complete_skew_ns"]["p99"]),
             "ack_skew_p99_ns": int(network["ack_skew_ns"]["p99"]),
+            "event_receive_to_decode_p99_ns": int(receive_to_decode["p99"]),
+            "event_receive_to_wire_start_p99_ns": int(receive_to_wire["p99"]),
+            "event_receive_to_wire_start_p999_ns": int(receive_to_wire["p999"]),
+            "event_receive_to_http_ack_p99_ns": int(receive_to_ack["p99"]),
+            "event_receive_to_http_ack_p999_ns": int(receive_to_ack["p999"]),
+            "event_probe_lineage_faults": int(reaction.get("lineage_faults", 0)),
+            "event_probe_pm_reconnects": int(reaction.get("pm_feed_reconnects", 0)),
+            "event_probe_transport_reconnects": int(
+                reaction.get("transport_reconnects", 0)),
             "direct_p99_ns": int(row["handoff"]["direct"]["p99"]),
             "spsc_p99_ns": int(row["handoff"]["spsc_decision_core"]["p99"]),
             "ipo_sign_p99_ns": int(row["signing"]["ipo"]["p99"]),
@@ -310,7 +330,10 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
             ],
         })
     ordered = sorted(measurements, key=lambda x: (
-        x["pair_p99_ns"], x["pair_p999_ns"], x["physical_zone_id"]))
+        x["event_receive_to_http_ack_p99_ns"],
+        x["event_receive_to_http_ack_p999_ns"],
+        x["pair_p99_ns"], x["pair_p999_ns"],
+        x["physical_zone_id"]))
     return {
         "schema": "polymarket_v7_london_latency_shootout_v1",
         "expected_sha": sha,
@@ -320,7 +343,9 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
         "automatic_cutover": False,
         "authenticated_order_latency_observed": False,
         "matching_engine_latency_observed": False,
-        "selection_metric": "public paired CLOB persistent-transport GET /time p99 then p999",
+        "selection_metric": (
+            "causal PM event receive-to-public HTTP ACK p99 then p999; "
+            "paired persistent-transport GET /time p99/p999 tie-break"),
         "selected_physical_zone_id": ordered[0]["physical_zone_id"],
         "measurements": measurements,
         "raw": rows,

@@ -16,6 +16,7 @@ on:
       - ops/v7_london_ssm_bootstrap.py
       - ops/v7_london_bootstrap.sh
       - src/v7_public_paired_clob_transport_probe.cpp
+      - src/v7_public_event_to_wire_probe.cpp
       - .github/workflows/v7-london-aws-provision.yml
   workflow_dispatch:
     inputs:
@@ -57,7 +58,9 @@ permissions:
 
 concurrency:
   group: polymarket-v7-london-aws
-  cancel-in-progress: false
+  # Automatic main-push latency runs are superseded by a newer main SHA.
+  # Explicit infrastructure/formal workflow_dispatch runs are never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   london:
