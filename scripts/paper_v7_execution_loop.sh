@@ -537,10 +537,10 @@ v7_exec_class CONTROL python3 scripts/v7_clock_guard.py \
 v7_register_child "$!"
 
 v7_exec_class CONTROL python3 scripts/v7_multi_az_fencing_supervisor.py \
-  --repository-root "$ROOT" --run-root "$RUN_ROOT" --model-sha "$SHA" \
-  --server-id "$SERVER_ID" --owner-id "$RUN_ID:$SERVER_ID" \
-  --lease-id "polymarket-v7-paper-single-writer" --region eu-west-2 \
-  --lease-ms 15000 --renew-ms 5000 --minimum-remaining-ms 5000 --poll-ms 1000 \
+  --repository-root "$ROOT" --run-root "$RUN_ROOT" \
+  --config "$ROOT/config/v7_failover_fencing.json" \
+  --model-sha "$SHA" --server-id "$SERVER_ID" --run-id "$RUN_ID" \
+  --interval-seconds 1 \
   >> "$RUN_ROOT/fencing_supervisor.log" 2>&1 &
 v7_register_child "$!"
 
