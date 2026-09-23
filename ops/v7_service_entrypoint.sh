@@ -21,24 +21,6 @@ PY
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "exact 40-character SHA required" >&2; exit 78; }
 [[ "$(cat "$APP_DIR/deploy/london/runtime_sha" 2>/dev/null || true)" == "$EXPECTED_SHA" ]] || { echo "staged runtime SHA drift" >&2; exit 78; }
 
-# London keeps PID 1 / ordinary system work on a housekeeping affinity. The
-# PAPER supervisor must first reopen the service process to every online CPU;
-# the runtime resource planner then deterministically pins HOT/COLLECTOR/
-# CONTROL/LATENCY classes. Without this step, the planner only sees PID 1's
-# inherited housekeeping mask and falsely concludes that the 8-core host has
-# too few CPUs.
-if [[ "$(uname -s)" == "Linux" ]] && command -v taskset >/dev/null 2>&1     && [[ -r /sys/devices/system/cpu/online ]]; then
-  online_cpus="$(tr -d '[:space:]' </sys/devices/system/cpu/online)"
-  [[ "$online_cpus" =~ ^[0-9,-]+$ ]] || {
-    echo "invalid online CPU set: $online_cpus" >&2
-    exit 78
-  }
-  taskset -pc "$online_cpus" "$" >/dev/null || {
-    echo "cannot expand PAPER service CPU affinity to online set: $online_cpus" >&2
-    exit 78
-  }
-fi
-
 # A true safety quarantine remains operator-controlled. Restart-budget exhaustion
 # is different: the supervisor stays fail-closed through its bounded cooldown and
 # retries automatically when the exact-SHA window expires.
