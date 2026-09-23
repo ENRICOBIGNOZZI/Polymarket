@@ -38,15 +38,16 @@ jobs:
       - name: Verify runtime and evidence growth
         run: |
           set -euo pipefail
-          payload="$(cat <<'SH'
-          set -euo pipefail
-          ROOT=/mnt/polymarket-data/paper_v7_london
-          WINDOW_SECONDS="$(python3 - deploy/v7-pure-arb-evidence-probe-request.json <<'PYWIN'
+          window_seconds="$(python3 - deploy/v7-pure-arb-evidence-probe-request.json <<'PYWIN'
           import json,sys
           v=json.load(open(sys.argv[1],encoding='utf-8'))
           print(int(v.get('window_seconds') or 10))
           PYWIN
           )"
+          payload="$(cat <<'SH'
+          set -euo pipefail
+          ROOT=/mnt/polymarket-data/paper_v7_london
+          WINDOW_SECONDS=__WINDOW_SECONDS__
           export WINDOW_SECONDS
           echo "COLLECTOR_PROCESSES_BEGIN"
           for pattern in \
@@ -152,6 +153,7 @@ jobs:
           PY
           SH
           )"
+          payload="${payload/__WINDOW_SECONDS__/$window_seconds}"
           encoded="$(printf '%s' "$payload" | base64 -w0)"
           wrapped="printf '%s' '$encoded' | base64 -d | bash"
           params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["390"]},separators=(",",":")))' "$wrapped")"
