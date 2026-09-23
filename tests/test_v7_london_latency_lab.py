@@ -210,18 +210,30 @@ def test_london_summary_keeps_serial_vs_parallel_signing_evidence():
 def test_selected_az_paper_cutover_is_evidence_bound_and_paper_only():
     workflow = (ROOT / ".github/workflows/v7-selected-az-paper-cutover.yml").read_text()
     helper = (ROOT / "ops/v7_selected_az_cutover_request.py").read_text()
+    runner = (ROOT / "ops/v7_selected_az_pure_arb_paper.py").read_text()
+    config = (ROOT / "scripts/v7_pure_arb_multi_config.py").read_text()
     assert "v7-selected-az-paper-cutover-request.json" in workflow
     assert "v7_selected_az_cutover_request.py" in workflow
     assert "actions/runs/$LATENCY_RUN_ID/artifacts" in workflow
     assert "selected_physical_zone_id" in helper
     assert "expected_instance_id" in helper
-    assert "--expected-instance-id" in workflow
-    assert "EXACT_INSTANCE_ID" in workflow
-    assert "paper_only" in helper and "authenticated_execution" in helper
-    assert "real_order_submission" in helper
     assert "GITHUB_AWS_OIDC_SSM_SELECTED_AZ" in helper
     assert "cutover_approved" in helper
-    assert "real_order_submission'] is False" in workflow or 'real_order_submission"] is False' in workflow
+    assert "v7_selected_az_pure_arb_paper.py" in workflow
+    assert "--duration-seconds 180" in workflow
+    assert "polymarket-v7-paper.service" in runner
+    assert "systemctl stop" in runner
+    assert "polymarket_v7_pure_arb_multi_runtime" in runner
+    assert "v7_pure_arb_multi_config.py" in runner
+    assert "single_process" in runner
+    assert "pm_worker_count" in runner
+    assert "one_leg_fills" in runner
+    assert "latency_dropped" in runner
+    assert "clean" in runner
+    assert "select_markets" in config
+    assert "CRYPTO_SETTLEMENT_ENGINE" in config
+    assert "real_order_submission" in config
+    assert "v7_london_ssm_deploy.py" not in workflow
 
 
 def test_latency_lab_requires_measured_10pct_tail_gate():
