@@ -38,3 +38,11 @@ def test_machine_attested_binary_partition_is_auto_compiled() -> None:
     registry={**SAFETY,"schema":"polymarket_v7_exact_arb_relation_registry_v1","version":1,"relations":[]}
     graph=compile_graph([registry],universe,model)
     assert graph["relations"][0]["relation_family"]=="SAME_MARKET_BINARY_COMPLETE_SET"
+
+
+def test_proven_inequality_is_retained_but_never_actionable() -> None:
+    model, semantic="f"*40,"a"*64
+    universe={**SAFETY,"model_sha":model,"markets":[{"market_id":"m","active":True,"closed":False,"asset":"BTC","horizon":"M5","contract_family":"binary","settlement_semantic_hash":semantic,"clob_token_ids":["y","n"],"outcomes":["YES","NO"]}]}
+    registry={**SAFETY,"schema":"polymarket_v7_exact_arb_relation_registry_v1","version":1,"relations":[{"id":"upper","enabled":True,"relation_type":"PAYOFF_UPPER_BOUND","states":["a","b"],"guaranteed_payout":1,"legs":[{"selector":{"market_id":"m"},"outcome":"YES","payout_vector":[1,0]}]}]}
+    relation=compile_graph([registry],universe,model)["relations"][0]
+    assert relation["proof_type"]=="FINITE_STATE_EXACT_RATIONAL_INEQUALITY" and relation["enabled"] is False

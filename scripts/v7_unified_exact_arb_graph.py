@@ -115,8 +115,24 @@ def fee_rate(market: dict[str, Any]) -> str | None:
     return None
 
 
+def prove(raw: dict[str, Any]) -> dict[str, Any]:
+    """Equality is actionable; proven inequalities are retained but disabled."""
+    kind=str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY")
+    if kind == "CONSTANT_PAYOUT_EQUALITY": return prove_relation(raw)
+    if kind not in {"PAYOFF_UPPER_BOUND","PAYOFF_LOWER_BOUND"}: raise GraphError("relation_type")
+    states, legs, guarantee=raw.get("states"),raw.get("legs"),frac(raw.get("guaranteed_payout"))
+    if not isinstance(states,list) or not states or not isinstance(legs,list) or not legs: raise GraphError("inequality_shape")
+    totals=[]
+    for i in range(len(states)):
+        total=sum((frac(leg.get("coefficient",1))*frac(leg["payout_vector"][i]) for leg in legs),Fraction(0));totals.append(total)
+    if (kind=="PAYOFF_UPPER_BOUND" and any(x>guarantee for x in totals)) or (kind=="PAYOFF_LOWER_BOUND" and any(x<guarantee for x in totals)):
+        raise GraphError("invalid_inequality")
+    body={"type":kind,"states":states,"totals":[fstr(x) for x in totals],"guarantee":fstr(guarantee)}
+    return {"proof_type":"FINITE_STATE_EXACT_RATIONAL_INEQUALITY","proof_sha256":sha(body),"state_totals":body["totals"]}
+
+
 def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    proof = prove_relation(raw)  # Fraction-based statewise equality proof.
+    proof = prove(raw)  # Fraction-based statewise equality/inequality proof.
     states, legs = raw["states"], raw["legs"]
     compiled_legs, nodes = [], []
     for leg in legs:
@@ -150,7 +166,8 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
                 "execution_semantics": raw.get("execution_semantics", "SEQUENTIAL_PARALLEL_BATCH_SHADOW"),
                 "capital_transformation_semantics": raw.get("capital_transformation_semantics", "SETTLEMENT_LOCKED"),
                 "reserve_per_unit": fstr(frac(raw.get("reserve_per_unit", 0))),
-                "enabled": raw.get("enabled") is True, "automatic_promotion": False}
+                "relation_type": str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY"),
+                "enabled": raw.get("enabled") is True and str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY")=="CONSTANT_PAYOUT_EQUALITY", "automatic_promotion": False}
     if not relation["relation_id"]: raise GraphError("relation_id")
     relation["economic_identity"] = sha({"legs": sorted((leg["token_id"], leg["coefficient"]) for leg in compiled_legs),
                                           "terminal": terminal, "guarantee": guarantee})
@@ -205,11 +222,13 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
     index: dict[str, list[int]] = defaultdict(list)
     for handle, relation in enumerate(relations):
         for leg in relation["legs"]: index[leg["token_id"]].append(handle)
+    unverified=[{"relation_family":"NEGRISK_TRANSFORMATION","verification":"UNVERIFIED_CANDIDATE","market_id":str(row.get("market_id") or ""),"reason":"no_verified_conversion_semantics"}
+                for row in markets if row.get("neg_risk") is True or row.get("negRisk") is True]
     graph = {"schema": SCHEMA, "version": 1, **SAFETY, "model_sha": model_sha,
              "nodes": sorted(nodes.values(), key=lambda value: value["node_id"]), "relations": relations,
              "dependency_index": {key: value for key, value in sorted(index.items())},
              "proof_registry": {row["proof_hash"]: row["relation_id"] for row in relations},
-             "rejected_relations": rejected,
+             "rejected_relations": rejected, "unverified_candidates": unverified,
              "metadata": {"control_plane": True, "hot_path_contract": "TOKEN_HANDLE_TO_AFFECTED_RELATIONS_ONLY",
                           "actionable_relations": sum(row["enabled"] for row in relations),
                           "compiled_at_ms": time.time_ns() // 1_000_000}}
