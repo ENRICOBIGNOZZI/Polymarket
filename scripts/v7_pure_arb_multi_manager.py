@@ -293,6 +293,8 @@ class Manager:
         self.current_risk = self.base_risk
         self.global_budget = int(self.base_risk["limits"]["sleeve_budget_microdollars"])
         self.unsettled_microdollars = 0
+        self.unsettled_market_count = 0
+        self.remaining_microdollars = self.global_budget
         self.settlements: dict[str, subprocess.Popen[bytes]] = {}
         self.settlement_retry_after: dict[str, float] = {}
         self.settlement_failures = 0
@@ -342,8 +344,8 @@ class Manager:
             "partition_total_microdollars": self.global_budget,
             "native_carryover_present": self.unsettled_microdollars > 0,
             "native_carryover_microdollars": self.unsettled_microdollars,
-            "native_carryover_market_count": len(self.settlements),
-            "new_risk_budget_microdollars": max(0, self.global_budget - self.unsettled_microdollars),
+            "native_carryover_market_count": self.unsettled_market_count,
+            "new_risk_budget_microdollars": self.remaining_microdollars,
             "settlement_blocked_count": self.settlement_failures,
             "pure_arb_native_shadow": False,
             "pure_arb_reserve_per_share": 0.0005,
@@ -376,9 +378,11 @@ class Manager:
             self.log_handle = None
 
     def launch(self, selection: dict[str, Any]) -> None:
-        exposure, inventory, _ = ledger_state(self.run_root, self.args.model_sha)
+        exposure, inventory, unsettled = ledger_state(self.run_root, self.args.model_sha)
         self.unsettled_microdollars = int(exposure["total_unsettled_microdollars"])
+        self.unsettled_market_count = len(unsettled)
         lease = remaining_capital_lease(self.base_risk, exposure)
+        self.remaining_microdollars = int(lease.get("remaining_microdollars") or 0)
         if not lease.get("lease_available") or not isinstance(lease.get("limits"), dict):
             raise RuntimeError("native_capital_fully_reserved_by_unsettled_exposure")
         self.current_risk = lease
@@ -479,8 +483,8 @@ class Manager:
                         return rc if rc != 0 else 75
                     elif generation != self.generation:
                         # Whole-process rollover is cold-plane and preserves the
-                        # one-worker hot-path invariant.  Never roll with an
-                        # unresolved PAPER capital claim.
+                        # one-worker hot-path invariant. Inventory and unresolved
+                        # capital claims are rebuilt from the canonical ledger.
                         self.stop_child()
                         self.status("WAITING_FOR_ROLLOVER")
                         self.launch(selection)
