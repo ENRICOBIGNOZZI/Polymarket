@@ -42,6 +42,20 @@ jobs:
             --output json
           payload="$(cat <<'SH'
           set -euo pipefail
+          echo "=== CPU VISIBILITY ==="
+          echo "nproc=$(nproc 2>/dev/null || true) nproc_all=$(nproc --all 2>/dev/null || true)"
+          lscpu -e=CPU,ONLINE,NODE,CORE,SOCKET 2>/dev/null || true
+          main_pid="$(systemctl show polymarket-v7-paper.service -p MainPID --value 2>/dev/null || true)"
+          echo "paper_main_pid=$main_pid"
+          if [[ "$main_pid" =~ ^[1-9][0-9]*$ ]]; then
+            taskset -pc "$main_pid" 2>/dev/null || true
+            grep -E '^(Cpus_allowed|Cpus_allowed_list):' "/proc/$main_pid/status" 2>/dev/null || true
+          fi
+          echo -n "service_cpuset_effective="
+          cat /sys/fs/cgroup/system.slice/polymarket-v7-paper.service/cpuset.cpus.effective 2>/dev/null || true
+          echo -n "root_cpuset_effective="
+          cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null || true
+          systemctl show polymarket-v7-paper.service -p AllowedCPUs -p CPUAccounting -p CPUWeight --no-pager 2>/dev/null || true
           echo "=== LOCKS ==="
           lslocks -o COMMAND,PID,TYPE,MODE,PATH 2>/dev/null | grep -E "polymarket-v7-london-deploy|COMMAND" || true
           echo "=== PROCESSES ==="
