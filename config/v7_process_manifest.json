@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 36,
-  "expected_launcher_child_count": 35,
+  "expected_process_count": 38,
+  "expected_launcher_child_count": 37,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -1054,15 +1054,100 @@
       "authority_overrides": {}
     },
     {
+      "id": "unified_exact_arb_hotset_selection",
+      "executable": "scripts/v7_exact_arb_hotset_selection.py",
+      "arguments": [
+        "--graph",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json",
+        "--universe",
+        "${RUN_ROOT}/research/repricing_book/exact_arb_exchange_universe.json",
+        "--hotset",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_hotset.json",
+        "--output",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_hotset_selection.json",
+        "--status",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_hotset_selection_status.json",
+        "--model-sha",
+        "${SHA}",
+        "--max-markets",
+        "64",
+        "--interval-seconds",
+        "1"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:unified_exact_arb_warm_screen",
+        "process:unified_exact_arb_graph_compiler",
+        "process:exact_arb_exchange_universe",
+        "research/repricing_book/unified_exact_arb_graph.json",
+        "research/repricing_book/exact_arb_exchange_universe.json",
+        "research/repricing_book/unified_exact_arb_hotset.json"
+      ],
+      "outputs": [
+        "research/repricing_book/unified_exact_arb_hotset_selection.json",
+        "research/repricing_book/unified_exact_arb_hotset_selection_status.json",
+        "research/repricing_book/unified_exact_arb_hotset_selection.log"
+      ],
+      "dependencies": [
+        "unified_exact_arb_warm_screen",
+        "unified_exact_arb_graph_compiler",
+        "exact_arb_exchange_universe"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/unified_exact_arb_hotset_selection.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "unified_exact_arb_hotset_observer",
+      "executable": "${FILLABILITY_OBSERVER}",
+      "arguments": [
+        "--config",
+        "${CONFIG}",
+        "--selection",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_hotset_selection.json",
+        "--selection-only",
+        "--run-root",
+        "${RUN_ROOT}",
+        "--output-dir",
+        "${RUN_ROOT}/research/repricing_book/graph_hotset",
+        "--model-sha",
+        "${SHA}",
+        "--graph-deep-evidence"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:unified_exact_arb_hotset_selection",
+        "research/repricing_book/unified_exact_arb_hotset_selection.json"
+      ],
+      "outputs": [
+        "research/repricing_book/graph_hotset/fillability_ws_status.json",
+        "research/repricing_book/graph_hotset/book_observations/current.jsonl",
+        "research/repricing_book/graph_hotset/pure_arb_deep_book_snapshots.jsonl",
+        "research/repricing_book/unified_exact_arb_hotset_observer.log"
+      ],
+      "dependencies": [
+        "unified_exact_arb_hotset_selection"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/unified_exact_arb_hotset_observer.log",
+      "london_deployed": true,
+      "runtime_class": "LATENCY_OBSERVER",
+      "authority_overrides": {}
+    },
+    {
       "id": "unified_exact_arb_graph_shadow",
       "executable": "scripts/v7_unified_exact_arb_graph_shadow.py",
       "arguments": [
         "--graph",
         "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json",
         "--tape",
-        "${RUN_ROOT}/research/repricing_book/pure_arb_deep_book_snapshots.jsonl",
+        "${RUN_ROOT}/research/repricing_book/graph_hotset/pure_arb_deep_book_snapshots.jsonl",
         "--delta-tape",
-        "${RUN_ROOT}/research/repricing_book/book_observations/current.jsonl",
+        "${RUN_ROOT}/research/repricing_book/graph_hotset/book_observations/current.jsonl",
         "--status",
         "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_status.json",
         "--opportunities",
@@ -1074,9 +1159,10 @@
       ],
       "profile": "observer",
       "inputs": [
+        "process:unified_exact_arb_hotset_observer",
         "process:unified_exact_arb_graph_compiler",
-        "research/repricing_book/pure_arb_deep_book_snapshots.jsonl",
-        "research/repricing_book/book_observations/current.jsonl",
+        "research/repricing_book/graph_hotset/pure_arb_deep_book_snapshots.jsonl",
+        "research/repricing_book/graph_hotset/book_observations/current.jsonl",
         "config/v7_pure_arb_capital_policy.json"
       ],
       "outputs": [
@@ -1085,7 +1171,8 @@
         "research/repricing_book/unified_exact_arb_graph_shadow.log"
       ],
       "dependencies": [
-        "unified_exact_arb_graph_compiler"
+        "unified_exact_arb_graph_compiler",
+        "unified_exact_arb_hotset_observer"
       ],
       "exact_sha_required": true,
       "config_identity_required": true,
@@ -1103,9 +1190,9 @@
         "--candidates",
         "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_opportunities.jsonl",
         "--book-tape",
-        "${RUN_ROOT}/research/repricing_book/pure_arb_deep_book_snapshots.jsonl",
+        "${RUN_ROOT}/research/repricing_book/graph_hotset/pure_arb_deep_book_snapshots.jsonl",
         "--delta-tape",
-        "${RUN_ROOT}/research/repricing_book/book_observations/current.jsonl",
+        "${RUN_ROOT}/research/repricing_book/graph_hotset/book_observations/current.jsonl",
         "--output",
         "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_execution_cycles.jsonl",
         "--status",
@@ -1114,10 +1201,10 @@
       "profile": "observer",
       "inputs": [
         "process:unified_exact_arb_graph_shadow",
-        "process:pm_book_observer",
+        "process:unified_exact_arb_hotset_observer",
         "research/repricing_book/unified_exact_arb_graph_opportunities.jsonl",
-        "research/repricing_book/pure_arb_deep_book_snapshots.jsonl",
-        "research/repricing_book/book_observations/current.jsonl"
+        "research/repricing_book/graph_hotset/pure_arb_deep_book_snapshots.jsonl",
+        "research/repricing_book/graph_hotset/book_observations/current.jsonl"
       ],
       "outputs": [
         "research/repricing_book/unified_exact_arb_graph_execution_cycles.jsonl",
@@ -1126,7 +1213,7 @@
       ],
       "dependencies": [
         "unified_exact_arb_graph_shadow",
-        "pm_book_observer"
+        "unified_exact_arb_hotset_observer"
       ],
       "exact_sha_required": true,
       "config_identity_required": true,
