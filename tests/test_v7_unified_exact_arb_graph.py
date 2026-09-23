@@ -251,3 +251,25 @@ def test_incremental_shadow_deduplicates_changed_leg_paths_and_records_funnel(tm
     assert shadow.funnel_by_family["EXPLICIT_EXACT"]["books_ready"]==2
     candidate=native_binary_candidate(graph["relations"][0], {"direction":"BUY","quantity":"3"}, 10)
     assert candidate is not None and candidate["kind"]=="BUY_COMPLETE_SET" and candidate["market_id"]=="a"
+
+
+def test_incremental_graph_replay_is_deterministic(tmp_path: Path) -> None:
+    relation={"id":"pair","enabled":True,"directions":["BUY_BASKET"],"states":["y","n"],"guaranteed_payout":1,
+      "legs":[{"selector":{"market_id":"a"},"outcome":"YES","payout_vector":[1,0]},
+              {"selector":{"market_id":"a"},"outcome":"NO","payout_vector":[0,1]}]}
+    graph=compile_graph([_registry([relation])],_universe(),"a"*40)
+    def replay(name: str) -> tuple[str, dict]:
+        root=tmp_path/name
+        root.mkdir()
+        args=SimpleNamespace(graph=root/"graph",tape=root/"tape",status=root/"status",opportunities=root/"opportunities",
+                             model_sha="a"*40,interval_ms=10,capital_limit="100")
+        shadow=Shadow(args);shadow.generation=graph["graph_generation"];shadow.relations=graph["relations"];shadow.index=graph["dependency_index"]
+        for now in (10,100):
+            row={"schema":"polymarket_v7_pure_arb_deep_book_snapshot_v1","model_sha":"a"*40,**SAFETY,
+                 "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","receive_wall_ms":now,"market_id":"a",
+                 "yes_token":"ay","no_token":"an","yes_ask_levels":[{"price":".4","size":"3"}],
+                 "no_ask_levels":[{"price":".4","size":"3"}],"yes_bid_levels":[{"price":".6","size":"3"}],
+                 "no_bid_levels":[{"price":".6","size":"3"}],"yes_ask_truncated":False,"no_ask_truncated":False}
+            shadow.update(row)
+        return args.opportunities.read_text(),dict(shadow.funnel)
+    assert replay("left")==replay("right")
