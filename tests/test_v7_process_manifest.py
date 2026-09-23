@@ -30,8 +30,8 @@ v7_register_optional_child "$!"
 
 def test_manifest_matches_runtime_inventory() -> None:
     report = resolve(ROOT, manifest())
-    assert report["process_count"] == report["expected_process_count"] == 36
-    assert report["launcher_child_count"] == report["expected_launcher_child_count"] == 35
+    assert report["process_count"] == report["expected_process_count"] == 38
+    assert report["launcher_child_count"] == report["expected_launcher_child_count"] == 37
     assert report["launcher_manifest_parity"] is True
     assert report["feed_zero_authority"] is True
 
