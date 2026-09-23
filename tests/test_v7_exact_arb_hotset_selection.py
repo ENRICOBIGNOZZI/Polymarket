@@ -56,6 +56,38 @@ def _registry() -> dict:
     }
 
 
+
+
+
+def _verified_n_way_registry() -> dict:
+    states = ["A", "B", "C"]
+    legs = []
+    for index, mid in enumerate(("1", "2", "3")):
+        vector = [0, 0, 0]
+        vector[index] = 1
+        legs.append({
+            "selector": {"market_id": mid},
+            "outcome": "YES",
+            "coefficient": 1,
+            "payout_vector": vector,
+        })
+    return {
+        **SAFETY,
+        "schema": "polymarket_v7_exact_arb_relation_registry_v1",
+        "version": 1,
+        "relations": [{
+            "id": "explicit-n-way-test",
+            "enabled": True,
+            "relation_family": "EXPLICIT_VERIFIED_N_WAY",
+            "states": states,
+            "guaranteed_payout": 1,
+            "legs": legs,
+            "directions": ["BUY_BASKET"],
+            "discovery": "EXPLICIT_VERIFIED_TEST",
+        }],
+    }
+
+
 def _hotset(graph: dict, relation_ids: list[str]) -> dict:
     return {
         "schema": HOTSET_SCHEMA,
@@ -89,13 +121,13 @@ def test_binary_hotset_compiles_to_exact_causal_observer_selection() -> None:
     assert status["state"] == "READY" and status["selected_tokens"] == 2
 
 
-def test_negrisk_relation_selects_every_binary_member_pair_for_causal_observation() -> None:
+def test_verified_n_leg_relation_selects_every_binary_member_pair_for_causal_observation() -> None:
     universe = build_snapshot(
-        [_event([_raw_market(str(i), neg=True) for i in (1, 2, 3)], neg=True)],
+        [_event([_raw_market(str(i)) for i in (1, 2, 3)])],
         MODEL, generated_at_ms=1,
     )
-    graph = compile_graph([_registry()], universe, MODEL)
-    relation = next(row for row in graph["relations"] if row["relation_family"] == "NEGRISK_COMPLETE_SET")
+    graph = compile_graph([_verified_n_way_registry()], universe, MODEL)
+    relation = next(row for row in graph["relations"] if row["relation_family"] == "EXPLICIT_VERIFIED_N_WAY")
     selection, status = compile_selection(
         graph, universe, _hotset(graph, [relation["relation_id"]]), MODEL, 64
     )
@@ -107,11 +139,11 @@ def test_negrisk_relation_selects_every_binary_member_pair_for_causal_observatio
 
 def test_relation_is_dropped_if_complete_causal_membership_exceeds_bound() -> None:
     universe = build_snapshot(
-        [_event([_raw_market(str(i), neg=True) for i in (1, 2, 3)], neg=True)],
+        [_event([_raw_market(str(i)) for i in (1, 2, 3)])],
         MODEL, generated_at_ms=1,
     )
-    graph = compile_graph([_registry()], universe, MODEL)
-    relation = next(row for row in graph["relations"] if row["relation_family"] == "NEGRISK_COMPLETE_SET")
+    graph = compile_graph([_verified_n_way_registry()], universe, MODEL)
+    relation = next(row for row in graph["relations"] if row["relation_family"] == "EXPLICIT_VERIFIED_N_WAY")
     selection, status = compile_selection(
         graph, universe, _hotset(graph, [relation["relation_id"]]), MODEL, 2
     )
