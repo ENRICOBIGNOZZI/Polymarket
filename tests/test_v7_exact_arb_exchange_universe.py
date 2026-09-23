@@ -72,19 +72,19 @@ def test_public_binary_ctf_market_auto_compiles_without_cross_market_semantic_cl
     assert graph["relations"][0]["relation_family"] == "SAME_MARKET_BINARY_COMPLETE_SET"
 
 
-def test_non_augmented_negrisk_event_becomes_one_verified_n_leg_complete_set() -> None:
+def test_non_augmented_negrisk_event_remains_unverified_without_independent_membership_proof() -> None:
     members = [_market(str(i), neg=True) for i in (1, 2, 3)]
     snapshot = build_snapshot([_event("20", members, neg=True)], MODEL, generated_at_ms=1)
-    assert snapshot["verified_negrisk_events"] == 1
-    expected = ["1", "2", "3"]
-    assert all(row["neg_risk_complete_set_verified"] is True for row in snapshot["markets"])
-    assert all(row["neg_risk_complete_set_market_ids"] == expected for row in snapshot["markets"])
+    assert snapshot["verified_negrisk_events"] == 0
+    assert snapshot["negrisk_rejection_reasons"]["INDEPENDENT_COMPLETE_SET_ATTESTATION_REQUIRED"] == 1
+    candidate = snapshot["unverified_candidates"][0]
+    assert candidate["relation_family"] == "NEGRISK_COMPLETE_SET"
+    assert candidate["verification"] == "UNVERIFIED_CANDIDATE"
+    assert all(row["neg_risk_complete_set_verified"] is False for row in snapshot["markets"])
     graph = compile_graph([_registry()], snapshot, MODEL)
     families = [row["relation_family"] for row in graph["relations"]]
     assert families.count("SAME_MARKET_BINARY_COMPLETE_SET") == 3
-    assert families.count("NEGRISK_COMPLETE_SET") == 1
-    relation = next(row for row in graph["relations"] if row["relation_family"] == "NEGRISK_COMPLETE_SET")
-    assert len(relation["legs"]) == 3
+    assert "NEGRISK_COMPLETE_SET" not in families
 
 
 def test_augmented_negrisk_is_never_auto_attested() -> None:
