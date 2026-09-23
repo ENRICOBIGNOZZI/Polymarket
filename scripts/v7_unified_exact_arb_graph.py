@@ -255,7 +255,8 @@ def walk(book: list[tuple[Fraction, Fraction]], quantity: Fraction, fee: Fractio
 
 
 def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms: int,
-             maximum_age_ms: int = 1000, maximum_skew_ms: int = 50) -> dict[str, Any]:
+             maximum_age_ms: int = 1000, maximum_skew_ms: int = 50,
+             capital_limit: Fraction | str = "1000000000") -> dict[str, Any]:
     """Exact full-depth sizing with depth breakpoints; never treats missing fees/depth as zero."""
     if relation.get("enabled") is not True: return {"accepted": False, "reason": "disabled_relation"}
     prepared, candidates, times = [], set(), []
@@ -276,22 +277,26 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
     if not prepared: return {"accepted": False, "reason": "empty_relation"}
     if max(times) - min(times) > maximum_skew_ms: return {"accepted": False, "reason": "leg_skew"}
     guarantee, reserve, best = frac(relation["guaranteed_payout"]), frac(relation.get("reserve_per_unit", 0)), None
+    minimum=max((frac(leg.get("minimum_order",0))/coefficient for leg,_,_,coefficient in prepared),default=Fraction(0))
+    cap=frac(capital_limit)
     raw_touch=sum((depth[0][0]*coefficient for _,depth,_,coefficient in prepared),Fraction(0))
     fee_touch=sum((depth[0][0]*(1+fee)*coefficient for _,depth,fee,coefficient in prepared),Fraction(0))
     distances={"distance_to_raw_arbitrage":fstr(raw_touch-guarantee),
                "distance_to_after_fee_arbitrage":fstr(fee_touch-guarantee),
                "distance_to_after_reserve_arbitrage":fstr(fee_touch+reserve-guarantee)}
     for quantity in sorted(candidates):
-        if quantity <= 0: continue
+        if quantity <= 0 or quantity < minimum: continue
         total = Fraction(0)
         for _, depth, fee, coefficient in prepared:
             value = walk(depth, quantity * coefficient, fee)
             if value is None: break
             total += value
         else:
+            if total + quantity * reserve > cap: continue
             pnl = quantity * guarantee - total - quantity * reserve
             if best is None or pnl > best[2]: best = (quantity, total, pnl)
-    if best is None or best[2] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
+    if best is None: return {"accepted": False, "reason": "minimum_order_or_capital",**distances}
+    if best[2] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
     quantity, cost, pnl = best
     return {"accepted": True, "reason": "candidate", "quantity": fstr(quantity), "capital_required": fstr(cost + quantity * reserve),
             "net_locked_pnl": fstr(pnl), **distances}

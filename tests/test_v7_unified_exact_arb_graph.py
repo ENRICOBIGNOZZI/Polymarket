@@ -46,3 +46,11 @@ def test_proven_inequality_is_retained_but_never_actionable() -> None:
     registry={**SAFETY,"schema":"polymarket_v7_exact_arb_relation_registry_v1","version":1,"relations":[{"id":"upper","enabled":True,"relation_type":"PAYOFF_UPPER_BOUND","states":["a","b"],"guaranteed_payout":1,"legs":[{"selector":{"market_id":"m"},"outcome":"YES","payout_vector":[1,0]}]}]}
     relation=compile_graph([registry],universe,model)["relations"][0]
     assert relation["proof_type"]=="FINITE_STATE_EXACT_RATIONAL_INEQUALITY" and relation["enabled"] is False
+
+
+def test_minimum_order_and_capital_are_fail_closed() -> None:
+    relation={"enabled":True,"guaranteed_payout":"1","reserve_per_unit":"0","legs":[{"token_id":"a","coefficient":"1","minimum_order":"10"}]}
+    books={"a":{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0","asks":[[".5","5"]]}}
+    assert evaluate(relation,books,1)["reason"]=="minimum_order_or_capital"
+    relation["legs"][0]["minimum_order"]="0";books["a"]["asks"]=[[".5","10"]]
+    assert evaluate(relation,books,1,capital_limit="1")["reason"]=="minimum_order_or_capital"
