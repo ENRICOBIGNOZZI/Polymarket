@@ -23,6 +23,7 @@ def remote_command(sha:str, duration:int, service_user:str)->str:
     return f'''set -euo pipefail
 APP=/home/{service_user}/polymarket
 OUT=/mnt/polymarket-data/benchmarks/selected-pure-arb-{sha}
+SRC="$OUT/source"
 STEP=preflight
 dump_selected_failure() {{
   rc=$?
@@ -34,23 +35,31 @@ dump_selected_failure() {{
       echo >&2
     fi
   done
+  sudo -u {service_user} git -C "$APP" worktree remove --force "$SRC" >/dev/null 2>&1 || true
   exit "$rc"
 }}
 trap dump_selected_failure ERR
-[[ "$(sudo -u {service_user} git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
 sudo systemctl stop polymarket-v7-paper.service >/dev/null 2>&1 || true
 ! systemctl is-active --quiet polymarket-v7-paper.service
 rm -rf "$OUT"
 install -d -o {service_user} -g "$(id -gn {service_user})" "$OUT"
+STEP=source_worktree
+sudo -u {service_user} git -C "$APP" cat-file -e "{sha}^{{commit}}" 2>/dev/null \
+  || sudo -u {service_user} git -C "$APP" fetch --no-tags origin "{sha}"
+sudo -u {service_user} git -C "$APP" worktree remove --force "$SRC" >/dev/null 2>&1 || true
+rm -rf "$SRC"
+sudo -u {service_user} git -C "$APP" worktree prune
+sudo -u {service_user} git -C "$APP" worktree add --detach "$SRC" "{sha}" >/dev/null
+[[ "$(sudo -u {service_user} git -C "$SRC" rev-parse HEAD)" == "{sha}" ]]
 STEP=capital_allocator
-sudo -u {service_user} python3 "$APP/scripts/v7_capital_allocator.py"   --config "$APP/config/paper_v7.json" --output-dir "$OUT/alloc" > "$OUT/allocator.log"
+sudo -u {service_user} python3 "$SRC/scripts/v7_capital_allocator.py"   --config "$SRC/config/paper_v7.json" --output-dir "$OUT/alloc" > "$OUT/allocator.log"
 STEP=universe
-sudo -u {service_user} python3 "$APP/scripts/v7_crypto_universe.py"   --config "$APP/config/v7_crypto_universe.json" --output-dir "$OUT/universe"   --model-sha "{sha}" --once > "$OUT/universe.log"
+sudo -u {service_user} python3 "$SRC/scripts/v7_crypto_universe.py"   --config "$SRC/config/v7_crypto_universe.json" --output-dir "$OUT/universe"   --model-sha "{sha}" --once > "$OUT/universe.log"
 STEP=runtime_config
-sudo -u {service_user} python3 "$APP/scripts/v7_pure_arb_multi_config.py"   --universe "$OUT/universe/current.json"   --allocation "$OUT/alloc/crypto_settlement_engine.json"   --model-sha "{sha}" --latency-tape "$OUT/native-latency.bin"   --output "$OUT/runtime.json" > "$OUT/config.log"
+sudo -u {service_user} python3 "$SRC/scripts/v7_pure_arb_multi_config.py"   --universe "$OUT/universe/current.json"   --allocation "$OUT/alloc/crypto_settlement_engine.json"   --model-sha "{sha}" --latency-tape "$OUT/native-latency.bin"   --output "$OUT/runtime.json" > "$OUT/config.log"
 BUILD="$OUT/build"
 STEP=cmake_configure
-sudo -u {service_user} cmake -S "$APP" -B "$BUILD" -G Ninja   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPM_LONDON_RUNTIME_ONLY=ON   > "$OUT/cmake-configure.log"
+sudo -u {service_user} cmake -S "$SRC" -B "$BUILD" -G Ninja   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPM_LONDON_RUNTIME_ONLY=ON   > "$OUT/cmake-configure.log"
 STEP=cmake_build
 sudo -u {service_user} cmake --build "$BUILD" --parallel "$(nproc)"   --target polymarket_v7_pure_arb_multi_runtime > "$OUT/cmake-build.log"
 STEP=runtime
@@ -104,7 +113,10 @@ compact={{
 }}
 Path(log.parent/'selected-summary.json').write_text(json.dumps(compact,sort_keys=True,indent=2)+'\n')
 print('V7_SELECTED_PURE_ARB='+json.dumps(compact,sort_keys=True,separators=(',',':')))
-PY'''
+PY
+STEP=cleanup
+sudo -u {service_user} git -C "$APP" worktree remove --force "$SRC" >/dev/null
+trap - ERR'''
 
 
 def parse(stdout:str)->dict[str,Any]:
