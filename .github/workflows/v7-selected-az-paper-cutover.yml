@@ -92,7 +92,7 @@ jobs:
           assert len(rows)==1,rows
           print(rows[0]["id"])
           PY
-)"
+          )"
           gh api -H "Accept: application/vnd.github+json" \
             "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/latency.zip"
           unzip -q "$RUNNER_TEMP/latency.zip" -d "$evidence"

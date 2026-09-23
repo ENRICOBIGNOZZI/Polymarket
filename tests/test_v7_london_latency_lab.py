@@ -225,6 +225,14 @@ def test_selected_az_workflow_python_heredocs_stay_inside_yaml_block_scalars():
     assert count >= 4
 
 
+def test_selected_az_artifact_command_substitution_stays_inside_run_block():
+    workflow = (ROOT / ".github/workflows/v7-selected-az-paper-cutover.yml").read_text()
+    lines = workflow.splitlines()
+    closers = [line for line in lines if line.strip() == ')"']
+    assert closers
+    assert all(line.startswith("          ") for line in closers)
+
+
 def test_selected_az_paper_cutover_is_evidence_bound_and_paper_only():
     workflow = (ROOT / ".github/workflows/v7-selected-az-paper-cutover.yml").read_text()
     helper = (ROOT / "ops/v7_selected_az_cutover_request.py").read_text()
