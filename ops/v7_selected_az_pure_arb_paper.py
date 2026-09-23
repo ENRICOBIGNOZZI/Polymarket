@@ -66,7 +66,7 @@ assert summary['clean'] is True
 cfg=json.load(config.open())
 assert len(cfg['markets'])==summary['market_count'] and summary['market_count']>0
 compact={{
- 'schema':'polymarket_v7_selected_az_pure_arb_paper_v1',
+ 'schema':'polymarket_v7_selected_az_pure_arb_validation_v1',
  'target_sha':'{sha}','paper_only':True,'authenticated_execution':False,
  'real_order_submission':False,'single_process':True,
  'pm_worker_count':summary['pm_worker_count'],'market_count':summary['market_count'],
@@ -88,7 +88,7 @@ def parse(stdout:str)->dict[str,Any]:
           if x.startswith("V7_SELECTED_PURE_ARB=")]
     if len(rows)!=1: raise RuntimeError("selected pure arb marker missing")
     value=json.loads(rows[0])
-    if value.get("schema")!="polymarket_v7_selected_az_pure_arb_paper_v1":
+    if value.get("schema")!="polymarket_v7_selected_az_pure_arb_validation_v1":
         raise RuntimeError("selected pure arb schema invalid")
     return value
 
