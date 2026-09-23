@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
 
         clob::PairPersistentTlsTransport transport(
             options.host, options.port, options.timeout_ms,
-            options.socket_busy_poll_us);
+            options.socket_busy_poll_us, true);
         const auto connected = transport.connect(options.ca_file);
         if (!connected.ready || !transport.ready()) {
             std::cerr << "paired transport connect failed\n";

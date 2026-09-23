@@ -237,6 +237,21 @@ def test_no_duplicate_latency_workflow_is_added():
     assert not (ROOT / ".github/workflows/london-latency-lab.yml").exists()
 
 
+def test_rx_cpu_napi_metadata_is_probe_only_not_default_tls_hot_path():
+    tls_header = (ROOT / "include/pm/v7_clob_tls.hpp").read_text()
+    tls_source = (ROOT / "src/v7_clob_tls.cpp").read_text()
+    pair_header = (ROOT / "include/pm/v7_clob_pair_transport.hpp").read_text()
+    probe = (ROOT / "src/v7_public_paired_clob_transport_probe.cpp").read_text()
+    assert "bool capture_rx_metadata = false" in tls_header
+    assert "bool capture_rx_metadata = false" in pair_header
+    assert "if (capture_rx_metadata_)" in tls_source
+    assert "incoming_cpu(fd_)" in tls_source
+    assert "incoming_napi_id(fd_)" in tls_source
+    assert "options.socket_busy_poll_us, true" in probe
+    # Production callers using the default constructor must not pay two
+    # getsockopt() calls on every TLS response read.
+
+
 def test_host_tuning_lab_is_reversible_and_default_off():
     host = (ROOT / "ops/v7_host_latency_ab.py").read_text()
     probe = (ROOT / "src/v7_public_paired_clob_transport_probe.cpp").read_text()

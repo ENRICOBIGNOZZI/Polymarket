@@ -71,7 +71,8 @@ public:
     PairPersistentTlsTransport(std::string_view host,
                                std::uint16_t port = 443,
                                int timeout_ms = 2'000,
-                               int socket_busy_poll_us = 0) noexcept;
+                               int socket_busy_poll_us = 0,
+                               bool capture_rx_metadata = false) noexcept;
     ~PairPersistentTlsTransport();
 
     PairPersistentTlsTransport(const PairPersistentTlsTransport&) = delete;
