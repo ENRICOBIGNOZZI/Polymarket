@@ -151,10 +151,11 @@ def test_unified_exact_graph_metrics_are_zero_authority_only() -> None:
             "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","relations_compiled":4,
             "relations_evaluated":12,"funnel":{"candidate_emitted":2,"books_ready":5},"rejection_reasons":{"truncated_depth":3},
             "funnel_by_family":{"SAME_MARKET_BINARY_COMPLETE_SET":{"books_ready":5}},
-            "evaluation_latency_us":{"p99":4.0}}
+            "evaluation_latency_us":{"p99":4.0},"graph_generation_compiled_at_ms":1}
     rendered="\n".join(exporter._render_unified_exact_arb_graph_metrics(status))
     assert "exact_arb_graph_up 1" in rendered and "exact_arb_candidates_total 2" in rendered
     assert "exact_arb_graph_family_funnel_total" in rendered and "exact_arb_graph_evaluation_latency_microseconds" in rendered
+    assert "exact_arb_graph_generation_age_seconds" in rendered
     status["real_order_submission"]=True
     assert "exact_arb_graph_up 0" in "\n".join(exporter._render_unified_exact_arb_graph_metrics(status))
 

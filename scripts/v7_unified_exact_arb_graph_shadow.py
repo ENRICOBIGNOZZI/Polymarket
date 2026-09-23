@@ -35,7 +35,7 @@ def native_binary_candidate(relation:dict[str,Any], result:dict[str,Any], now:in
 
 class Shadow:
  def __init__(self,a:argparse.Namespace):
-  self.a=a;self.offset=0;self.books={};self.generation="";self.relations=[];self.index={};self.funnel=Counter();self.funnel_by_family=defaultdict(Counter);self.rejects=Counter();self.rejects_by_family=defaultdict(Counter);self.dist=defaultdict(list);self.seen=set();self.pending=[];self.claims={};self.latency_us=[];self.capital_limit="0"
+  self.a=a;self.offset=0;self.books={};self.generation="";self.generation_compiled_at_ms=0;self.relations=[];self.index={};self.funnel=Counter();self.funnel_by_family=defaultdict(Counter);self.rejects=Counter();self.rejects_by_family=defaultdict(Counter);self.dist=defaultdict(list);self.seen=set();self.pending=[];self.claims={};self.latency_us=[];self.capital_limit="0"
  def capital(self):
   path=getattr(self.a,"capital_policy",None)
   if path is None:return str(getattr(self.a,"capital_limit","0"))
@@ -52,6 +52,8 @@ class Shadow:
   if g.get("schema")!="polymarket_v7_unified_exact_arb_graph_v1" or any(g.get(k) is not v for k,v in SAFETY.items()):return
   if g.get("graph_generation")!=self.generation:
    self.generation=str(g.get("graph_generation") or "");self.relations=g.get("relations") or [];self.index=g.get("dependency_index") or {}
+   try:self.generation_compiled_at_ms=int((g.get("metadata") or {}).get("compiled_at_ms") or 0)
+   except (TypeError,ValueError):self.generation_compiled_at_ms=0
  def update(self,row:dict[str,Any]):
   if (row.get("schema")!="polymarket_v7_pure_arb_deep_book_snapshot_v1" or row.get("model_sha")!=self.a.model_sha or row.get("paper_only") is not True or row.get("authenticated_execution") is not False or row.get("real_order_submission") is not False or row.get("execution_authority")!="ZERO_AUTHORITY_RESEARCH_ONLY"):return
   try: now=int(row["receive_wall_ms"]); mid=str(row["market_id"]);pairs=(("yes_token","yes_ask_levels","yes_bid_levels","yes_ask_truncated"),("no_token","no_ask_levels","no_bid_levels","no_ask_truncated"))
@@ -130,7 +132,7 @@ class Shadow:
    if time.monotonic()>=next_status:
     def pct(v):
      v=sorted(v);return {str(p):v[min(len(v)-1,max(0,int(len(v)*p/100)-1))] for p in (.1,1,5,10,25,50,90,99)}|{"min":v[0]} if v else {}
-    atomic(self.a.status,{"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":"COLLECTING","graph_generation":self.generation,"relations_compiled":len(self.relations),"relations_evaluated":self.funnel["relations_considered"],"capital_limit_pusd":self.capital(),"funnel":dict(self.funnel),"funnel_by_family":{k:dict(v) for k,v in self.funnel_by_family.items()},"rejection_reasons":dict(self.rejects),"rejection_reasons_by_family":{k:dict(v) for k,v in self.rejects_by_family.items()},"near_arbitrage":{k:pct(v) for k,v in self.dist.items()},"evaluation_latency_us":pct(self.latency_us),"counterfactual":{"filled":0,"one_leg_exposure":0,"unwind":0,"unwind_loss":0,"realized_pnl":0},"timestamp_ms":time.time_ns()//1_000_000});next_status=time.monotonic()+1
+    atomic(self.a.status,{"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":"COLLECTING","graph_generation":self.generation,"graph_generation_compiled_at_ms":self.generation_compiled_at_ms,"relations_compiled":len(self.relations),"relations_evaluated":self.funnel["relations_considered"],"capital_limit_pusd":self.capital(),"funnel":dict(self.funnel),"funnel_by_family":{k:dict(v) for k,v in self.funnel_by_family.items()},"rejection_reasons":dict(self.rejects),"rejection_reasons_by_family":{k:dict(v) for k,v in self.rejects_by_family.items()},"near_arbitrage":{k:pct(v) for k,v in self.dist.items()},"evaluation_latency_us":pct(self.latency_us),"counterfactual":{"filled":0,"one_leg_exposure":0,"unwind":0,"unwind_loss":0,"realized_pnl":0},"timestamp_ms":time.time_ns()//1_000_000});next_status=time.monotonic()+1
    time.sleep(max(.001,self.a.interval_ms/1000))
 def main()->int:
  p=argparse.ArgumentParser();p.add_argument("--graph",type=Path,required=True);p.add_argument("--tape",type=Path,required=True);p.add_argument("--status",type=Path,required=True);p.add_argument("--opportunities",type=Path,required=True);p.add_argument("--capital-policy",type=Path,required=True);p.add_argument("--model-sha",required=True);p.add_argument("--interval-ms",type=int,default=10);a=p.parse_args()

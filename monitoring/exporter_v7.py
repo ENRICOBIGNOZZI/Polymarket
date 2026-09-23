@@ -558,7 +558,7 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
     for percentile, value in sorted((status.get("evaluation_latency_us") or {}).items()):
         lines.append(_metric("exact_arb_graph_evaluation_latency_microseconds", value,
                              {"percentile": percentile}))
-    timestamp = status.get("timestamp_ms")
+    timestamp = status.get("graph_generation_compiled_at_ms", status.get("timestamp_ms"))
     if isinstance(timestamp, (int, float)) and timestamp > 0:
         lines.append(_metric("exact_arb_graph_generation_age_seconds",
                              max(0.0, time.time() - float(timestamp) / 1000.0)))
