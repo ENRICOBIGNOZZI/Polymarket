@@ -112,7 +112,7 @@ compact={{
  'latency_dropped':summary['latency_dropped'],'clean':summary['clean'],
  'duration_seconds':{duration},
 }}
-Path(log.parent/'selected-summary.json').write_text(json.dumps(compact,sort_keys=True,indent=2)+'\n')
+Path(log.parent/'selected-summary.json').write_text(json.dumps(compact,sort_keys=True,indent=2)+'\\n')
 print('V7_SELECTED_PURE_ARB='+json.dumps(compact,sort_keys=True,separators=(',',':')))
 PY
 STEP=cleanup
