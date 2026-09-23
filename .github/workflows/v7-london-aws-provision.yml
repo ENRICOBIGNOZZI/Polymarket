@@ -17,6 +17,9 @@ on:
       - ops/v7_london_bootstrap.sh
       - src/v7_public_paired_clob_transport_probe.cpp
       - src/v7_public_event_to_wire_probe.cpp
+      - ops/v7_selected_az_pure_arb_paper.py
+      - scripts/v7_pure_arb_multi_config.py
+      - .github/workflows/v7-selected-az-paper-cutover.yml
       - .github/workflows/v7-london-aws-provision.yml
   workflow_dispatch:
     inputs:
