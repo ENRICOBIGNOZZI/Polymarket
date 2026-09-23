@@ -768,6 +768,7 @@ PM_V7_CONTROL_NICE=0 v7_exec_class CONTROL python3 scripts/v7_pure_arb_multi_man
   --allocation "$RUN_ROOT/control/allocations/manifest.json" \
   --risk-policy "$ROOT/config/v7_native_risk_policy.json" \
   --engine "$PURE_ARB_MULTI_RUNTIME" \
+  --settler "$ROOT/scripts/v7_native_paper_settlement.py" \
   >> "$RUN_ROOT/native_engine_manager.log" 2>&1 &
 v7_register_child "$!"
 
