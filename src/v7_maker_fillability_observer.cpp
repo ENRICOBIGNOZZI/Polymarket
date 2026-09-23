@@ -308,13 +308,13 @@ load_selected_pairs(const fs::path& path, bool require_selection_only = false,
             || !boolean(find_value(object, "selection_only"), false)
             || boolean(find_value(object, "execution_authority"), true)
             || boolean(find_value(object, "real_capital_at_risk"), true)
-            || boolean(find_value(object, "automatic_promotion"), true)
             || expected_model_sha.empty()
             || text(find_value(object, "model_sha")) != expected_model_sha) {
             throw std::runtime_error("selection-only contract invalid");
         }
         if (schema == "polymarket_v7_exact_arb_hotset_selection_v1"
-            && (text(find_value(object, "selection_purpose"))
+            && (boolean(find_value(object, "automatic_promotion"), true)
+                || text(find_value(object, "selection_purpose"))
                     != "CAUSAL_HOT_OBSERVATION_PRIORITY_ONLY"
                 || boolean(find_value(object, "source_actionable"), true))) {
             throw std::runtime_error("exact-arb hotset selection contract invalid");
