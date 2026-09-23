@@ -55,7 +55,7 @@ jobs:
       - name: Native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build build-essential cmake pkg-config \
+          sudo apt-get install -y ninja-build build-essential cmake pkg-config python3-pytest \
             libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev
       - name: Build and test graph and unchanged champion
         env:
