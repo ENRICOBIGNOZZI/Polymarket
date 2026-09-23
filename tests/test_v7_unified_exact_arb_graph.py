@@ -8,6 +8,13 @@ from v7_unified_exact_arb_graph_shadow import Shadow, native_binary_candidate
 from v7_exact_relation_discovery import build as discover_relations
 
 
+def _causal_snapshot(row):
+    return {**row, "observer_session_id":"test", "connection_epoch":1,
+            **{side+"_"+field: value for side in ("yes","no") for field,value in (
+                ("valid",True),("lineage_continuous",True),("receive_wall_ms",row["receive_wall_ms"]),
+                ("bid_truncated",False))}}
+
+
 def _universe(model: str = "a" * 40, semantic: str = "b" * 64) -> dict:
     return {**SAFETY, "model_sha": model, "markets": [
         {"market_id":"a", "condition_id":"ca", "active":True, "closed":False,
@@ -49,7 +56,8 @@ def test_compiles_statewise_proven_basket_and_sizes_depth() -> None:
 def test_truncated_or_unproven_relation_is_not_actionable() -> None:
     # The evaluator specifically refuses a depth snapshot that cannot prove capacity.
     assert evaluate({"enabled":True,"legs":[{"token_id":"x","coefficient":"1"}],"guaranteed_payout":"1"},
-                    {"x":{"lineage_continuous":True,"depth_truncated":True}}, 1)["reason"] == "truncated_depth"
+                    {"x":{"lineage_continuous":True,"depth_truncated":True,"timestamp_ms":1,
+                          "fee_rate":"0","asks":[[".4","1"]]}}, 1)["reason"] == "truncated_depth"
 
 
 def test_machine_attested_binary_partition_is_auto_compiled() -> None:
@@ -69,6 +77,7 @@ def test_discovered_payoff_identical_duplicates_flow_into_the_canonical_graph() 
         markets.append({"market_id":mid,"event_id":"e"+mid,"condition_id":"c"+mid,"active":True,"closed":False,
           "asset":"BTC","horizon":"M5","contract_family":"binary","settlement_semantic_hash":semantic,
           "window_start_unix":1,"close_timestamp_unix":2,"fee_schedule":{"rate":0},
+          "settlement_identity_verified":True,"normalized_rules_hash":"f"*64,
           "clob_token_ids":[mid+"y",mid+"n"],"outcomes":["YES","NO"]})
     universe={**SAFETY,"model_sha":model,"markets":markets}
     discovered=discover_relations(universe,model)
@@ -94,6 +103,7 @@ def test_machine_attested_negrisk_event_compiles_only_when_every_member_is_verif
     for mid in ("n1","n2","n3"):
         members.append({"market_id":mid,"event_id":"event","condition_id":"c"+mid,"active":True,"closed":False,
           "neg_risk":True,"neg_risk_complete_set_verified":True,"asset":"BTC","horizon":"M5",
+          "neg_risk_complete_set_market_ids":["n1","n2","n3"],
           "contract_family":"negrisk","settlement_semantic_hash":semantic,"fee_schedule":{"rate":0},
           "clob_token_ids":[mid+"y",mid+"n"],"outcomes":["YES","NO"]})
     graph=compile_graph([_registry([])],{**SAFETY,"model_sha":model,"markets":members},model)
@@ -127,7 +137,9 @@ def test_minimum_order_and_capital_are_fail_closed() -> None:
     books={"a":{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0","asks":[[".5","5"]]}}
     assert evaluate(relation,books,1)["reason"]=="minimum_order"
     relation["legs"][0]["minimum_order"]="0";books["a"]["asks"]=[[".5","10"]]
-    assert evaluate(relation,books,1,capital_limit="1")["reason"]=="capital_limit"
+    bounded=evaluate(relation,books,1,capital_limit="1")
+    assert bounded["accepted"] and bounded["quantity"]=="2" and bounded["capital_required"]=="1"
+    assert evaluate(relation,books,1,capital_limit="0")["reason"]=="capital_limit"
 
 
 def test_n_way_and_fractional_coefficients_size_at_every_depth_breakpoint() -> None:
@@ -175,7 +187,7 @@ def test_fee_rounding_is_exact_and_missing_bid_depth_fails_closed() -> None:
     relation={"enabled":True,"directions":["BUY_BASKET"],"guaranteed_payout":"1","legs":[
         {"token_id":"x","coefficient":"1","minimum_order":"0","fee_rounding_increment":"1/100",
          "fee_rounding_mode":"CEILING"}]}
-    books={"x":{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"1/100",
+    books={"x":{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"1/100","fee_exponent":0,
                 "asks":[["1/2","1"]]}}
     out=evaluate(relation,books,1)
     assert out["accepted"] is True and out["net_locked_pnl"]=="49/100"
@@ -204,7 +216,8 @@ def test_verified_transform_capacity_and_lock_are_enforced() -> None:
       {"selector":{"market_id":"a"},"outcome":"YES","minimum_order":"1","payout_vector":[1,0]},
       {"selector":{"market_id":"a"},"outcome":"NO","minimum_order":"1","payout_vector":[0,1]}],"states":["y","n"],
       "transformation":{"kind":"MERGE","verification":"EXPLICIT_VERIFIED","capacity":"1","latency_ms":2,
-                        "capital_lock_time_ms":100,"proof_hash":"f"*64}}
+                        "capital_lock_time_ms":100,"proof_hash":"f"*64,
+                        "fixed_cost":"0","variable_cost_per_unit":"0","expires_at_ms":10000}}
     graph=compile_graph([_registry([relation])],_universe(),"a"*40)
     books={token:{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0",
                   "asks":[["2/5","2"]]} for token in ("ay","an")}
@@ -260,11 +273,11 @@ def test_incremental_shadow_deduplicates_changed_leg_paths_and_records_funnel(tm
          "yes_token":"ay","no_token":"an","yes_ask_levels":[{"price":".4","size":"3"}],
          "no_ask_levels":[{"price":".4","size":"3"}],"yes_bid_levels":[{"price":".6","size":"3"}],
          "no_bid_levels":[{"price":".6","size":"3"}],"yes_ask_truncated":False,"no_ask_truncated":False}
-    shadow.update(row)
-    assert shadow.funnel["raw_path_count"]==2
+    shadow.update(_causal_snapshot(row))
+    assert shadow.funnel["raw_path_count"]==1
     assert shadow.funnel["unique_economic_opportunity_count"]==1
-    assert shadow.funnel["deduplicated_path_count"]==1
-    assert shadow.funnel_by_family["EXPLICIT_EXACT"]["books_ready"]==2
+    assert shadow.funnel["deduplicated_path_count"]==0
+    assert shadow.funnel_by_family["EXPLICIT_EXACT"]["books_ready"]==1
     candidate=native_binary_candidate(graph["relations"][0], {"direction":"BUY","quantity":"3"}, 10)
     assert candidate is not None and candidate["kind"]=="BUY_COMPLETE_SET" and candidate["market_id"]=="a"
 
@@ -286,7 +299,7 @@ def test_incremental_graph_replay_is_deterministic(tmp_path: Path) -> None:
                  "yes_token":"ay","no_token":"an","yes_ask_levels":[{"price":".4","size":"3"}],
                  "no_ask_levels":[{"price":".4","size":"3"}],"yes_bid_levels":[{"price":".6","size":"3"}],
                  "no_bid_levels":[{"price":".6","size":"3"}],"yes_ask_truncated":False,"no_ask_truncated":False}
-            shadow.update(row)
+            shadow.update(_causal_snapshot(row))
         return args.opportunities.read_text(),dict(shadow.funnel)
     assert replay("left")==replay("right")
 
@@ -309,6 +322,6 @@ def test_shadow_reserves_shared_capital_once_per_snapshot(tmp_path: Path) -> Non
          "yes_token":"ay","no_token":"an","yes_ask_levels":[{"price":".4","size":"3"}],
          "no_ask_levels":[{"price":".4","size":"3"}],"yes_bid_levels":[{"price":".6","size":"3"}],
          "no_bid_levels":[{"price":".6","size":"3"}],"yes_ask_truncated":False,"no_ask_truncated":False}
-    shadow.update(row)
+    shadow.update(_causal_snapshot(row))
     assert shadow.funnel["candidate_emitted"]==1 and shadow.funnel["capital_conflicts"]>=1
     assert len(args.opportunities.read_text().splitlines())==1

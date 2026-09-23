@@ -63,7 +63,7 @@ def outcome_map(market: dict[str, Any]) -> dict[str, str] | None:
             or len(ids) != len(outcomes) or len(ids) > 32):
         return None
     found = {str(outcomes[i]).upper(): str(ids[i]) for i in range(len(ids))}
-    return found if all(found) and all(found.values()) and len(found) == len(ids) else None
+    return found if all(found) and all(found.values()) and len(found) == len(ids) and len(set(ids)) == len(ids) else None
 
 
 def token_map(market: dict[str, Any]) -> dict[str, str] | None:
@@ -153,7 +153,7 @@ def transformation(raw: dict[str, Any]) -> dict[str, Any] | None:
     if value is None: return None
     if not isinstance(value, dict): raise GraphError("transformation_shape")
     kind, verification = str(value.get("kind") or ""), str(value.get("verification") or "")
-    if kind not in {"MERGE", "SPLIT", "NEGRISK_CONVERSION", "COMBO_COLLATERAL_RETURN"}:
+    if kind not in {"MERGE", "SPLIT", "NEGRISK_CONVERSION", "COMBO_COLLATERAL_RETURN", "REDEEM"}:
         raise GraphError("transformation_kind")
     if verification not in {"AUTO_VERIFIED", "EXPLICIT_VERIFIED"}:
         raise GraphError("transformation_verification")
@@ -162,14 +162,18 @@ def transformation(raw: dict[str, Any]) -> dict[str, Any] | None:
     except (KeyError, TypeError, ValueError, GraphError): raise GraphError("transformation_terms") from None
     if capacity <= 0 or latency < 0 or lock <= 0: raise GraphError("transformation_terms")
     proof_hash=str(value.get("proof_hash") or "")
-    if len(proof_hash) != 64: raise GraphError("transformation_proof")
-    return {"id":str(value.get("id") or sha(value)), "kind":kind,"verification":verification,
+    if len(proof_hash) != 64 or any(c not in "0123456789abcdef" for c in proof_hash): raise GraphError("transformation_proof")
+    return {**{key:value[key] for key in ("fixed_cost","variable_cost_per_unit","expires_at_ms") if key in value},
+            "id":str(value.get("id") or sha(value)), "kind":kind,"verification":verification,
             "capacity":fstr(capacity),"latency_ms":latency,"capital_lock_time_ms":lock,
             "proof_hash":proof_hash}
 
 
 def prove(raw: dict[str, Any]) -> dict[str, Any]:
     """Equality is actionable; proven inequalities are retained but disabled."""
+    states=raw.get("states")
+    if not isinstance(states,list) or not 1<=len(states)<=64 or len(set(map(str,states)))!=len(states):
+        raise GraphError("invalid_state_space")
     kind=str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY")
     if kind == "CONSTANT_PAYOUT_EQUALITY": return prove_relation(raw)
     if kind == "LOGICAL_IMPLICATION":
@@ -187,7 +191,10 @@ def prove(raw: dict[str, Any]) -> dict[str, Any]:
                 "state_totals":[f"{fstr(a)}<={fstr(b)}" for a,b in zip(left,right)]}
     if kind not in {"PAYOFF_UPPER_BOUND","PAYOFF_LOWER_BOUND"}: raise GraphError("relation_type")
     states, legs, guarantee=raw.get("states"),raw.get("legs"),frac(raw.get("guaranteed_payout"))
-    if not isinstance(states,list) or not states or not isinstance(legs,list) or not legs: raise GraphError("inequality_shape")
+    if not isinstance(legs,list) or not 1<=len(legs)<=32: raise GraphError("inequality_shape")
+    for leg in legs:
+        if not isinstance(leg.get("payout_vector"),list) or len(leg["payout_vector"])!=len(states):raise GraphError("inequality_shape")
+        if frac(leg.get("coefficient",1))<=0 or any(frac(x)<0 for x in leg["payout_vector"]):raise GraphError("inequality_payout")
     totals=[]
     for i in range(len(states)):
         total=sum((frac(leg.get("coefficient",1))*frac(leg["payout_vector"][i]) for leg in legs),Fraction(0));totals.append(total)
@@ -205,6 +212,8 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
         outcome = str(leg.get("outcome") or "").upper()
         market = resolve_market(markets, leg.get("selector"))
         mapping = outcome_map(market) if market is not None else None
+        if mapping is not None and outcome in {"YES", "NO"}:
+            mapping = token_map(market) or mapping
         if mapping is None or outcome not in mapping:
             raise GraphError("unresolved_claim")
         claim = node(market, mapping[outcome], outcome)
@@ -219,7 +228,10 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
                               "fee_semantics": leg.get("fee_semantics", "MARKET_VERIFIED_REQUIRED"),
                               "fee_rate": fee_rate(market),
                               "fee_exponent": fee_exponent(market),
-                              "minimum_order": fstr(frac(leg.get("minimum_order", 0)))})
+                              "fee_rounding_mode": (market.get("fee_schedule") or {}).get("rounding_mode", "VENUE_5DP"),
+                              "fee_rounding_increment": (market.get("fee_schedule") or {}).get("rounding_increment", "0.00001"),
+                              "tick_size": market.get("tick_size"),
+                              "minimum_order": fstr(frac(leg.get("minimum_order", market.get("minimum_order_size") or 0)))})
         nodes.append(claim)
     terminal = {str(state): fstr(sum((frac(leg["coefficient"]) * frac(leg["payout_vector"][i]) for leg in compiled_legs), Fraction(0)))
                 for i, state in enumerate(states)}
@@ -232,10 +244,12 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
                 "settlement_semantic_dependencies": sorted({str(item["settlement_semantic_hash"])
                     for item in nodes if item.get("settlement_semantic_hash")}),
                 "source_provenance": str(raw.get("discovery") or raw.get("provenance") or "EXPLICIT_VERIFIED"),
-                "verification": "EXPLICIT_VERIFIED", "verified_at_ms": int(raw.get("verified_at_ms") or 0),
+                "verification": "AUTO_VERIFIED" if str(raw.get("discovery", "")).startswith("AUTO") else "EXPLICIT_VERIFIED", "verified_at_ms": int(raw.get("verified_at_ms") or 0),
                 "execution_semantics": raw.get("execution_semantics", "SEQUENTIAL_PARALLEL_BATCH_SHADOW"),
                 "capital_transformation_semantics": raw.get("capital_transformation_semantics", "SETTLEMENT_LOCKED"),
                 "capital_lock_time_ms": int(raw["capital_lock_time_ms"]) if raw.get("capital_lock_time_ms") is not None else None,
+                "settlement_close_ms": min((int(m["close_timestamp_unix"])*1000 for m in nodes
+                    if int(m.get("close_timestamp_unix") or 0)>0), default=0),
                 "collateral_denomination": raw.get("collateral_denomination") or next((item.get("collateral_denomination") for item in nodes if item.get("collateral_denomination")), None),
                 "transformation": transformation(raw),
                 "reserve_per_unit": fstr(frac(raw.get("reserve_per_unit", 0))),
@@ -243,8 +257,16 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
                 "directions": directions(raw),
                 "enabled": raw.get("enabled") is True and str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY")=="CONSTANT_PAYOUT_EQUALITY", "automatic_promotion": False}
     if not relation["relation_id"]: raise GraphError("relation_id")
-    relation["economic_identity"] = sha({"legs": sorted((leg["token_id"], leg["coefficient"]) for leg in compiled_legs),
-                                          "terminal": terminal, "guarantee": guarantee})
+    if len({leg["token_id"] for leg in compiled_legs}) != len(compiled_legs):
+        raise GraphError("duplicate_token_claim")
+    unit = frac(guarantee)
+    if unit <= 0:
+        if relation["relation_type"] == "CONSTANT_PAYOUT_EQUALITY": raise GraphError("non_positive_guarantee")
+        unit = Fraction(1)
+    relation["economic_identity"] = sha({
+        "claims": sorted((leg["node_id"], fstr(frac(leg["coefficient"])/unit)) for leg in compiled_legs),
+        "terminal": {"constant":"1"} if relation["relation_type"]=="CONSTANT_PAYOUT_EQUALITY" else terminal,
+        "collateral":relation["collateral_denomination"], "relation_type":relation["relation_type"]})
     return relation, nodes
 
 
@@ -260,7 +282,7 @@ def automatic_binary_relations(markets: list[dict[str, Any]]) -> list[dict[str, 
         result.append({"id":"binary:"+str(market["market_id"]),"enabled":True,
             "relation_family":"SAME_MARKET_BINARY_COMPLETE_SET","discovery":"AUTO_VERIFIED_BINARY_PARTITION",
             "directions":["BUY_COMPLETE_SET","SELL_COMPLETE_SET"],
-            "states":["YES","NO"],"guaranteed_payout":1,"legs":[
+            "reserve_per_unit":"0.0005", "states":["YES","NO"],"guaranteed_payout":1,"legs":[
             {"selector":selector,"outcome":"YES","coefficient":1,"payout_vector":[1,0]},
             {"selector":selector,"outcome":"NO","coefficient":1,"payout_vector":[0,1]}]})
     return result
@@ -304,7 +326,9 @@ def automatic_negrisk_relations(markets: list[dict[str, Any]]) -> list[dict[str,
     result=[]
     for event_id, members in groups.items():
         members=sorted(members,key=lambda value:str(value.get("market_id") or ""))
+        member_ids=[str(row.get("market_id") or "") for row in members]
         if (len(members)<2 or any(row.get("neg_risk_complete_set_verified") is not True for row in members)
+                or any(sorted(row.get("neg_risk_complete_set_market_ids") or []) != member_ids for row in members)
                 or any(outcome_map(row) is None or "YES" not in outcome_map(row) for row in members)):
             continue
         states=[str(row["market_id"]) for row in members]
@@ -400,7 +424,7 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
             relation, claims = _compile_relation(source, markets)
         except (GraphError, ValueError, KeyError, TypeError) as exc:
             rejected.append({"relation_id": str(source.get("id") or source.get("relation_id") or ""),
-                             "reason": type(exc).__name__})
+                             "reason": str(exc) or type(exc).__name__})
             continue
         if any(existing.get("node_id") == claim["node_id"] and existing != claim for existing in nodes.values() for claim in claims):
             raise GraphError("claim_identity_collision")
@@ -409,11 +433,19 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
     if len({row["relation_id"] for row in relations}) != len(relations): raise GraphError("duplicate_relation_id")
     index: dict[str, list[int]] = defaultdict(list)
     for handle, relation in enumerate(relations):
-        for leg in relation["legs"]: index[leg["token_id"]].append(handle)
+        for token in sorted({leg["token_id"] for leg in relation["legs"]}): index[token].append(handle)
     unverified=[{"relation_family":"NEGRISK_TRANSFORMATION","verification":"UNVERIFIED_CANDIDATE","market_id":str(row.get("market_id") or ""),"reason":"no_verified_conversion_semantics"}
                 for row in markets if row.get("neg_risk") is True or row.get("negRisk") is True]
     unverified.extend(component_candidates)
+    for market in markets:
+        mapping=outcome_map(market)
+        if mapping and not (market.get("binary_partition_verified") is True if len(mapping)==2 else market.get("partition_verified") is True):
+            unverified.append({"relation_family":"SAME_MARKET_BINARY_COMPLETE_SET" if len(mapping)==2 else "N_WAY_COMPLETE_PARTITION",
+                "verification":"UNVERIFIED_CANDIDATE","market_id":market.get("market_id"),
+                "reason":"partition_attestation_missing","source_metadata":node(market,"",""),"proof_hash":None})
     graph = {"schema": SCHEMA, "version": 1, **SAFETY, "model_sha": model_sha,
+             "source_universe_timestamp_ms": universe.get("timestamp_ms"),
+             "source_universe_membership_sha256": universe.get("membership_sha256"),
              "nodes": sorted(nodes.values(), key=lambda value: value["node_id"]), "relations": relations,
              "dependency_index": {key: value for key, value in sorted(index.items())},
              "proof_registry": {row["proof_hash"]: row["relation_id"] for row in relations},
@@ -422,23 +454,47 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
              "metadata": {"control_plane": True, "hot_path_contract": "TOKEN_HANDLE_TO_AFFECTED_RELATIONS_ONLY",
                           "actionable_relations": sum(row["enabled"] for row in relations),
                           "compiled_at_ms": time.time_ns() // 1_000_000}}
-    graph["graph_generation"] = sha({key: value for key, value in graph.items() if key not in {"metadata", "graph_generation"}})
+    graph["transformation_registry"] = {r["transformation"]["id"]: r["transformation"] for r in relations if r.get("transformation")}
+    graph["settlement_dependency_index"] = {key: [i for i,r in enumerate(relations) if key in r["settlement_semantic_dependencies"]]
+        for key in sorted({s for r in relations for s in r["settlement_semantic_dependencies"]})}
+    graph["resource_dependency_index"] = {"inventory:"+token: handles for token,handles in index.items()}
+    graph["graph_generation"] = generation_hash(graph)
     return graph
+
+
+def generation_hash(graph: dict[str, Any]) -> str:
+    return sha({key: value for key, value in graph.items() if key not in {"metadata", "graph_generation"}})
+
+
+def validate_graph(graph: dict[str, Any], model_sha: str) -> None:
+    if graph.get("schema") != SCHEMA or not safe(graph, model_sha): raise GraphError("graph_identity")
+    if graph.get("graph_generation") != generation_hash(graph): raise GraphError("graph_digest")
+    expected: dict[str, list[int]] = defaultdict(list)
+    for i, relation in enumerate(graph["relations"]):
+        for token in sorted({leg["token_id"] for leg in relation["legs"]}): expected[token].append(i)
+    if dict(expected) != graph.get("dependency_index"): raise GraphError("graph_dependency_index")
 
 
 def levels(raw: Any, descending: bool = False) -> list[tuple[Fraction, Fraction]]:
     out = []
-    if not isinstance(raw, list): return out
-    for value in raw[:1024]:
+    if not isinstance(raw, list) or len(raw) > 1024: return out
+    seen = set()
+    for value in raw:
         try: price, size = frac(value[0]), frac(value[1])
-        except (IndexError, TypeError, GraphError): continue
-        if 0 < price < 1 and size > 0: out.append((price, size))
+        except (IndexError, TypeError, GraphError): return []
+        if not 0 < price < 1 or size <= 0 or price in seen: return []
+        seen.add(price); out.append((price, size))
     return sorted(out, reverse=descending)
 
 
 def round_fee(value: Fraction, increment: Fraction | None, mode: str) -> Fraction:
     """Apply an explicitly declared exact fee rounding convention."""
     if increment is None or mode == "EXACT": return value
+    if mode == "VENUE_5DP":
+        if increment != Fraction(1, 100000): raise GraphError("fee_rounding")
+        if value < increment: return Fraction(0)
+        units = value / increment + Fraction(1, 2)
+        return increment * (units.numerator // units.denominator)
     if increment <= 0 or mode not in {"CEILING", "FLOOR"}: raise GraphError("fee_rounding")
     units = value / increment
     whole = units.numerator // units.denominator
@@ -469,119 +525,146 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
              maximum_age_ms: int = 1000, maximum_skew_ms: int = 50,
              capital_limit: Fraction | str = "1000000000",
              inventory_limit: Fraction | str | None = None) -> dict[str, Any]:
-    """Exact full-depth sizing with depth breakpoints; never treats missing fees/depth as zero."""
-    if relation.get("enabled") is not True: return {"accepted": False, "reason": "disabled_relation"}
-    permitted = set(relation.get("directions") or ["BUY_BASKET"])
-    buy_requested = "BUY_COMPLETE_SET" in permitted or "BUY_BASKET" in permitted
-    sell_requested = "SELL_COMPLETE_SET" in permitted or "SELL_INVENTORY_BASKET" in permitted
-    prepared, candidates, times = [], set(), []
-    for leg in relation.get("legs") or []:
-        book = books.get(str(leg.get("token_id")))
-        if not isinstance(book, dict) or book.get("lineage_continuous") is not True: return {"accepted": False, "reason": "lineage_or_book_missing"}
-        if book.get("depth_truncated") is True: return {"accepted": False, "reason": "truncated_depth"}
+    """Joint depth-breakpoint sweep, with exact rounded fees and microshare caps.
+
+    Fee rounding uses the same synchronized execution slices as the native
+    champion. Stop at the first nonpositive marginal slice. Unknown inventory
+    never permits a SELL. Capital-limited partial slices are searched exactly.
+    """
+    if relation.get("enabled") is not True: return {"accepted":False,"reason":"disabled_relation"}
+    if relation.get("settlement_close_ms",0) and now_ms >= relation["settlement_close_ms"]:
+        return {"accepted":False,"reason":"market_closed"}
+    prepared=[]; times=[]; tokens=set(); truncated=False
+    for leg in relation.get("legs",[]):
+        token=str(leg.get("token_id"))
+        if token in tokens: return {"accepted":False,"reason":"duplicate_token_claim"}
+        tokens.add(token); book=books.get(token)
+        if not isinstance(book,dict) or book.get("lineage_continuous") is not True:
+            return {"accepted":False,"reason":"lineage_or_book_missing"}
+        if book.get("depth_truncated") is not False: truncated=True
         try:
-            raw_fee = book.get("fee_rate") if book.get("fee_rate") is not None else leg.get("fee_rate")
-            stamp, fee, coefficient = int(book["timestamp_ms"]), frac(raw_fee), frac(leg["coefficient"])
-            raw_exponent = book.get("fee_exponent") if book.get("fee_exponent") is not None else leg.get("fee_exponent")
-            exponent = frac(0 if raw_exponent is None else raw_exponent)
-        except (KeyError, TypeError, ValueError, GraphError): return {"accepted": False, "reason": "fee_or_timestamp_missing"}
-        asks, bids = levels(book.get("asks")), levels(book.get("bids"), descending=True)
-        if fee < 0 or exponent < 0 or exponent.denominator != 1 or (not asks and not bids):
-            return {"accepted": False, "reason": "fee_or_depth_invalid"}
-        if stamp <= 0 or now_ms - stamp > maximum_age_ms: return {"accepted": False, "reason": "stale_book"}
-        if asks:
-            cumulative = Fraction(0)
-            for _, size in asks: cumulative += size; candidates.add(cumulative / coefficient)
-        prepared.append((leg, asks, bids, fee, int(exponent), coefficient)); times.append(stamp)
-    if not prepared: return {"accepted": False, "reason": "empty_relation"}
-    if max(times) - min(times) > maximum_skew_ms: return {"accepted": False, "reason": "leg_skew"}
-    buy_enabled = buy_requested and all(bool(asks) for _,asks,_,_,_,_ in prepared)
-    sell_enabled = sell_requested and all(bool(bids) for _,_,bids,_,_,_ in prepared)
-    if not buy_enabled and not sell_enabled: return {"accepted": False, "reason": "fee_or_depth_invalid"}
-    guarantee, reserve, best = frac(relation["guaranteed_payout"]), frac(relation.get("reserve_per_unit", 0)), None
-    minimum=max((frac(leg.get("minimum_order",0))/coefficient for leg,_,_,_,_,coefficient in prepared),default=Fraction(0))
-    cap=frac(capital_limit)
-    def distances_for(direction: str) -> dict[str, str]:
-        raw_total, net_total = Fraction(0), Fraction(0)
-        for leg, asks, bids, fee, exponent, coefficient in prepared:
-            price = (asks if direction == "BUY" else bids)[0][0]
-            raw = price * coefficient
-            increment = frac(leg["fee_rounding_increment"]) if leg.get("fee_rounding_increment") is not None else None
-            rounded_fee = round_fee(coefficient * fee_per_share(price, fee, exponent), increment,
-                                    str(leg.get("fee_rounding_mode") or "EXACT"))
-            raw_total += raw
-            net_total += raw + rounded_fee if direction == "BUY" else raw - rounded_fee
-        if direction == "BUY":
-            return {"distance_to_raw_arbitrage":fstr(raw_total-guarantee),
-                    "distance_to_after_fee_arbitrage":fstr(net_total-guarantee),
-                    "distance_to_after_reserve_arbitrage":fstr(net_total+reserve-guarantee)}
-        return {"distance_to_raw_arbitrage":fstr(guarantee-raw_total),
-                "distance_to_after_fee_arbitrage":fstr(guarantee-net_total),
-                "distance_to_after_reserve_arbitrage":fstr(guarantee+reserve-net_total)}
-    try: distances=distances_for("BUY" if buy_enabled else "SELL")
-    except GraphError: return {"accepted": False, "reason": "fee_rounding_invalid"}
-    saw_order, saw_depth, saw_capital, inventory_unavailable, transformation_limited = False, False, False, False, False
-    transform = relation.get("transformation") if isinstance(relation.get("transformation"), dict) else None
-    try: transformation_capacity = frac(transform["capacity"]) if transform is not None else None
-    except (KeyError, GraphError): return {"accepted": False, "reason": "transformation_invalid", **distances}
-    if transformation_capacity is not None: candidates.add(transformation_capacity)
-    for direction in ("BUY", "SELL"):
-        required = "BUY_COMPLETE_SET" if direction == "BUY" else "SELL_COMPLETE_SET"
-        alias = "BUY_BASKET" if direction == "BUY" else "SELL_INVENTORY_BASKET"
-        if required not in permitted and alias not in permitted: continue
-        if direction == "BUY" and not buy_enabled: continue
-        if direction == "SELL" and not sell_enabled: continue
-        local_candidates = set(candidates)
-        if direction == "SELL":
-            if inventory_limit is None:
-                inventory_unavailable = True; continue
-            local_candidates = set()
-            for _, _, bids, _, _, coefficient in prepared:
-                cumulative = Fraction(0)
-                for _, size in bids:
-                    cumulative += size; local_candidates.add(cumulative / coefficient)
-            local_candidates.add(frac(inventory_limit))
-        for quantity in sorted(local_candidates):
-            if quantity <= 0 or quantity < minimum: continue
-            if direction == "SELL" and quantity > frac(inventory_limit): continue
-            if transformation_capacity is not None and quantity > transformation_capacity:
-                transformation_limited = True; continue
-            saw_order = True
-            total = Fraction(0)
-            for leg, asks, bids, fee, exponent, coefficient in prepared:
-                book = asks if direction == "BUY" else bids
-                try:
-                    increment = frac(leg["fee_rounding_increment"]) if leg.get("fee_rounding_increment") is not None else None
-                    value = walk(book, quantity * coefficient, fee, exponent, direction, increment,
-                                 str(leg.get("fee_rounding_mode") or "EXACT"))
-                except GraphError:
-                    return {"accepted": False, "reason": "fee_rounding_invalid", **distances}
-                if value is None: saw_depth = True; break
-                total += value[0]
-            else:
-                capital = total + quantity * reserve if direction == "BUY" else quantity * reserve
-                if capital > cap: saw_capital = True; continue
-                pnl = (quantity * guarantee - total - quantity * reserve if direction == "BUY"
-                       else total - quantity * guarantee - quantity * reserve)
-                if best is None or pnl > best[3]: best = (direction, quantity, total, pnl, capital)
-    if best is None:
-        reason = ("capital_limit" if saw_capital else "transformation_capacity" if transformation_limited else "depth_insufficient" if saw_depth
-                  else "inventory_unavailable" if inventory_unavailable else "minimum_order")
-        return {"accepted": False, "reason": reason, **distances}
-    if best[3] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
-    direction, quantity, cost, pnl, capital = best
-    try: distances=distances_for(direction)
-    except GraphError: return {"accepted": False, "reason": "fee_rounding_invalid"}
-    lock = relation.get("capital_lock_time_ms")
-    if lock is None and transform is not None: lock = transform.get("capital_lock_time_ms")
-    try: lock_value = int(lock) if lock is not None else None
-    except (TypeError, ValueError): return {"accepted": False, "reason": "capital_lock_invalid", **distances}
-    if lock_value is not None and lock_value <= 0: return {"accepted": False, "reason": "capital_lock_invalid", **distances}
-    result = {"accepted": True, "reason": "candidate", "direction": direction, "quantity": fstr(quantity), "capital_required": fstr(capital),
-              "net_locked_pnl": fstr(pnl), "capital_lock_time_ms": lock_value, **distances}
-    if lock_value is not None and capital > 0:
-        result["net_locked_pnl_per_capital_time"] = fstr(pnl / capital / lock_value)
-    return result
+            rate=frac(book["fee_rate"] if book.get("fee_rate") is not None else leg.get("fee_rate"))
+            raw_exp=book.get("fee_exponent",leg.get("fee_exponent"))
+            if raw_exp is None and rate!=0: raise GraphError("fee_exponent_missing")
+            exponent=frac(1 if raw_exp is None else raw_exp)
+            stamp=int(book["timestamp_ms"]); coefficient=frac(leg["coefficient"])
+            if (leg.get("fee_rate") is not None and book.get("fee_rate") is not None
+                and frac(leg["fee_rate"])!=rate): return {"accepted":False,"reason":"fee_changed"}
+            if leg.get("tick_size") and book.get("tick_size") and frac(leg["tick_size"])!=frac(book["tick_size"]):
+                return {"accepted":False,"reason":"tick_changed"}
+        except (KeyError,ValueError,TypeError): return {"accepted":False,"reason":"fee_or_timestamp_missing"}
+        if not 0<=rate<=1 or not 0<=exponent<=16 or exponent.denominator!=1 or coefficient<=0:
+            return {"accepted":False,"reason":"fee_or_depth_invalid"}
+        if stamp<=0 or not 0<=now_ms-stamp<=maximum_age_ms: return {"accepted":False,"reason":"stale_book"}
+        try:
+            increment=frac(leg["fee_rounding_increment"]) if leg.get("fee_rounding_increment") is not None else None
+            mode=str(leg.get("fee_rounding_mode") or "EXACT")
+            round_fee(Fraction(1),increment,mode)
+        except GraphError: return {"accepted":False,"reason":"fee_rounding_invalid"}
+        prepared.append((leg,book,coefficient,rate,int(exponent),increment,mode));times.append(stamp)
+    if not prepared: return {"accepted":False,"reason":"empty_relation"}
+    if max(times)-min(times)>maximum_skew_ms: return {"accepted":False,"reason":"leg_skew"}
+    guarantee,reserve,cap=frac(relation["guaranteed_payout"]),frac(relation.get("reserve_per_unit",0)),frac(capital_limit)
+    if guarantee<=0 or reserve<0 or cap<0: return {"accepted":False,"reason":"invalid_economics"}
+    minimum=max(frac(leg.get("minimum_order",0))/c for leg,_,c,_,_,_,_ in prepared)
+    # Relation quantum ensures every coefficient*quantity is an integer microshare.
+    denominator=1
+    for _,_,c,_,_,_,_ in prepared:
+        denominator=denominator*c.denominator//math.gcd(denominator,c.denominator)
+    quantum=Fraction(denominator,1000000)
+    transform=relation.get("transformation")
+    try: transform_cap=frac(transform["capacity"]) if transform is not None else None
+    except (KeyError,ValueError,TypeError): return {"accepted":False,"reason":"transformation_invalid"}
+    fixed_transform=variable_transform=Fraction(0)
+    if transform is not None:
+        try:
+            fixed_transform=frac(transform["fixed_cost"]);variable_transform=frac(transform["variable_cost_per_unit"])
+            if min(fixed_transform,variable_transform)<0 or int(transform["expires_at_ms"])<now_ms:
+                raise GraphError("transformation_cost_or_expiry")
+        except (KeyError,ValueError,TypeError):return {"accepted":False,"reason":"transformation_terms_missing"}
+    candidates=[]; failures=[]; all_distances={}
+    permitted=set(relation.get("directions") or ["BUY_BASKET"])
+    for direction in ("BUY","SELL"):
+        if not permitted.intersection({"BUY_BASKET","BUY_COMPLETE_SET"} if direction=="BUY"
+                                      else {"SELL_INVENTORY_BASKET","SELL_COMPLETE_SET"}): continue
+        depths=[levels(b.get("asks" if direction=="BUY" else "bids"),direction=="SELL") for _,b,_,_,_,_,_ in prepared]
+        if not all(depths): failures.append("fee_or_depth_invalid");continue
+        raw_unit=fee_unit=Fraction(0)
+        for (_,_,c,rate,exponent,inc,mode),depth in zip(prepared,depths):
+            price=depth[0][0];raw_unit+=c*price;fee_unit+=round_fee(c*fee_per_share(price,rate,exponent),inc,mode)
+        distance=raw_unit-guarantee if direction=="BUY" else guarantee-raw_unit
+        diagnostics={"distance_to_raw_arbitrage":fstr(distance),"distance_to_after_fee_arbitrage":fstr(distance+fee_unit),
+                     "distance_to_after_reserve_arbitrage":fstr(distance+fee_unit+reserve)}
+        all_distances[direction]=diagnostics
+        if truncated: failures.append("truncated_depth");continue
+        if direction=="SELL" and inventory_limit is None: failures.append("inventory_unavailable");continue
+        capacity=min(sum((size for _,size in depth),Fraction(0))/p[2] for depth,p in zip(depths,prepared))
+        if transform_cap is not None: capacity=min(capacity,transform_cap)
+        if direction=="SELL":capacity=min(capacity,frac(inventory_limit))
+        if capacity<=0:failures.append("inventory_unavailable" if direction=="SELL" else "transformation_capacity");continue
+        index=[0]*len(prepared);remaining=[depth[0][1] for depth in depths];used=[0]*len(prepared)
+        quantity=notional=fees=Fraction(0);capital=fixed_transform;pnl=-fixed_transform
+        stop="depth_insufficient"
+        while quantity<capacity:
+            # Discard non-executable level dust conservatively. Otherwise a
+            # rational coefficient can strand the sweep at its first breakpoint.
+            for i,p in enumerate(prepared):
+                while index[i]<len(depths[i]) and remaining[i]<p[2]*quantum:
+                    index[i]+=1
+                    if index[i]<len(depths[i]):remaining[i]=depths[i][index[i]][1]
+            if any(index[i]>=len(depths[i]) for i in range(len(prepared))):break
+            step=min([capacity-quantity]+[remaining[i]/p[2] for i,p in enumerate(prepared)])
+            step=(step//quantum)*quantum
+            if step<=0:break
+            def costs(q):
+                raw=fee=Fraction(0)
+                for i,(_,_,c,rate,exp,inc,mode) in enumerate(prepared):
+                    price=depths[i][index[i]][0]
+                    raw+=q*c*price
+                    fee+=round_fee(q*c*fee_per_share(price,rate,exp),inc,mode)
+                required=(raw+fee if direction=="BUY" else Fraction(0))+q*(reserve+variable_transform)
+                edge=(q*guarantee-raw if direction=="BUY" else raw-q*guarantee)-fee-q*(reserve+variable_transform)
+                return raw,fee,required,edge
+            if costs(step)[2]+capital>cap:
+                low,high=0,int(step//quantum)
+                while low<high:
+                    mid=(low+high+1)//2
+                    if costs(mid*quantum)[2]+capital<=cap:low=mid
+                    else:high=mid-1
+                step=low*quantum
+                if step<=0:stop="capital_limit";break
+            raw,fee,required,edge=costs(step)
+            if edge<=0:stop="edge_after_costs_nonpositive";break
+            quantity+=step;notional+=raw;fees+=fee;capital+=required;pnl+=edge
+            for i,p in enumerate(prepared):
+                remaining[i]-=step*p[2];used[i]=index[i]+1
+                if remaining[i]==0:
+                    index[i]+=1
+                    if index[i]<len(depths[i]):remaining[i]=depths[i][index[i]][1]
+            if any(index[i]>=len(depths[i]) for i in range(len(prepared))):break
+        if quantity<=0:failures.append(stop);continue
+        if quantity<minimum:
+            failures.append("transformation_capacity" if transform_cap is not None and transform_cap<minimum else "minimum_order");continue
+        if pnl<=0:failures.append("transformation_cost");continue
+        raw_pnl=quantity*guarantee-notional if direction=="BUY" else notional-quantity*guarantee
+        lock=relation.get("capital_lock_time_ms")
+        if lock is None and transform is not None:lock=transform.get("capital_lock_time_ms")
+        if lock is not None and int(lock)<=0:failures.append("capital_lock_invalid");continue
+        result={"accepted":True,"reason":"candidate","direction":direction,"quantity":fstr(quantity),
+                "capital_required":fstr(capital),"net_locked_pnl":fstr(pnl),"capital_lock_time_ms":lock,
+                "gross_pnl":fstr(raw_pnl),"fee_drag":fstr(fees),"reserve_drag":fstr(quantity*reserve),
+                "transformation_drag":fstr(fixed_transform+quantity*variable_transform),
+                "gross_edge":fstr(raw_pnl/quantity),"net_edge":fstr(pnl/quantity),
+                "levels_consumed_per_leg":used,**diagnostics}
+        if capital>0:
+            result["pnl_per_capital"]=fstr(pnl/capital)
+            if lock is not None:
+                result["net_locked_pnl_per_capital_time"]=fstr(pnl/capital/int(lock))
+                result["pnl_per_capital_second"]=fstr(pnl/capital*1000/int(lock))
+        candidates.append(result)
+    if candidates:return max(candidates,key=lambda r:frac(r["net_locked_pnl"]))
+    reason=failures[0] if failures else "fee_or_depth_invalid"
+    return {"accepted":False,"reason":reason,**next(iter(all_distances.values()),{})}
 
 
 def main() -> int:

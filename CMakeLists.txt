@@ -448,6 +448,8 @@ if(BUILD_TESTING)
   target_link_libraries(pm_v7_exact_arb_graph_hotpath_tests PRIVATE pm_v7_common)
   target_compile_options(pm_v7_exact_arb_graph_hotpath_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_exact_arb_graph_hotpath_tests COMMAND pm_v7_exact_arb_graph_hotpath_tests)
+  add_executable(pm_v7_exact_arb_graph_bench tests/bench_v7_exact_arb_graph.cpp)
+  target_link_libraries(pm_v7_exact_arb_graph_bench PRIVATE pm_v7_common)
 
   add_executable(pm_v7_pure_arb_replay_parity_tests
     tests/test_v7_pure_arb_replay_parity.cpp)

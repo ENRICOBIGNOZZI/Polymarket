@@ -1,0 +1,35 @@
+{
+  "audit_timestamp": "2026-09-23T16:05:41Z",
+  "authenticated_execution_allowed": false,
+  "checked_in_live_caps_zero": true,
+  "commands": [
+    "python3 scripts/v7_secret_scan.py --repository-root . --history --fail-on-findings",
+    "python3 scripts/v7_entropy_secret_scan.py --repository-root . --history --fail-on-findings",
+    "python3 scripts/v7_security_audit.py --repository-root ."
+  ],
+  "external_controls": {
+    "credential_rotation_and_revocation_evidence": "UNVERIFIED_EXTERNAL",
+    "github_protection_and_signed_release_evidence": "UNVERIFIED_EXTERNAL",
+    "private_operational_configuration_evidence": "UNVERIFIED_EXTERNAL"
+  },
+  "inputs": {
+    "entropy_scanner_sha256": "c9b21481a60e6e9093e2f1022687a78a53f432baf83fa7ae84cfc7f4acaef129",
+    "entropy_secret_scan": {
+      "finding_count": 0,
+      "findings": []
+    },
+    "live_caps_sha256": "7ae077353baff4bf1251070ca698266a4062c9276f59690ca0c92512ab896087",
+    "pattern_secret_scan": {
+      "finding_count": 0,
+      "findings": []
+    },
+    "secret_scanner_sha256": "d82ab94df4041c6459c6a3bb0ff460075eb445f8040076c372b3feccb7f93c1d"
+  },
+  "reason_codes": [
+    "credential_rotation_and_revocation_evidence",
+    "github_protection_and_signed_release_evidence",
+    "private_operational_configuration_evidence"
+  ],
+  "schema": "polymarket_v7_security_audit_v1",
+  "state": "MORE_EVIDENCE_REQUIRED"
+}

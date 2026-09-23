@@ -1,0 +1,72 @@
+{
+  "authenticated_execution": false,
+  "automatic_promotion": false,
+  "comparison_scope": "FROZEN_SWEEP_VS_VALIDATED_GRAPH_EVALUATION_NOT_VENUE_LATENCY",
+  "depth_levels": 4,
+  "graph_binary_over_champion_p99": 2.7485,
+  "iterations": 200000,
+  "measurements": {
+    "champion_binary_sweep": {
+      "max": 1709,
+      "p50": 125,
+      "p90": 167,
+      "p99": 167,
+      "p99_9": 167
+    },
+    "dependency_lookup": {
+      "max": 1459,
+      "p50": 41,
+      "p90": 42,
+      "p99": 42,
+      "p99_9": 42
+    },
+    "graph_16_leg_full_depth_sizing": {
+      "max": 12083,
+      "p50": 3000,
+      "p90": 3000,
+      "p99": 3083,
+      "p99_9": 4208
+    },
+    "graph_3_leg_full_depth_sizing": {
+      "max": 12292,
+      "p50": 583,
+      "p90": 584,
+      "p99": 625,
+      "p99_9": 667
+    },
+    "graph_4_leg_full_depth_sizing": {
+      "max": 7959,
+      "p50": 750,
+      "p90": 750,
+      "p99": 792,
+      "p99_9": 834
+    },
+    "graph_8_leg_full_depth_sizing": {
+      "max": 10500,
+      "p50": 1500,
+      "p90": 1542,
+      "p99": 1584,
+      "p99_9": 1625
+    },
+    "graph_binary_full_depth_sizing": {
+      "max": 10125,
+      "p50": 417,
+      "p90": 417,
+      "p99": 459,
+      "p99_9": 500
+    },
+    "graph_binary_total_decision_compute": {
+      "max": 9875,
+      "p50": 459,
+      "p90": 500,
+      "p99": 541,
+      "p99_9": 542
+    }
+  },
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "schema": "polymarket_v7_exact_arb_native_benchmark_v1",
+  "timed_io": false,
+  "units": "nanoseconds"
+}

@@ -320,6 +320,7 @@ v7_exec_class LATENCY_OBSERVER "$FILLABILITY_OBSERVER" \
   --selection "$RUN_ROOT/universe/book_selection.json" --selection-only \
   --output-dir "$RUN_ROOT/research/repricing_book" \
   --disk-pressure-min-free-bytes "$DISK_PRESSURE_MIN_FREE_BYTES" --pure-arb-paper \
+  --graph-deep-evidence \
   --pure-arb-reserve-per-share 0.0005 --pure-arb-max-leg-skew-ms 100 \
   --pure-arb-max-receive-to-decision-ms 50 \
   --pure-arb-prefunded-complete-set-shares 1000 \
@@ -514,6 +515,7 @@ v7_register_optional_child "$!"
 v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph_shadow.py \
   --graph "$PURE_ARB_DIR/unified_exact_arb_graph.json" \
   --tape "$PURE_ARB_DIR/pure_arb_deep_book_snapshots.jsonl" \
+  --delta-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
   --status "$PURE_ARB_DIR/unified_exact_arb_graph_status.json" \
   --opportunities "$PURE_ARB_DIR/unified_exact_arb_graph_opportunities.jsonl" \
   --capital-policy "$ROOT/config/v7_pure_arb_capital_policy.json" \
@@ -683,24 +685,18 @@ v7_exec_class COLLECTOR python3 scripts/v7_pure_arb_exchange_execution_shadow.py
   >> "$PURE_ARB_DIR/exchange_execution.log" 2>&1 &
 v7_register_optional_child "$!"
 
-# Reuse the exchange-native counterfactual for graph-originated binary
-# complete-set candidates.  It receives only zero-authority graph evidence;
-# N-leg relations are deliberately not coerced into this two-leg simulator.
+# Generic N-leg causal counterfactual using complete local depth observations.
 v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph_execution_shadow.py \
   --candidates "$PURE_ARB_DIR/unified_exact_arb_graph_opportunities.jsonl" \
-  --book-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
-  --selection "$RUN_ROOT/universe/book_selection.json" \
-  --market-terms-root "$RUN_ROOT/control/market_execution_terms" \
-  --venue-mode "$PURE_ARB_DIR/venue_mode_status.json" \
-  --exchange-semantics "$ROOT/config/v7_exchange_semantics.json" \
-  --fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json" \
+  --book-tape "$PURE_ARB_DIR/pure_arb_deep_book_snapshots.jsonl" \
+  --delta-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/unified_exact_arb_graph_execution_cycles.jsonl" \
   --status "$PURE_ARB_DIR/unified_exact_arb_graph_execution_status.json" \
   --transport-delay-ms 1,2,5,10 --inter-leg-skew-ms 0,1,2,5,10 \
   --transport-modes SEQUENTIAL,PARALLEL,BATCH \
   --unwind-delay-ms 2 --maximum-book-age-ms 100 --maximum-leg-skew-ms 100 \
-  --reserve-per-share 0.0005 --minimum-shares 1 --maximum-shares 1000 --interval-ms 5 \
+  --interval-ms 5 \
   >> "$PURE_ARB_DIR/unified_exact_arb_graph_execution.log" 2>&1 &
 v7_register_optional_child "$!"
 

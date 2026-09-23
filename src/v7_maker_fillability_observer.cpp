@@ -186,6 +186,7 @@ struct Options {
     fs::path compact_label_tape_dir;
     bool selection_explicit = false;
     bool pure_arb_paper = false;
+    bool graph_deep_evidence = false;
     double pure_arb_reserve_per_share = 0.0005;
     std::int64_t pure_arb_max_leg_skew_ms = 100;
     std::int64_t pure_arb_max_receive_to_decision_ns = 50'000'000LL;
@@ -213,6 +214,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--state-publish-ms") options.state_publish_ms = std::stoll(next());
         else if (arg == "--compact-label-tape-dir") options.compact_label_tape_dir = next();
         else if (arg == "--pure-arb-paper") options.pure_arb_paper = true;
+        else if (arg == "--graph-deep-evidence") options.graph_deep_evidence = true;
         else if (arg == "--pure-arb-reserve-per-share") options.pure_arb_reserve_per_share = std::stod(next());
         else if (arg == "--pure-arb-max-leg-skew-ms") options.pure_arb_max_leg_skew_ms = std::stoll(next());
         else if (arg == "--pure-arb-max-receive-to-decision-ms") options.pure_arb_max_receive_to_decision_ns = std::stoll(next()) * 1'000'000LL;
@@ -714,7 +716,8 @@ public:
                     double pure_arb_reserve_per_share = 0.0005,
                     std::int64_t pure_arb_max_leg_skew_ms = 100,
                     std::int64_t pure_arb_max_receive_to_decision_ns = 50'000'000LL,
-                    double pure_arb_prefunded_complete_set_shares = 1000.0)
+                    double pure_arb_prefunded_complete_set_shares = 1000.0,
+                    bool graph_deep_evidence = false)
         : tokens_(std::move(tokens)), ws_url_(std::move(ws_url)),
           output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)),
           state_only_(state_only), state_publish_ms_(state_publish_ms),
@@ -724,7 +727,8 @@ public:
           pure_arb_reserve_per_share_(pure_arb_reserve_per_share),
           pure_arb_max_leg_skew_ms_(pure_arb_max_leg_skew_ms),
           pure_arb_receive_to_decision_limit_ns_(pure_arb_max_receive_to_decision_ns),
-          pure_arb_prefunded_complete_set_shares_(pure_arb_prefunded_complete_set_shares) {
+          pure_arb_prefunded_complete_set_shares_(pure_arb_prefunded_complete_set_shares),
+          graph_deep_evidence_(graph_deep_evidence) {
         std::vector<pm::v7::TokenBinding> bindings;
         std::size_t max_handle = 0;
         std::size_t max_market_handle = 0;
@@ -748,6 +752,7 @@ public:
         pure_arb_markets_.resize(max_market_handle + 1);
         pure_arb_pair_by_handle_.resize(max_handle + 1);
         pure_arb_deep_trigger_active_.resize(max_market_handle + 1, 0);
+        graph_deep_seeded_.resize(max_market_handle + 1, 0);
         pure_arb_deep_capture_origin_wall_ms_.resize(max_market_handle + 1, 0);
         pure_arb_deep_capture_next_arm_.resize(max_market_handle + 1, 0);
         for (const auto& token : tokens_) by_handle_[token.instrument_handle] = &token;
@@ -852,6 +857,13 @@ public:
             episode_active = 0;
         }
 
+        // Seed/reseed full depth, then reconstruct from the already recorded
+        // causal level-change tape. Never serialize a full book on every tick.
+        const bool graph_reseed = graph_deep_evidence_ && (
+            graph_deep_seeded_[binding.market_handle] == 0
+            || (event.kind == MarketWsEventKind::BookChanged && event.side == Side::None)
+            || event.kind == MarketWsEventKind::TickSizeChanged);
+        if (!graph_reseed) {
         if (capture_origin <= 0 || receive.wall_ms < capture_origin) return;
         const auto elapsed_ms = receive.wall_ms - capture_origin;
         if (elapsed_ms > kPureArbDeepEvidenceArmsMs.back() + 100) {
@@ -871,6 +883,7 @@ public:
                && elapsed_ms >= kPureArbDeepEvidenceArmsMs[next_arm]) {
             ++next_arm;
         }
+        }
 
         PureArbDeepEvidence deep{};
         deep.market_handle = binding.market_handle;
@@ -884,8 +897,8 @@ public:
         deep.yes = decoder_->deep_snapshot(binding.yes_handle);
         deep.no = decoder_->deep_snapshot(binding.no_handle);
         if (deep.yes.valid == 0 || deep.no.valid == 0
-            || deep.yes.bid_truncated != 0 || deep.yes.ask_truncated != 0
-            || deep.no.bid_truncated != 0 || deep.no.ask_truncated != 0) {
+            || (!graph_deep_evidence_ && (deep.yes.bid_truncated != 0 || deep.yes.ask_truncated != 0
+            || deep.no.bid_truncated != 0 || deep.no.ask_truncated != 0))) {
             ++pure_arb_deep_snapshot_rejections_;
             return;
         }
@@ -894,6 +907,7 @@ public:
             ++pure_arb_deep_queue_drops_;
             return;
         }
+        if (graph_reseed) graph_deep_seeded_[binding.market_handle] = 1;
     }
 
     void on_frame(std::string_view payload, const pm::fast::FeedReceiveStamp& receive) {
@@ -1189,6 +1203,7 @@ public:
             market.sell.active = false;
         }
         std::fill(pure_arb_deep_trigger_active_.begin(), pure_arb_deep_trigger_active_.end(), 0);
+        std::fill(graph_deep_seeded_.begin(), graph_deep_seeded_.end(), 0);
         std::fill(pure_arb_deep_capture_origin_wall_ms_.begin(),
                   pure_arb_deep_capture_origin_wall_ms_.end(), 0);
         std::fill(pure_arb_deep_capture_next_arm_.begin(),
@@ -1546,6 +1561,14 @@ public:
             {"no_token", by_handle_[market.no_handle]->token_id},
             {"yes_state_version", row.yes.state_version},
             {"no_state_version", row.no.state_version},
+            {"yes_valid", row.yes.valid != 0},
+            {"no_valid", row.no.valid != 0},
+            {"yes_lineage_continuous", row.yes.lineage_continuous != 0},
+            {"no_lineage_continuous", row.no.lineage_continuous != 0},
+            {"yes_receive_wall_ms", row.receive_wall_ms - std::max<std::int64_t>(0,
+                row.trigger_receive_monotonic_ns - row.yes.receive_monotonic_ns) / 1'000'000},
+            {"no_receive_wall_ms", row.receive_wall_ms - std::max<std::int64_t>(0,
+                row.trigger_receive_monotonic_ns - row.no.receive_monotonic_ns) / 1'000'000},
             {"yes_bid_levels", deep_levels(row.yes.bid_levels, row.yes.bid_level_count)},
             {"yes_ask_levels", deep_levels(row.yes.ask_levels, row.yes.ask_level_count)},
             {"no_bid_levels", deep_levels(row.no.bid_levels, row.no.bid_level_count)},
@@ -1958,7 +1981,9 @@ public:
         root["pure_arb_deep_queue_drops"] = pure_arb_deep_queue_drops_;
         root["pure_arb_deep_snapshot_rejections"] = pure_arb_deep_snapshot_rejections_;
         root["pure_arb_deep_evidence_horizon_ms"] = kPureArbDeepEvidenceArmsMs.back();
-        root["pure_arb_deep_evidence_sparse_event_time"] = true;
+        root["pure_arb_deep_evidence_sparse_event_time"] = !graph_deep_evidence_;
+        root["graph_continuous_deep_evidence"] = graph_deep_evidence_;
+        root["graph_depth_evidence_encoding"] = "FULL_ANCHORS_PLUS_CAUSAL_LEVEL_DELTAS";
         root["state_publish_ms"] = state_publish_ms_;
         root["book_event_tape_enabled"] = !state_only_;
         root["compact_label_tape_enabled"] = compact_label_output_.is_open();
@@ -2323,6 +2348,7 @@ private:
     std::int64_t pure_arb_max_leg_skew_ms_ = 100;
     std::int64_t pure_arb_receive_to_decision_limit_ns_ = 50'000'000LL;
     double pure_arb_prefunded_complete_set_shares_ = 1000.0;
+    bool graph_deep_evidence_ = false;
     fs::path pure_arb_status_path_;
     fs::path pure_arb_trades_path_;
     std::ofstream pure_arb_output_;
@@ -2342,6 +2368,7 @@ private:
     std::uint64_t pure_arb_deep_evaluations_ = 0;
     std::vector<PureArbPairBinding> pure_arb_pair_by_handle_;
     std::vector<std::uint8_t> pure_arb_deep_trigger_active_;
+    std::vector<std::uint8_t> graph_deep_seeded_;
     std::vector<std::int64_t> pure_arb_deep_capture_origin_wall_ms_;
     std::vector<std::uint8_t> pure_arb_deep_capture_next_arm_;
     std::vector<pm::v7::BookHotSnapshot> pure_arb_latest_books_;
@@ -2454,7 +2481,7 @@ int main(int argc, char** argv) {
                 options.pure_arb_reserve_per_share,
                 options.pure_arb_max_leg_skew_ms,
                 options.pure_arb_max_receive_to_decision_ns,
-                options.pure_arb_prefunded_complete_set_shares);
+                options.pure_arb_prefunded_complete_set_shares, options.graph_deep_evidence);
             const fs::path disk_pressure_marker = fs::path(options.run_root) / "control" / "DISK_PRESSURE";
             const auto local_disk_pressure = [&]() {
                 if (fs::exists(disk_pressure_marker)) return true;

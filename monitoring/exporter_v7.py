@@ -522,6 +522,9 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
             and status.get("execution_authority") == "ZERO_AUTHORITY_RESEARCH_ONLY")
     funnel = status.get("funnel") if isinstance(status.get("funnel"), dict) else {}
     lines = [_metric("exact_arb_graph_up", safe and status.get("state") == "COLLECTING"),
+             _metric("exact_arb_graph_nodes", status.get("nodes")),
+             _metric("exact_arb_unverified_candidates", status.get("unverified_candidates")),
+             _metric("exact_arb_graph_book_lag_milliseconds", status.get("book_lag_ms")),
              _metric("exact_arb_graph_relations", status.get("relations_compiled")),
              _metric("exact_arb_relations_evaluated_total", status.get("relations_evaluated")),
              _metric("exact_arb_candidates_total", funnel.get("candidate_emitted", 0))]
@@ -537,7 +540,7 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
                                  {"family": family, "stage": stage}))
     for arm in (1, 5, 10, 25, 50):
         checked = funnel.get(f"survival_{arm}ms_checked", 0)
-        survived = funnel.get(f"survival_{arm}ms", 0)
+        survived = funnel.get(f"survives_{arm}ms", funnel.get(f"survival_{arm}ms", 0))
         lines.append(_metric("exact_arb_survival_total", survived, {"delay_ms": arm}))
         lines.append(_metric("exact_arb_survival_checked_total", checked, {"delay_ms": arm}))
     for reason, count in sorted((status.get("rejection_reasons") or {}).items()):
@@ -558,6 +561,14 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
     for percentile, value in sorted((status.get("evaluation_latency_us") or {}).items()):
         lines.append(_metric("exact_arb_graph_evaluation_latency_microseconds", value,
                              {"percentile": percentile}))
+    for family, count in sorted((status.get("relations_by_family") or {}).items()):
+        lines.append(_metric("exact_arb_graph_relations_by_family", count, {"family":family}))
+    for family, values in sorted((status.get("opportunity_lifetime_ms") or {}).items()):
+        for percentile, value in sorted(values.items()):
+            lines.append(_metric("exact_arb_opportunity_lifetime_milliseconds", value,
+                                 {"family":family,"percentile":percentile}))
+    for reason, count in sorted((status.get("dropped_observations") or {}).items()):
+        lines.append(_metric("exact_arb_dropped_observations_total", count, {"reason":reason}))
     timestamp = status.get("graph_generation_compiled_at_ms", status.get("timestamp_ms"))
     if isinstance(timestamp, (int, float)) and timestamp > 0:
         lines.append(_metric("exact_arb_graph_generation_age_seconds",
@@ -566,7 +577,7 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
 
 
 def _render_unified_exact_arb_graph_execution_metrics(status: dict[str, Any]) -> list[str]:
-    safe = (status.get("schema") == "polymarket_v7_pure_arb_exchange_execution_status_v1"
+    safe = (status.get("schema") in {"polymarket_v7_pure_arb_exchange_execution_status_v1", "polymarket_v7_unified_exact_arb_graph_execution_status_v1"}
             and status.get("paper_only") is True and status.get("authenticated_execution") is False
             and status.get("real_order_submission") is False and status.get("real_capital_at_risk") is False
             and status.get("execution_authority") == "ZERO_AUTHORITY_EXCHANGE_EXECUTION_SHADOW")

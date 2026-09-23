@@ -26,9 +26,11 @@ def test_exact_relation_proof_and_duplicate_discovery():
         "markets":[
             {"market_id":"a","active":True,"closed":False,"asset":"BTC","horizon":"M5",
              "contract_family":"BTC_UP","settlement_semantic_hash":"1"*64,
+             "settlement_identity_verified":True,"normalized_rules_hash":"2"*64,
              "window_start_unix":100,"close_timestamp_unix":400},
             {"market_id":"b","active":True,"closed":False,"asset":"BTC","horizon":"M5",
              "contract_family":"BTC_UP","settlement_semantic_hash":"1"*64,
+             "settlement_identity_verified":True,"normalized_rules_hash":"2"*64,
              "window_start_unix":100,"close_timestamp_unix":400},
         ],
     }

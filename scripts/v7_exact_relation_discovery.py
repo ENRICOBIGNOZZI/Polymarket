@@ -77,6 +77,7 @@ def selector(row:dict[str,Any])->dict[str,Any]:
         "horizon":str(row.get("horizon") or ""),
         "contract_family":str(row.get("contract_family") or ""),
         "settlement_semantic_hash":str(row.get("settlement_semantic_hash") or ""),
+        "normalized_rules_hash":str(row.get("normalized_rules_hash") or ""),
         "window_start_unix":int(row.get("window_start_unix") or 0),
         "close_timestamp_unix":int(row.get("close_timestamp_unix") or 0),
     }
@@ -86,10 +87,12 @@ def identity(row:dict[str,Any])->tuple[Any,...]|None:
     s=selector(row)
     if not (s["market_id"] and s["asset"] and s["horizon"] and s["contract_family"]
             and len(s["settlement_semantic_hash"])==64 and s["window_start_unix"]>0
-            and s["close_timestamp_unix"]>s["window_start_unix"]):
+            and s["close_timestamp_unix"]>s["window_start_unix"]
+            and row.get("settlement_identity_verified") is True
+            and len(s["normalized_rules_hash"])==64):
         return None
     return (s["asset"],s["horizon"],s["contract_family"],
-            s["settlement_semantic_hash"],s["window_start_unix"],s["close_timestamp_unix"])
+            s["settlement_semantic_hash"],s["normalized_rules_hash"],s["window_start_unix"],s["close_timestamp_unix"])
 
 
 def duplicate_relation(a:dict[str,Any],b:dict[str,Any],first:str)->dict[str,Any]:

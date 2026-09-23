@@ -5,6 +5,7 @@
 // are compiled off-path into fixed handles before entering this evaluator.
 
 #include "pm/v7_market_state.hpp"
+#include "pm/v7_pure_arb_lane.hpp"
 
 #include <algorithm>
 #include <array>
@@ -31,6 +32,11 @@ enum class HotReject : std::uint8_t {
     InsufficientDepth,
     MinimumOrder,
     NoPositiveEdge,
+    InventoryUnavailable,
+    CapitalLimit,
+    UnknownFee,
+    NumericOverflow,
+    TransformationUnavailable,
 };
 
 struct RationalCoefficient {
@@ -52,6 +58,25 @@ struct CompiledLeg {
     // relation with an unknown fee does not enter this representation.
     double fee_rate = 0.0;
     double fee_exponent = 1.0;
+    std::uint8_t fee_verified = 0;
+};
+
+struct CompiledNode {
+    std::uint32_t book_handle = 0;
+    std::array<std::uint8_t, 32> identity_hash{};
+};
+
+struct CompiledTransformation {
+    std::uint32_t resource_handle = 0;
+    std::int64_t capacity_microunits = 0;
+    std::int64_t latency_ns = 0;
+    std::int64_t capital_lock_ns = 0;
+    std::uint8_t verified = 0;
+};
+
+struct ResourceDependency {
+    std::uint32_t resource_handle = 0;
+    std::int64_t units_per_relation_microunits = 0;
 };
 
 struct CompiledRelation {
@@ -61,6 +86,7 @@ struct CompiledRelation {
     std::int64_t reserve_per_unit_microunits = 0;
     std::uint8_t leg_count = 0;
     std::uint8_t enabled = 0;
+    std::uint8_t sell_inventory = 0;
     std::array<CompiledLeg, kMaxLegs> legs{};
 };
 
@@ -76,7 +102,28 @@ struct HotDecision {
     std::int64_t quantity_microunits = 0;
     std::int64_t gross_pnl_microunits = 0;
     std::int64_t net_pnl_microunits = 0;
+    std::int64_t raw_pnl_microunits = 0;
+    std::int64_t fees_microunits = 0;
+    std::int64_t capital_required_microunits = 0;
+    std::array<std::uint16_t, kMaxLegs> levels_consumed{};
     std::uint16_t levels_used = 0;
+};
+
+struct HotResources {
+    std::int64_t capital_microunits = std::numeric_limits<std::int64_t>::max();
+    // Indexed by book handle, in actual leg shares. Empty means no inventory.
+    std::span<const std::int64_t> inventory{};
+    const CompiledTransformation* transformation = nullptr;
+};
+
+struct GraphGeneration {
+    std::array<std::uint8_t, 32> digest{};
+    std::span<const CompiledNode> nodes{};
+    std::span<const CompiledRelation> relations{};
+    std::span<const TokenDependency> dependencies{};
+    std::span<const std::uint32_t> relation_handles{};
+    // Owner validates and pins all backing storage before swapping this view
+    // at an event boundary. This non-owning representation never allocates.
 };
 
 struct HotTimingContext {
@@ -91,28 +138,61 @@ struct HotTimingContext {
     return static_cast<double>(level.price_e4) / 10'000.0;
 }
 
-[[nodiscard]] inline bool valid_book(const BookDeepSnapshot& book) noexcept {
-    return book.valid != 0 && book.lineage_continuous != 0 && book.ask_truncated == 0
-        && book.ask_level_count > 0 && book.ask_level_count <= book.ask_levels.size();
+[[nodiscard]] inline bool valid_book(const BookDeepSnapshot& book, bool buy = true) noexcept {
+    const auto count = buy ? book.ask_level_count : book.bid_level_count;
+    const auto& levels = buy ? book.ask_levels : book.bid_levels;
+    if (book.valid == 0 || book.lineage_continuous == 0 || (buy ? book.ask_truncated : book.bid_truncated)
+        || count == 0 || count > levels.size()) return false;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (levels[i].price_e4 <= 0 || levels[i].price_e4 >= 10000 || levels[i].quantity_microunits <= 0) return false;
+        if (i && (buy ? levels[i].price_e4 <= levels[i-1].price_e4 : levels[i].price_e4 >= levels[i-1].price_e4)) return false;
+    }
+    return true;
 }
 
-[[nodiscard]] inline double fee_per_share(double price, const CompiledLeg& leg) noexcept {
-    if (!std::isfinite(price) || price <= 0.0 || price >= 1.0 || !std::isfinite(leg.fee_rate)
-        || leg.fee_rate < 0.0 || leg.fee_rate > 1.0 || !std::isfinite(leg.fee_exponent)
-        || leg.fee_exponent < 0.0) return std::numeric_limits<double>::quiet_NaN();
-    return leg.fee_rate == 0.0 ? 0.0
-        : leg.fee_rate * std::pow(price * (1.0 - price), leg.fee_exponent);
+// Exact venue fee rounding for the native-supported rate lattice/exponents.
+// The frozen champion remains untouched: binary floating-point ties in its
+// std::round path are not copied into the graph's accounting oracle.
+[[nodiscard]] inline double exact_fee(std::int64_t shares_micro, std::int32_t price_e4,
+                                     const CompiledLeg& leg) noexcept {
+    if (leg.fee_rate == 0.0) return 0.0;
+    using Wide = unsigned __int128;
+    const auto rate = static_cast<std::uint64_t>(std::llround(leg.fee_rate * 1e9));
+    Wide numerator = static_cast<Wide>(shares_micro) * rate;
+    Wide denominator = 10000000000ULL; // microshares * nanorate / fee 1e-5 units
+    constexpr Wide maximum = ~static_cast<Wide>(0);
+    for (int i=0; i<static_cast<int>(leg.fee_exponent); ++i) {
+        const auto factor = static_cast<std::uint64_t>(price_e4) * (10000-price_e4);
+        if (numerator > maximum/factor || denominator > maximum/100000000ULL)
+            return std::numeric_limits<double>::quiet_NaN();
+        numerator *= factor; denominator *= 100000000ULL;
+    }
+    if (numerator < denominator) return 0.0;
+    const Wide whole = numerator/denominator;
+    const Wide remainder = numerator%denominator;
+    const Wide rounded = whole + (remainder >= (denominator+1)/2 ? 1 : 0);
+    return static_cast<double>(rounded)/100000.0;
 }
 
 // Full-depth N-leg buy sizing.  Every loop advances at least one level, so it
 // is bounded by the sum of preallocated book depths, not graph cardinality.
-[[nodiscard]] inline HotDecision evaluate_buy(
+[[nodiscard]] inline HotDecision evaluate_basket(
     const CompiledRelation& relation, std::span<const BookDeepSnapshot> books,
-    HotTimingContext timing = {}) noexcept {
+    bool buy, HotTimingContext timing = {}, HotResources resources = {}) noexcept {
     HotDecision out{};
     out.relation_handle = relation.relation_handle;
     if (relation.enabled == 0 || relation.leg_count == 0 || relation.leg_count > kMaxLegs
-        || relation.guaranteed_payout_microunits <= 0) return out;
+        || relation.guaranteed_payout_microunits <= 0 || relation.reserve_per_unit_microunits < 0) return out;
+
+    std::int64_t capacity = std::numeric_limits<std::int64_t>::max();
+    if (resources.transformation) {
+        const auto& t = *resources.transformation;
+        if (!t.verified || t.capacity_microunits <= 0 || t.latency_ns < 0 || t.capital_lock_ns <= 0) {
+            out.reject = HotReject::TransformationUnavailable; return out;
+        }
+        capacity = t.capacity_microunits;
+    }
+    if (resources.capital_microunits < 0) { out.reject = HotReject::CapitalLimit; return out; }
 
     std::array<std::size_t, kMaxLegs> level{};
     std::array<std::int64_t, kMaxLegs> remaining{};
@@ -121,9 +201,23 @@ struct HotTimingContext {
     std::int64_t latest_receive_ns = 0;
     for (std::size_t i = 0; i < relation.leg_count; ++i) {
         const auto& leg = relation.legs[i];
-        if (!leg.coefficient.valid() || leg.book_handle >= books.size() || !valid_book(books[leg.book_handle])) {
+        if (!leg.coefficient.valid() || leg.book_handle >= books.size() || !valid_book(books[leg.book_handle], buy)) {
             out.reject = leg.book_handle >= books.size() ? HotReject::MissingBook : HotReject::IncompleteDepth;
             return out;
+        }
+        if (!leg.fee_verified || !std::isfinite(leg.fee_rate) || leg.fee_rate < 0 || leg.fee_rate > 1
+            || !std::isfinite(leg.fee_exponent) || leg.fee_exponent < 0 || leg.fee_exponent > 2
+            || std::abs(leg.fee_rate*1e9-std::round(leg.fee_rate*1e9)) > 1e-7
+            || std::floor(leg.fee_exponent) != leg.fee_exponent) {
+            out.reject = HotReject::UnknownFee; return out;
+        }
+        for (std::size_t j = 0; j < i; ++j) if (relation.legs[j].book_handle == leg.book_handle) return out;
+        if (!buy) {
+            if (leg.book_handle >= resources.inventory.size() || resources.inventory[leg.book_handle] <= 0) {
+                out.reject = HotReject::InventoryUnavailable; return out;
+            }
+            const __int128 bound = static_cast<__int128>(resources.inventory[leg.book_handle]) * leg.coefficient.denominator / leg.coefficient.numerator;
+            capacity = std::min(capacity, static_cast<std::int64_t>(std::min<__int128>(bound, capacity)));
         }
         const auto receive_ns = books[leg.book_handle].receive_monotonic_ns;
         if (timing.now_receive_monotonic_ns > 0 && timing.maximum_book_age_ns > 0
@@ -137,10 +231,11 @@ struct HotTimingContext {
             latest_receive_ns = std::max(latest_receive_ns, receive_ns);
         }
         // ceil(minimum leg shares / coefficient) in relation units.
-        const auto scaled = static_cast<long double>(std::max<std::int64_t>(0, leg.minimum_order_microunits))
-            * static_cast<long double>(leg.coefficient.denominator) / static_cast<long double>(leg.coefficient.numerator);
-        minimum = std::max(minimum, static_cast<std::int64_t>(std::ceil(scaled)));
-        const auto divisor = leg.coefficient.denominator;
+        const __int128 scaled = (static_cast<__int128>(std::max<std::int64_t>(0, leg.minimum_order_microunits))
+            * leg.coefficient.denominator + leg.coefficient.numerator - 1) / leg.coefficient.numerator;
+        if (scaled > std::numeric_limits<std::int64_t>::max()) { out.reject = HotReject::NumericOverflow; return out; }
+        minimum = std::max(minimum, static_cast<std::int64_t>(scaled));
+        const auto divisor = leg.coefficient.denominator / std::gcd(leg.coefficient.numerator, leg.coefficient.denominator);
         const auto gcd = std::gcd(quantity_quantum, divisor);
         if (quantity_quantum > std::numeric_limits<std::int64_t>::max() / (divisor / gcd)) return out;
         quantity_quantum *= divisor / gcd;
@@ -151,47 +246,119 @@ struct HotTimingContext {
         out.reject = HotReject::LegSkew;
         return out;
     }
-    minimum = ((minimum + quantity_quantum - 1) / quantity_quantum) * quantity_quantum;
+    const __int128 rounded_minimum = ((static_cast<__int128>(minimum) + quantity_quantum - 1) / quantity_quantum) * quantity_quantum;
+    if (rounded_minimum > std::numeric_limits<std::int64_t>::max()) { out.reject = HotReject::NumericOverflow; return out; }
+    minimum = static_cast<std::int64_t>(rounded_minimum);
+
+    // Canonical binary specialization shares the frozen economic function.
+    // Identity, depth, fee, timing and inventory guards above still apply.
+    if (relation.leg_count == 2 && relation.guaranteed_payout_microunits == kShareMicrounits
+        && relation.legs[0].coefficient.numerator == relation.legs[0].coefficient.denominator
+        && relation.legs[1].coefficient.numerator == relation.legs[1].coefficient.denominator
+        && relation.legs[0].fee_rate == relation.legs[1].fee_rate
+        && relation.legs[0].fee_exponent == relation.legs[1].fee_exponent
+        && relation.legs[0].fee_rate == 0.0) {
+        const auto c = pure_arb::sweep(books[relation.legs[0].book_handle], books[relation.legs[1].book_handle],
+            relation.legs[0].fee_rate, relation.legs[0].fee_exponent,
+            static_cast<double>(relation.reserve_per_unit_microunits) / kShareMicrounits, buy, capacity);
+        const auto notionals = c.yes_notional + c.no_notional;
+        const auto raw = buy ? c.shares() - notionals : notionals - c.shares();
+        const auto paid_fees = raw - c.gross_locked_pnl;
+        const auto used_capital = (buy ? notionals + paid_fees : 0.0)
+            + c.shares() * relation.reserve_per_unit_microunits / kShareMicrounits;
+        // Tight budgets need the generic partial-breakpoint capital search.
+        if (used_capital * kShareMicrounits <= resources.capital_microunits
+            && raw < 9e12 && used_capital < 9e12) {
+            if (c.shares_microunits <= 0) { out.reject = HotReject::NoPositiveEdge; return out; }
+            if (c.shares_microunits < minimum) { out.reject = HotReject::MinimumOrder; return out; }
+            out.quantity_microunits = c.shares_microunits;
+            out.gross_pnl_microunits = std::llround(c.gross_locked_pnl*kShareMicrounits);
+            out.net_pnl_microunits = std::llround(c.conservative_locked_pnl*kShareMicrounits);
+            out.raw_pnl_microunits = std::llround(raw*kShareMicrounits);
+            out.fees_microunits = std::llround(paid_fees*kShareMicrounits);
+            out.capital_required_microunits = static_cast<std::int64_t>(std::ceil(used_capital*kShareMicrounits));
+            out.levels_consumed[0] = c.yes_levels_used; out.levels_consumed[1] = c.no_levels_used;
+            out.levels_used = c.yes_levels_used + c.no_levels_used;
+            out.reject = out.net_pnl_microunits > 0 ? HotReject::Accepted : HotReject::NoPositiveEdge;
+            return out;
+        }
+    }
 
     std::int64_t quantity = 0;
-    double gross = 0.0, net = 0.0;
+    double gross = 0.0, net = 0.0, raw_pnl = 0.0, fees = 0.0, capital = 0.0;
     for (;;) {
-        std::int64_t step_relation_units = std::numeric_limits<std::int64_t>::max();
+        std::int64_t step_relation_units = capacity - quantity;
         for (std::size_t i = 0; i < relation.leg_count; ++i) {
             const auto& leg = relation.legs[i]; const auto& book = books[leg.book_handle];
-            while (level[i] < book.ask_level_count && remaining[i] <= 0) {
-                remaining[i] = book.ask_levels[level[i]].quantity_microunits;
-                if (remaining[i] <= 0) ++level[i]; else break;
+            const auto count = buy ? book.ask_level_count : book.bid_level_count;
+            const auto& levels = buy ? book.ask_levels : book.bid_levels;
+            const __int128 minimum_slice = static_cast<__int128>(quantity_quantum)
+                * leg.coefficient.numerator / leg.coefficient.denominator;
+            if (remaining[i] > 0 && remaining[i] < minimum_slice) {
+                remaining[i] = 0; ++level[i];
             }
-            if (level[i] >= book.ask_level_count) {
+            while (level[i] < count && remaining[i] <= 0) {
+                remaining[i] = levels[level[i]].quantity_microunits;
+                if (remaining[i] < minimum_slice) { remaining[i] = 0; ++level[i]; } else break;
+            }
+            if (level[i] >= count) {
                 out.reject = quantity >= minimum ? HotReject::Accepted : HotReject::InsufficientDepth;
                 break;
             }
-            const auto units = static_cast<long double>(remaining[i]) * leg.coefficient.denominator / leg.coefficient.numerator;
-            step_relation_units = std::min(step_relation_units, static_cast<std::int64_t>(std::floor(units)));
+            const __int128 units = static_cast<__int128>(remaining[i]) * leg.coefficient.denominator / leg.coefficient.numerator;
+            step_relation_units = static_cast<std::int64_t>(std::min<__int128>(step_relation_units, units));
         }
         step_relation_units -= step_relation_units % quantity_quantum;
         if (out.reject == HotReject::Accepted || out.reject == HotReject::InsufficientDepth || step_relation_units <= 0) break;
-        double cost = 0.0;
-        for (std::size_t i = 0; i < relation.leg_count; ++i) {
+        auto cashflow = [&](std::int64_t units) {
+          std::array<double, 2> result{};
+          for (std::size_t i = 0; i < relation.leg_count; ++i) {
             const auto& leg = relation.legs[i]; const auto& book = books[leg.book_handle];
-            const auto shares = static_cast<double>(step_relation_units) * leg.coefficient.value() / kShareMicrounits;
-            const auto price = level_price(book.ask_levels[level[i]]); const auto fee = fee_per_share(price, leg);
-            if (!std::isfinite(fee)) return out;
-            cost += shares * (price + fee);
+            const auto shares = static_cast<double>(units) * leg.coefficient.value() / kShareMicrounits;
+            const auto price = level_price((buy ? book.ask_levels : book.bid_levels)[level[i]]);
+            result[0] += shares * price;
+            const auto shares_micro = static_cast<std::int64_t>(static_cast<__int128>(units)
+                * leg.coefficient.numerator / leg.coefficient.denominator);
+            result[1] += exact_fee(shares_micro,
+                (buy ? book.ask_levels : book.bid_levels)[level[i]].price_e4, leg);
+          }
+          return result;
+        };
+        auto required_capital = [&](std::int64_t units) {
+            const auto cf = cashflow(units);
+            return (buy ? cf[0] + cf[1] : 0.0) + static_cast<double>(units) * relation.reserve_per_unit_microunits / 1e12;
+        };
+        const auto available = static_cast<double>(resources.capital_microunits) / kShareMicrounits - capital;
+        auto cf = cashflow(step_relation_units);
+        if (!std::isfinite(cf[1])) { out.reject = HotReject::NumericOverflow; return out; }
+        auto step_capital = (buy ? cf[0] + cf[1] : 0.0)
+            + static_cast<double>(step_relation_units) * relation.reserve_per_unit_microunits / 1e12;
+        if (step_capital > available) {
+            std::int64_t low = 0, high = step_relation_units / quantity_quantum;
+            while (low < high) {
+                const auto mid = low + (high - low) / 2 + (high - low) % 2;
+                if (required_capital(mid * quantity_quantum) <= available) low = mid; else high = mid - 1;
+            }
+            step_relation_units = low * quantity_quantum;
+            if (step_relation_units <= 0) { out.reject = HotReject::CapitalLimit; break; }
+            cf = cashflow(step_relation_units);
+            step_capital = required_capital(step_relation_units);
         }
+        const auto cost = buy ? cf[0] + cf[1] : -cf[0] + cf[1];
         const auto payout = static_cast<double>(step_relation_units) * relation.guaranteed_payout_microunits
             / static_cast<double>(kShareMicrounits * kShareMicrounits);
         const auto reserve = static_cast<double>(step_relation_units) * relation.reserve_per_unit_microunits
             / static_cast<double>(kShareMicrounits * kShareMicrounits);
-        if (!(payout - cost - reserve > 0.0)) { out.reject = HotReject::NoPositiveEdge; break; }
-        quantity += step_relation_units; gross += payout - cost; net += payout - cost - reserve;
+        const auto gross_step = (buy ? payout : -payout) - cost;
+        if (!std::isfinite(gross_step) || !(gross_step - reserve > 1e-12 * step_relation_units / kShareMicrounits)) { out.reject = HotReject::NoPositiveEdge; break; }
+        quantity += step_relation_units; gross += gross_step; net += gross_step - reserve;
+        raw_pnl += gross_step + cf[1]; fees += cf[1]; capital += step_capital;
         for (std::size_t i = 0; i < relation.leg_count; ++i) {
             const auto& leg = relation.legs[i];
-            const auto consumed = static_cast<std::int64_t>(std::llround(step_relation_units * leg.coefficient.value()));
+            const auto consumed = static_cast<std::int64_t>(static_cast<__int128>(step_relation_units) * leg.coefficient.numerator / leg.coefficient.denominator);
+            out.levels_consumed[i] = static_cast<std::uint16_t>(level[i] + 1);
             remaining[i] -= consumed;
             if (remaining[i] <= 0) ++level[i];
-            ++out.levels_used;
         }
     }
     if (quantity <= 0) {
@@ -201,11 +368,26 @@ struct HotTimingContext {
         return out;
     }
     if (quantity < minimum) { out.reject = HotReject::MinimumOrder; return out; }
+    const auto monetary_limit = static_cast<double>(std::numeric_limits<std::int64_t>::max()) / kShareMicrounits;
+    if (!std::isfinite(net) || net >= monetary_limit || gross >= monetary_limit || raw_pnl >= monetary_limit
+        || capital >= monetary_limit || fees >= monetary_limit) { out.reject = HotReject::NumericOverflow; return out; }
     out.reject = HotReject::Accepted; out.quantity_microunits = quantity;
     out.gross_pnl_microunits = static_cast<std::int64_t>(std::llround(gross * kShareMicrounits));
     out.net_pnl_microunits = static_cast<std::int64_t>(std::llround(net * kShareMicrounits));
+    out.raw_pnl_microunits = static_cast<std::int64_t>(std::llround(raw_pnl * kShareMicrounits));
+    out.fees_microunits = static_cast<std::int64_t>(std::llround(fees * kShareMicrounits));
+    out.capital_required_microunits = static_cast<std::int64_t>(std::ceil(capital * kShareMicrounits));
+    for (auto count : out.levels_consumed) out.levels_used += count;
+    if (out.net_pnl_microunits <= 0) out.reject = HotReject::NoPositiveEdge;
     return out;
 }
+
+[[nodiscard]] inline HotDecision evaluate_buy_basket(const CompiledRelation& r, std::span<const BookDeepSnapshot> b,
+    HotTimingContext t = {}, HotResources resources = {}) noexcept { return evaluate_basket(r, b, true, t, resources); }
+[[nodiscard]] inline HotDecision evaluate_sell_inventory_basket(const CompiledRelation& r, std::span<const BookDeepSnapshot> b,
+    HotTimingContext t = {}, HotResources resources = {}) noexcept { return evaluate_basket(r, b, false, t, resources); }
+[[nodiscard]] inline HotDecision evaluate_buy(const CompiledRelation& r, std::span<const BookDeepSnapshot> b,
+    HotTimingContext t = {}) noexcept { return evaluate_buy_basket(r, b, t); }
 
 template <class Callback>
 inline void evaluate_token_update(std::uint32_t token_handle,
@@ -214,7 +396,7 @@ inline void evaluate_token_update(std::uint32_t token_handle,
                                   std::span<const CompiledRelation> relations,
                                   std::span<const BookDeepSnapshot> books,
                                   HotTimingContext timing,
-                                  Callback&& callback) noexcept {
+                                  Callback&& callback, HotResources resources = {}) noexcept {
     const auto it = std::lower_bound(dependencies.begin(), dependencies.end(), token_handle,
         [](const TokenDependency& entry, std::uint32_t handle) { return entry.token_handle < handle; });
     if (it == dependencies.end() || it->token_handle != token_handle || it->relation_count > kMaxDependenciesPerToken) return;
@@ -222,7 +404,8 @@ inline void evaluate_token_update(std::uint32_t token_handle,
     if (end > relation_handles.size()) return;
     for (std::size_t i = it->first_relation; i < end; ++i) {
         const auto handle = relation_handles[i];
-        if (handle < relations.size()) callback(evaluate_buy(relations[handle], books, timing));
+        if (handle < relations.size()) callback(evaluate_basket(relations[handle], books,
+            relations[handle].sell_inventory == 0, timing, resources));
     }
 }
 

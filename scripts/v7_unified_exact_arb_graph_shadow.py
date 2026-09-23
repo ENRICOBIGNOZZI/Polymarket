@@ -2,11 +2,12 @@
 """Read-only incremental evaluator for compiled exact-arbitrage graph generations."""
 from __future__ import annotations
 import argparse,json,os,time
-from collections import Counter,defaultdict
+from collections import Counter,defaultdict,deque
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
-from v7_unified_exact_arb_graph import SAFETY,evaluate
+from v7_unified_exact_arb_graph import SAFETY,GraphError,evaluate,frac,sha,validate_graph,safe
+from v7_exact_arb_causal import CausalBooks,ResourceLedger,ReconstructedDepth,JsonlCursor,decode_snapshot,quantiles
 
 SCHEMA="polymarket_v7_unified_exact_arb_graph_shadow_status_v1"
 
@@ -36,7 +37,28 @@ def native_binary_candidate(relation:dict[str,Any], result:dict[str,Any], now:in
 
 class Shadow:
  def __init__(self,a:argparse.Namespace):
-  self.a=a;self.offset=0;self.books={};self.generation="";self.generation_compiled_at_ms=0;self.relations=[];self.index={};self.funnel=Counter();self.funnel_by_family=defaultdict(Counter);self.rejects=Counter();self.rejects_by_family=defaultdict(Counter);self.dist=defaultdict(list);self.seen=set();self.pending=[];self.claims={};self.capital_reserved={};self.latency_us=[];self.capital_limit="0"
+  self.a=a; self.offset=0; self.tape_identity=None; self.books={}; self.history=CausalBooks()
+  self.generation=""; self.generation_compiled_at_ms=0; self.relations=[]; self.index={}
+  self.funnel=Counter(); self.funnel_by_family=defaultdict(Counter)
+  self.rejects=Counter(); self.rejects_by_family=defaultdict(Counter)
+  self.dist=defaultdict(lambda:deque(maxlen=100000)); self.distance_min={}; self.latency_us=deque(maxlen=100000)
+  self.survival_evidence=deque(maxlen=10000)
+  self.lifetimes=defaultdict(lambda:deque(maxlen=100000)); self.active={}; self.pending=[]
+  self.resources=ResourceLedger(); self.seen=set(); self.emitted=set(); self.last_event_ms=0
+  self.recovered_generations=set()
+  self.events_processed=0; self.dropped=Counter(); self.graph_state="WAITING_FOR_GRAPH"
+  self.last_candidate_ms=None; self.graph_metadata={}; self.last_file_signature=None
+  self.reconstruction=ReconstructedDepth(a.model_sha); self.delta_offset=0
+  # Deterministic tape replay reconstructs counters and reservations. Durable
+  # IDs suppress already-written evidence after a crash (including append
+  # succeeded / checkpoint did not). A damaged output is an explicit blocker.
+  if a.opportunities.exists():
+   for line in a.opportunities.open():
+    row=json.loads(line)
+    if row.get("model_sha")!=a.model_sha: raise GraphError("recovery_model_mismatch")
+    self.emitted.add(row["opportunity_id"])
+    self.recovered_generations.add(row["graph_generation"])
+
  def capital(self):
   path=getattr(self.a,"capital_policy",None)
   if path is None:return str(getattr(self.a,"capital_limit","0"))
@@ -44,111 +66,221 @@ class Shadow:
   if (value.get("schema")!="polymarket_v7_pure_arb_capital_policy_v1" or value.get("paper_only") is not True
       or value.get("authenticated_execution") is not False or value.get("real_order_submission") is not False):return "0"
   try:
-   limit=float(value["paper_budget_pusd"])
-   if limit<=0 or limit!=limit:return "0"
-   return str(value["paper_budget_pusd"])
+   limit=frac(value["paper_budget_pusd"])
+   return str(limit) if limit>0 else "0"
   except (KeyError,TypeError,ValueError):return "0"
+
  def graph(self):
-  g=load(self.a.graph)
-  if g.get("schema")!="polymarket_v7_unified_exact_arb_graph_v1" or any(g.get(k) is not v for k,v in SAFETY.items()):return
-  if g.get("graph_generation")!=self.generation:
-   self.generation=str(g.get("graph_generation") or "");self.relations=g.get("relations") or [];self.index=g.get("dependency_index") or {}
-   try:self.generation_compiled_at_ms=int((g.get("metadata") or {}).get("compiled_at_ms") or 0)
-   except (TypeError,ValueError):self.generation_compiled_at_ms=0
- def update(self,row:dict[str,Any]):
-  if (row.get("schema")!="polymarket_v7_pure_arb_deep_book_snapshot_v1" or row.get("model_sha")!=self.a.model_sha or row.get("paper_only") is not True or row.get("authenticated_execution") is not False or row.get("real_order_submission") is not False or row.get("execution_authority")!="ZERO_AUTHORITY_RESEARCH_ONLY"):return
-  try: now=int(row["receive_wall_ms"]); mid=str(row["market_id"]);pairs=(("yes_token","yes_ask_levels","yes_bid_levels","yes_ask_truncated"),("no_token","no_ask_levels","no_bid_levels","no_ask_truncated"))
-  except (KeyError,TypeError,ValueError):return
-  changed=[]
-  for token,levels,bids,truncated in pairs:
-   t=str(row.get(token) or "")
-   if not t:continue
-   self.books[t]={"timestamp_ms":now,"lineage_continuous":True,"depth_truncated":row.get(truncated) is True,"asks":[[x.get("price"),x.get("size")] for x in row.get(levels) or []],"bids":[[x.get("price"),x.get("size")] for x in row.get(bids) or []]};changed.append(t)
-  pending,self.pending=self.pending,[]
-  for due,h,arm in pending:
-   if now<due:self.pending.append((due,h,arm));continue
-   try:survived=evaluate(self.relations[h],self.books,now).get("accepted") is True
-   except (IndexError,KeyError,TypeError):survived=False
-   self.funnel["survival_"+str(arm)+"ms_checked"]+=1
-   if survived:self.funnel["survival_"+str(arm)+"ms"]+=1
+  try:
+   stat=self.a.graph.stat(); signature=(stat.st_ino,stat.st_mtime_ns,stat.st_size)
+   if signature==self.last_file_signature:return
+   g=load(self.a.graph); validate_graph(g,self.a.model_sha)
+   if not self.generation and self.recovered_generations and self.recovered_generations!={g["graph_generation"]}:
+    raise GraphError("recovery_generation_mismatch")
+  except (OSError,GraphError,KeyError,TypeError,ValueError):
+   self.graph_state="BLOCKED_INVALID_GRAPH"; return
+  if g["graph_generation"]!=self.generation:
+   if self.generation:
+    self.dropped["generation_pending_censored"]+=len(self.pending)
+    self.pending=[]; self.active={}
+   self.generation=g["graph_generation"]; self.relations=g["relations"]; self.index=g["dependency_index"]
+   self.graph_metadata=g; self.generation_compiled_at_ms=int(g["metadata"]["compiled_at_ms"])
+  self.last_file_signature=signature; self.graph_state="COLLECTING"
+
+ def count(self,family,key,amount=1):
+  self.funnel[key]+=amount; self.funnel_by_family[family][key]+=amount
+
+ def resource_capacities(self,now):
+  result={"PUSD":self.capital()}
+  path=getattr(self.a,"resource_snapshot",None)
+  if path is None:return result
+  value=load(path)
+  if (not safe(value,self.a.model_sha) or value.get("schema")!="polymarket_v7_exact_arb_paper_resources_v1"
+      or value.get("verified") is not True or not value.get("timestamp_ms",0)<=now<=value.get("expires_at_ms",0)):
+   return result
+  try:
+   for key,amount in value.get("capacities",{}).items():
+    if key.startswith(("inventory:","transformation:")) and frac(amount)>=0:result[key]=str(frac(amount))
+  except (TypeError,ValueError):return {"PUSD":self.capital()}
+  return result
+
+ def survival(self,now):
+  remaining=[]
+  for due,relation,direction,quantity,arm,generation in self.pending:
+   if due>now:remaining.append((due,relation,direction,quantity,arm,generation));continue
+   family=relation.get("relation_family","UNKNOWN")
+   causal={leg["token_id"]:self.history.at(leg["token_id"],due) for leg in relation["legs"]}
+   r=evaluate({**relation,"directions":["BUY_BASKET" if direction=="BUY" else "SELL_INVENTORY_BASKET"]},
+              causal,due,capital_limit=self.capital(),inventory_limit=quantity if direction=="SELL" else None)
+   self.count(family,"survival_"+str(arm)+"ms_checked")
+   if r.get("accepted"):self.count(family,"survives_"+str(arm)+"ms")
+   self.survival_evidence.append({"graph_generation":generation,"relation_id":relation["relation_id"],
+      "due_timestamp_ms":due,"delay_ms":arm,"direction":direction,
+      "still_raw_arb":frac(r["distance_to_raw_arbitrage"])<0 if "distance_to_raw_arbitrage" in r else None,
+      "still_after_fee":frac(r["distance_to_after_fee_arbitrage"])<0 if "distance_to_after_fee_arbitrage" in r else None,
+      "still_after_reserve":frac(r["distance_to_after_reserve_arbitrage"])<0 if "distance_to_after_reserve_arbitrage" in r else None,
+      "still_executable":r.get("accepted",False),"q_remaining":r.get("quantity","0"),
+      "locked_pnl_remaining":r.get("net_locked_pnl","0"),"reason":r.get("reason")})
+  self.pending=remaining
+
+ def update(self,row):
+  try:now,new_books=decode_snapshot(row,self.a.model_sha)
+  except (GraphError,KeyError,TypeError,ValueError):
+   self.dropped["snapshot_invalid"]+=1;return
+  self.update_decoded(now,new_books,sha(row))
+
+ def update_decoded(self,now,new_books,event_id):
+  if now<self.last_event_ms:self.dropped["timestamp_reversal"]+=1;return
+  if event_id in self.seen:return
+  # Dedup only the current timestamp; evidence IDs below span restarts.
+  if now>self.last_event_ms:self.seen.clear()
+  self.seen.add(event_id)
+  try:self.history.ingest(now,new_books)
+  except GraphError:self.dropped["history_invalid"]+=1;return
+  self.books.update(new_books);self.last_event_ms=now;self.events_processed+=1
+  self.resources.release(now)
+  self.survival(now)
   event_seen=set()
-  for token in changed:
-   for h in self.index.get(token,[]):
-    relation=self.relations[h];family=str(relation.get("relation_family") or "UNKNOWN")
-    self.funnel["relations_considered"]+=1;self.funnel_by_family[family]["relations_considered"]+=1
-    started=time.perf_counter_ns()
-    try:r=evaluate(relation,self.books,now,capital_limit=self.capital())
-    except Exception:r={"accepted":False,"reason":"evaluation_error"}
-    self.latency_us.append((time.perf_counter_ns()-started)/1000.0)
-    if len(self.latency_us)>100000:self.latency_us=self.latency_us[-50000:]
-    reason=str(r.get("reason") or "unknown")
-    # The evaluator returns the first failed gate.  Count all preceding gates
-    # so the funnel is monotonic and remains useful when no candidate exists.
-    stages=("books_ready","lineage_ready","fee_ready","freshness_ready","leg_skew_ready")
-    failed={"lineage_or_book_missing":0,"truncated_depth":0,"fee_or_timestamp_missing":2,
-            "fee_or_depth_invalid":2,"fee_rounding_invalid":2,"stale_book":3,"leg_skew":4,
-            "depth_insufficient":5,"minimum_order":5,"capital_limit":5,"inventory_unavailable":5,"transformation_capacity":5,
-            "empty_relation":0,"disabled_relation":0}.get(reason,5)
-    if not r.get("accepted"):
-     for stage in stages[:failed]:self.funnel[stage]+=1;self.funnel_by_family[family][stage]+=1
-    for field in ("distance_to_raw_arbitrage","distance_to_after_fee_arbitrage","distance_to_after_reserve_arbitrage"):
-     try:self.dist[family+":"+field].append(float(r[field]))
-     except (KeyError,TypeError,ValueError):pass
-    for field,name in (("distance_to_raw_arbitrage","raw_positive"),("distance_to_after_fee_arbitrage","after_fee_positive"),("distance_to_after_reserve_arbitrage","after_reserve_positive")):
-     try:
-      if float(r.get(field,0))<0:self.funnel[name]+=1
-     except (TypeError,ValueError):pass
-    if r.get("accepted"):
-     for stage in ("books_ready","lineage_ready","fee_ready","freshness_ready","leg_skew_ready","depth_sufficient","minimum_order_sufficient","capital_sufficient","transformation_ready","execution_semantics_ready"):
-      self.funnel[stage]+=1;self.funnel_by_family[family][stage]+=1
-     key=str(relation.get("economic_identity"))+":"+str(r.get("direction") or "BUY")+":"+str(now)
-     self.funnel["raw_path_count"]+=1;self.funnel_by_family[family]["raw_path_count"]+=1
-     if key not in event_seen:
-      claims=set()
-      if str(r.get("direction") or "") == "SELL":
-       claims.update("inventory:"+str(leg.get("token_id") or "") for leg in relation.get("legs") or [])
-      transform=relation.get("transformation") if isinstance(relation.get("transformation"),dict) else None
-      if transform is not None:claims.add("transformation:"+str(transform.get("id") or ""))
-      conflict=any((now,claim) in self.claims for claim in claims)
-      try:required,limit=Fraction(str(r["capital_required"])),Fraction(self.capital())
-      except (KeyError,TypeError,ValueError,ZeroDivisionError):required,limit=Fraction(1),Fraction(0)
-      reserved=self.capital_reserved.get(now,Fraction(0))
-      capital_conflict=reserved+required>limit
-      if conflict or capital_conflict:
-       event_seen.add(key)
-       self.funnel["capital_conflicts"]+=1;self.funnel_by_family[family]["capital_conflicts"]+=1
-       self.rejects["capital_conflict"]+=1;self.rejects_by_family[family]["capital_conflict"]+=1
-       continue
-      event_seen.add(key);self.funnel["candidate_emitted"]+=1
-      self.funnel["unique_economic_opportunity_count"]+=1;self.funnel_by_family[family]["unique_economic_opportunity_count"]+=1
-      for claim in claims:self.claims[(now,claim)]=key
-      self.capital_reserved[now]=reserved+required
-      evidence={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1",**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","graph_generation":self.generation,"relation_id":relation.get("relation_id"),"trigger_token":token,"timestamp_ms":now,"counterfactual_modes":["SEQUENTIAL","PARALLEL","BATCH"],"capital_conflict":False,"execution_candidate":native_binary_candidate(relation,r,now),"result":r}
-      with self.a.opportunities.open("a") as f:f.write(json.dumps(evidence,sort_keys=True)+"\n")
-      for arm in (1,5,10,25,50):self.pending.append((now+arm,h,arm))
-     else:
-      self.funnel["deduplicated_path_count"]+=1;self.funnel_by_family[family]["deduplicated_path_count"]+=1
-    else:self.rejects[reason]+=1;self.rejects_by_family[family][reason]+=1
+  affected=sorted({h for token in new_books for h in self.index.get(token,[])})
+  capital=self.capital()  # Control-plane read once per event, not once per leg.
+  resource_capacities=self.resource_capacities(now)
+  for h in affected:
+   relation=self.relations[h];family=relation.get("relation_family","UNKNOWN")
+   self.count(family,"relations_considered")
+   started=time.perf_counter_ns()
+   if relation.get("settlement_close_ms",0) and now>=relation["settlement_close_ms"]:
+    r={"accepted":False,"reason":"market_closed"}
+   else:
+    try:
+     inventory=None
+     used=self.resources.used()
+     if all("inventory:"+leg["token_id"] in resource_capacities for leg in relation["legs"]):
+      inventory=min(max(Fraction(0),frac(resource_capacities["inventory:"+leg["token_id"]])-used["inventory:"+leg["token_id"]])/frac(leg["coefficient"])
+                    for leg in relation["legs"])
+     r=evaluate(relation,self.books,now,capital_limit=capital,inventory_limit=inventory)
+    except (GraphError,KeyError,TypeError,ValueError):r={"accepted":False,"reason":"evaluation_error"}
+   self.latency_us.append((time.perf_counter_ns()-started)/1000)
+   reason=r.get("reason","unknown")
+   stages=("books_ready","lineage_ready","fee_ready","freshness_ready","leg_skew_ready")
+   failed={"lineage_or_book_missing":0,"truncated_depth":0,"fee_or_timestamp_missing":2,
+           "fee_or_depth_invalid":2,"fee_rounding_invalid":2,"stale_book":3,"leg_skew":4,
+           "fee_changed":2,"tick_changed":2,"duplicate_token_claim":0,
+           "disabled_relation":0,"market_closed":0,"evaluation_error":0}.get(reason,5)
+   for stage in stages[:failed]:self.count(family,stage)
+   for field,name in (("distance_to_raw_arbitrage","raw_positive"),("distance_to_after_fee_arbitrage","after_fee_positive"),
+                      ("distance_to_after_reserve_arbitrage","after_reserve_positive")):
+    if field not in r:continue
+    value=frac(r[field]);self.dist[family+":"+field].append(value)
+    if value<0:self.count(family,name)
+    guarantee=frac(relation["guaranteed_payout"])
+    if guarantee>0:self.dist[family+":"+field+"_bps"].append(value*10000/guarantee)
+    ticks=[frac(leg["tick_size"])*frac(leg["coefficient"]) for leg in relation["legs"] if leg.get("tick_size")]
+    if len(ticks)==len(relation["legs"]):
+     self.dist[family+":"+field+"_ticks"].append(value/min(ticks))
+    for metric in (field,field+"_bps",field+"_ticks"):
+     k=family+":"+metric
+     if self.dist[k]:self.distance_min[k]=min(self.distance_min.get(k,self.dist[k][-1]),self.dist[k][-1])
+   economic=str(relation.get("economic_identity"))
+   if not r.get("accepted"):
+    self.rejects[reason]+=1;self.rejects_by_family[family][reason]+=1
+    if economic in self.active:
+     first,last=self.active.pop(economic);self.lifetimes[family].append(last-first)
+    continue
+   if economic not in self.active:self.active[economic]=(now,now)
+   else:self.active[economic]=(self.active[economic][0],now)
+   for stage in ("depth_sufficient","minimum_order_sufficient","capital_sufficient","transformation_ready","execution_semantics_ready"):
+    self.count(family,stage)
+   self.count(family,"raw_path_count")
+   key=economic+":"+r["direction"]
+   if key in event_seen:self.count(family,"deduplicated_path_count");continue
+   event_seen.add(key)
+   capacities=dict(resource_capacities);required={"PUSD":r["capital_required"]}
+   if r["direction"]=="SELL":
+    for leg in relation["legs"]:required["inventory:"+leg["token_id"]]=str(frac(r["quantity"])*frac(leg["coefficient"]))
+   transform=relation.get("transformation")
+   if transform:
+    resource="transformation:"+transform["id"]
+    capacities[resource]=transform["capacity"];required[resource]=r["quantity"]
+   # Unknown settlement release time remains reserved indefinitely.
+   opportunity_id=sha([self.generation,event_id,key])
+   if not self.resources.reserve(opportunity_id,required,capacities,now,r.get("capital_lock_time_ms")):
+    self.count(family,"capital_conflicts");self.rejects["capital_conflict"]+=1
+    self.rejects_by_family[family]["capital_conflict"]+=1;continue
+   self.count(family,"candidate_emitted");self.count(family,"unique_economic_opportunity_count")
+   self.last_candidate_ms=now
+   evidence={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1",**SAFETY,
+     "model_sha":self.a.model_sha,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+     "graph_generation":self.generation,"relation_id":relation["relation_id"],"relation":relation,
+     "opportunity_id":opportunity_id,"trigger_event_id":event_id,"timestamp_ms":now,
+     "counterfactual_modes":["SEQUENTIAL","PARALLEL","BATCH"],"capital_conflict":False,
+     "inventory_reserved":r["direction"]=="SELL","resource_vector":required,
+     "execution_candidate":native_binary_candidate(relation,r,now),"result":r}
+   if opportunity_id not in self.emitted:
+    self.a.opportunities.parent.mkdir(parents=True,exist_ok=True)
+    with self.a.opportunities.open("a") as f:f.write(json.dumps(evidence,sort_keys=True)+"\n")
+    self.emitted.add(opportunity_id)
+   for arm in (1,5,10,25,50):self.pending.append((now+arm,relation,r["direction"],r["quantity"],arm,self.generation))
+
+ def status(self):
+  now=time.time_ns()//1000000
+  near={k:quantiles(v) for k,v in self.dist.items()}
+  for key,value in self.distance_min.items():near[key]["min"]=float(value)
+  for key,values in self.dist.items():
+   if key.endswith("_ticks") and values:
+    for threshold in (.25,.5,1,2):
+     near[key]["fraction_within_"+str(threshold)+"_tick"]=sum(0<=v<=threshold for v in values)/len(values)
+  return {"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,
+    "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":self.graph_state,"graph_generation":self.generation,
+    "graph_generation_compiled_at_ms":self.generation_compiled_at_ms,"nodes":len(self.graph_metadata.get("nodes",[])),
+    "unverified_candidates":len(self.graph_metadata.get("unverified_candidates",[])),
+    "relations_compiled":len(self.relations),"relations_evaluated":self.funnel["relations_considered"],
+    "relations_by_family":dict(Counter(r["relation_family"] for r in self.relations)),
+    "capital_limit_pusd":self.capital(),"resources_reserved":{k:str(v) for k,v in self.resources.used().items()},
+    "funnel":dict(self.funnel),"funnel_by_family":{k:dict(v) for k,v in self.funnel_by_family.items()},
+    "rejection_reasons":dict(self.rejects),"rejection_reasons_by_family":{k:dict(v) for k,v in self.rejects_by_family.items()},
+    "near_arbitrage":near,"distance_sampling":"MIN_ALL_OBSERVATIONS; QUANTILES_AND_FRACTIONS_LAST_100000_PER_METRIC",
+    "survival_evidence":list(self.survival_evidence),
+    "opportunity_lifetime_ms":{k:quantiles(v) for k,v in self.lifetimes.items()},
+    "maker_bridge":{family:{"quote_improvement_needed_pusd":max(0.0,summary.get("min",0.0)),
+        "paired_fill_probability":None,"one_leg_fill_risk":None,"time_to_second_leg_ms":None,
+        "expected_unwind_cost":None,"state":"NEEDS_JOINT_PASSIVE_FILL_OBSERVATIONS",
+        "execution_authority":False} for key,summary in near.items()
+        for family,separator,stage in [key.partition(":")] if stage=="distance_to_after_reserve_arbitrage"},
+    "lifetime_semantics":"LAST_CAUSAL_EXECUTABLE_MINUS_FIRST; OPEN_EPISODES_RIGHT_CENSORED",
+    "open_opportunity_episodes":len(self.active),"evaluation_latency_us":quantiles(self.latency_us),
+    "events_processed":self.events_processed,"last_candidate_timestamp_ms":self.last_candidate_ms,
+    "book_lag_ms":now-self.last_event_ms if self.last_event_ms else None,
+    "worker_health":"RUNNING","dropped_observations":dict(self.dropped),"timestamp_ms":now,
+    "recovery_policy":"DETERMINISTIC_TAPE_REPLAY_WITH_DURABLE_OPPORTUNITY_IDS"}
+
  def run(self):
-  self.a.opportunities.parent.mkdir(parents=True,exist_ok=True);next_status=0.
+  anchors=JsonlCursor(self.a.tape)
+  deltas=JsonlCursor(self.a.delta_tape,segmented=True) if getattr(self.a,"delta_tape",None) else None
   while True:
    self.graph()
-   try:
-    with self.a.tape.open("rb") as f:
-     f.seek(self.offset)
-     for raw in f:
-      if not raw.endswith(b"\n"):break
-      self.offset=f.tell()
-      try:self.update(json.loads(raw))
-      except (ValueError,UnicodeDecodeError):continue
-   except OSError:pass
-   if time.monotonic()>=next_status:
-    def pct(v):
-     v=sorted(v);return {str(p):v[min(len(v)-1,max(0,int(len(v)*p/100)-1))] for p in (.1,1,5,10,25,50,90,99)}|{"min":v[0]} if v else {}
-    atomic(self.a.status,{"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":"COLLECTING","graph_generation":self.generation,"graph_generation_compiled_at_ms":self.generation_compiled_at_ms,"relations_compiled":len(self.relations),"relations_evaluated":self.funnel["relations_considered"],"capital_limit_pusd":self.capital(),"funnel":dict(self.funnel),"funnel_by_family":{k:dict(v) for k,v in self.funnel_by_family.items()},"rejection_reasons":dict(self.rejects),"rejection_reasons_by_family":{k:dict(v) for k,v in self.rejects_by_family.items()},"near_arbitrage":{k:pct(v) for k,v in self.dist.items()},"evaluation_latency_us":pct(self.latency_us),"counterfactual":{"filled":0,"one_leg_exposure":0,"unwind":0,"unwind_loss":0,"realized_pnl":0},"timestamp_ms":time.time_ns()//1_000_000});next_status=time.monotonic()+1
+   if self.graph_state=="COLLECTING":
+    try:
+     for row in anchors.poll():
+      if deltas is not None:self.reconstruction.anchor(row)
+      else:self.update(row)
+     if deltas is not None:
+      for row in deltas.poll():
+       now,books=self.reconstruction.delta(row)
+       self.update_decoded(now,books,sha(row))
+    except (OSError,ValueError,KeyError,TypeError):
+     self.dropped["tape_invalid"]+=1;self.graph_state="BLOCKED_TAPE_INVALID"
+   atomic(self.a.status,self.status())
    time.sleep(max(.001,self.a.interval_ms/1000))
-def main()->int:
- p=argparse.ArgumentParser();p.add_argument("--graph",type=Path,required=True);p.add_argument("--tape",type=Path,required=True);p.add_argument("--status",type=Path,required=True);p.add_argument("--opportunities",type=Path,required=True);p.add_argument("--capital-policy",type=Path,required=True);p.add_argument("--model-sha",required=True);p.add_argument("--interval-ms",type=int,default=10);a=p.parse_args()
+
+
+def main():
+ p=argparse.ArgumentParser()
+ for name in ("graph","tape","status","opportunities","capital-policy"):p.add_argument("--"+name,type=Path,required=True)
+ p.add_argument("--delta-tape",type=Path)
+ p.add_argument("--resource-snapshot",type=Path)
+ p.add_argument("--model-sha",required=True);p.add_argument("--interval-ms",type=int,default=10);a=p.parse_args()
  if len(a.model_sha)!=40 or not 1<=a.interval_ms<=1000:raise SystemExit("invalid arguments")
- Shadow(a).run();return 0
-if __name__=="__main__":raise SystemExit(main())
+ Shadow(a).run()
+
+
+if __name__=="__main__":main()

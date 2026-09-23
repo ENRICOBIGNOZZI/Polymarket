@@ -189,15 +189,35 @@ def normalize_market(raw: dict[str, Any]) -> dict[str, Any] | None:
         if best_bid > 0.0 and best_ask >= best_bid
         else outcome_prices[0] if outcome_prices else 0.0
     )
+    outcomes = [str(value).strip() for value in _array(raw.get("outcomes"))]
+    # Gamma's canonical same-condition CTF token partition is the proof input.
+    # No title/rule similarity, cross-market equality or conversion capacity is
+    # inferred here. Malformed or incomplete position mappings remain unverified.
+    binary = (len(token_ids) == 2 and len(set(token_ids)) == 2
+              and {value.upper() for value in outcomes} in ({"YES", "NO"}, {"UP", "DOWN"})
+              and condition_id.startswith("0x") and len(condition_id) == 66)
+    try:
+        binary = binary and all(0 < int(token) < 2**256 for token in token_ids)
+        int(condition_id[2:], 16)
+    except ValueError:
+        binary = False
+    partition_inputs = {"condition_id": condition_id, "tokens": token_ids, "outcomes": outcomes,
+                        "source": "GAMMA_CANONICAL_CTF_MARKET"}
     return {
         "market_id": market_id,
         "condition_id": condition_id,
         "event_ids": event_ids,
+        "event_id": event_ids[0] if len(event_ids) == 1 else "",
+        "binary_partition_verified": binary,
+        "partition_provenance": partition_inputs if binary else None,
+        "partition_proof_hash": hashlib.sha256(json.dumps(partition_inputs, sort_keys=True).encode()).hexdigest() if binary else None,
+        "tick_size": raw.get("orderPriceMinTickSize"),
+        "minimum_order_size": raw.get("orderMinSize"),
         "question": str(raw.get("question") or ""),
         "description": str(raw.get("description") or ""),
         "slug": str(raw.get("slug") or ""),
         "clob_token_ids": token_ids,
-        "outcomes": [str(value) for value in _array(raw.get("outcomes"))],
+        "outcomes": outcomes,
         "outcome_prices": outcome_prices,
         "best_bid": best_bid,
         "best_ask": best_ask,
@@ -426,6 +446,8 @@ def build_snapshot(
         "paper_only": True,
         "authenticated_execution": False,
         "real_order_submission": False,
+        "real_capital_at_risk": False,
+        "automatic_promotion": False,
         "execution_authority": False,
         "model_sha": model_sha.lower(),
         "timestamp_ms": int(timestamp_ms),
