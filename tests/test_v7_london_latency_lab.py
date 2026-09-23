@@ -233,6 +233,14 @@ def test_selected_az_artifact_command_substitution_stays_inside_run_block():
     assert all(line.startswith("          ") for line in closers)
 
 
+def test_selected_az_paper_resolves_relative_registry_from_exact_sha_root():
+    runner = (ROOT / "ops/v7_selected_az_pure_arb_paper.py").read_text()
+    worktree = runner.index('worktree add --detach "$SRC"')
+    chdir = runner.index('cd "$SRC"')
+    universe = runner.index('v7_crypto_universe.py', chdir)
+    assert worktree < chdir < universe
+
+
 def test_selected_az_paper_uses_detached_exact_sha_worktree():
     runner = (ROOT / "ops/v7_selected_az_pure_arb_paper.py").read_text()
     assert 'SRC="$OUT/source"' in runner
