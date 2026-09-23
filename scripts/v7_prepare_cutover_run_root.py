@@ -418,7 +418,7 @@ def prepare(
         failed_activation_residue = (
             supervisor.get("schema") == "polymarket_v7_supervisor_status_v1"
             and supervisor.get("expected_sha") == deployed_sha
-            and supervisor.get("state") in {"failed", "restart_budget_cooldown"}
+            and supervisor.get("state") in {"failed", "restart_budget_cooldown", "stopped"}
             and supervisor.get("paper_only") is True
             and supervisor.get("authenticated_execution") is False
             and supervisor.get("real_order_submission") is False
