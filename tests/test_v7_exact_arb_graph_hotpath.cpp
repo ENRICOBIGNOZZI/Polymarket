@@ -25,6 +25,13 @@ int main() {
     assert(champion.shares_microunits == direct.quantity_microunits);
     assert(static_cast<std::int64_t>(std::llround(champion.gross_locked_pnl * kShareMicrounits))
            == direct.gross_pnl_microunits);
+
+    auto below_minimum = relation;
+    below_minimum.legs[0].minimum_order_microunits = 6 * kShareMicrounits;
+    assert(evaluate_buy(below_minimum, books).reject == HotReject::MinimumOrder);
+    auto truncated = books;
+    truncated[1].ask_truncated = 1;
+    assert(evaluate_buy(relation, truncated).reject == HotReject::IncompleteDepth);
     std::array<CompiledRelation, 1> relations{relation};
     std::array<TokenDependency, 1> dependencies{TokenDependency{42, 0, 1}};
     std::array<std::uint32_t, 1> handles{0}; int callbacks = 0;
