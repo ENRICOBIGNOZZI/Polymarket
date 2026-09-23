@@ -1,5 +1,6 @@
 {
   "schema": "polymarket_v7_pure_arb_evidence_probe_v1",
   "read_only": true,
-  "window_seconds": 300
+  "window_seconds": 300,
+  "request_id": "five-minute-observation-20260923"
 }
