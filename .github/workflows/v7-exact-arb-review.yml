@@ -72,8 +72,10 @@ jobs:
               '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
               '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined')
           fi
+          # The runtime-only deployment configuration deliberately excludes tests.
+          # Configure the test-enabled tree, then build only these review targets.
           cmake -S . -B /tmp/exact-arb-native -G Ninja \
-            -DCMAKE_BUILD_TYPE="$mode" -DPM_LONDON_RUNTIME_ONLY=ON \
+            -DCMAKE_BUILD_TYPE="$mode" -DPM_LONDON_RUNTIME_ONLY=OFF \
             -DBUILD_TESTING=ON "${extra[@]}"
           cmake --build /tmp/exact-arb-native --parallel 2 --target \
             polymarket_v7_maker_fillability_observer \
