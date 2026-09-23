@@ -330,7 +330,10 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
             ],
         })
     ordered = sorted(measurements, key=lambda x: (
-        x["pair_p99_ns"], x["pair_p999_ns"], x["physical_zone_id"]))
+        x["event_receive_to_http_ack_p99_ns"],
+        x["event_receive_to_http_ack_p999_ns"],
+        x["pair_p99_ns"], x["pair_p999_ns"],
+        x["physical_zone_id"]))
     return {
         "schema": "polymarket_v7_london_latency_shootout_v1",
         "expected_sha": sha,
@@ -340,7 +343,9 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
         "automatic_cutover": False,
         "authenticated_order_latency_observed": False,
         "matching_engine_latency_observed": False,
-        "selection_metric": "public paired CLOB persistent-transport GET /time p99 then p999",
+        "selection_metric": (
+            "causal PM event receive-to-public HTTP ACK p99 then p999; "
+            "paired persistent-transport GET /time p99/p999 tie-break"),
         "selected_physical_zone_id": ordered[0]["physical_zone_id"],
         "measurements": measurements,
         "raw": rows,
