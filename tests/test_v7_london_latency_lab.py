@@ -233,6 +233,19 @@ def test_selected_az_artifact_command_substitution_stays_inside_run_block():
     assert all(line.startswith("          ") for line in closers)
 
 
+def test_selected_az_paper_remote_failure_is_bounded_and_diagnostic():
+    runner = (ROOT / "ops/v7_selected_az_pure_arb_paper.py").read_text()
+    assert "selected_pure_arb_step=$STEP rc=$rc" in runner
+    for step in (
+        "capital_allocator", "universe", "runtime_config",
+        "cmake_configure", "cmake_build", "runtime",
+    ):
+        assert f"STEP={step}" in runner
+    assert 'tail -c 5000 "$OUT/$name"' in runner
+    assert "trap dump_selected_failure ERR" in runner
+    assert "trap - ERR" in runner
+
+
 def test_selected_az_paper_cutover_is_evidence_bound_and_paper_only():
     workflow = (ROOT / ".github/workflows/v7-selected-az-paper-cutover.yml").read_text()
     helper = (ROOT / "ops/v7_selected_az_cutover_request.py").read_text()

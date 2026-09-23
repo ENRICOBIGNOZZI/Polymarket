@@ -23,21 +23,45 @@ def remote_command(sha:str, duration:int, service_user:str)->str:
     return f'''set -euo pipefail
 APP=/home/{service_user}/polymarket
 OUT=/mnt/polymarket-data/benchmarks/selected-pure-arb-{sha}
+STEP=preflight
+dump_selected_failure() {{
+  rc=$?
+  echo "selected_pure_arb_step=$STEP rc=$rc" >&2
+  for name in universe.log config.log runtime.log runtime.json; do
+    if [[ -s "$OUT/$name" ]]; then
+      echo "===== $name =====" >&2
+      tail -c 5000 "$OUT/$name" >&2 || true
+      echo >&2
+    fi
+  done
+  exit "$rc"
+}}
+trap dump_selected_failure ERR
 [[ "$(sudo -u {service_user} git -C "$APP" rev-parse HEAD)" == "{sha}" ]]
 sudo systemctl stop polymarket-v7-paper.service >/dev/null 2>&1 || true
 ! systemctl is-active --quiet polymarket-v7-paper.service
 rm -rf "$OUT"
 install -d -o {service_user} -g "$(id -gn {service_user})" "$OUT"
-sudo -u {service_user} python3 "$APP/scripts/v7_capital_allocator.py"   --config "$APP/config/paper_v7.json" --output-dir "$OUT/alloc" >/dev/null
+STEP=capital_allocator
+sudo -u {service_user} python3 "$APP/scripts/v7_capital_allocator.py"   --config "$APP/config/paper_v7.json" --output-dir "$OUT/alloc" > "$OUT/allocator.log"
+STEP=universe
 sudo -u {service_user} python3 "$APP/scripts/v7_crypto_universe.py"   --config "$APP/config/v7_crypto_universe.json" --output-dir "$OUT/universe"   --model-sha "{sha}" --once > "$OUT/universe.log"
+STEP=runtime_config
 sudo -u {service_user} python3 "$APP/scripts/v7_pure_arb_multi_config.py"   --universe "$OUT/universe/current.json"   --allocation "$OUT/alloc/crypto_settlement_engine.json"   --model-sha "{sha}" --latency-tape "$OUT/native-latency.bin"   --output "$OUT/runtime.json" > "$OUT/config.log"
 BUILD="$OUT/build"
-sudo -u {service_user} cmake -S "$APP" -B "$BUILD" -G Ninja   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPM_LONDON_RUNTIME_ONLY=ON   >/dev/null
-sudo -u {service_user} cmake --build "$BUILD" --parallel "$(nproc)"   --target polymarket_v7_pure_arb_multi_runtime >/dev/null
+STEP=cmake_configure
+sudo -u {service_user} cmake -S "$APP" -B "$BUILD" -G Ninja   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPM_LONDON_RUNTIME_ONLY=ON   > "$OUT/cmake-configure.log"
+STEP=cmake_build
+sudo -u {service_user} cmake --build "$BUILD" --parallel "$(nproc)"   --target polymarket_v7_pure_arb_multi_runtime > "$OUT/cmake-build.log"
+STEP=runtime
 set +e
 sudo -u {service_user} "$BUILD/polymarket_v7_pure_arb_multi_runtime"   --config "$OUT/runtime.json" --duration-seconds "{duration}"   > "$OUT/runtime.log" 2>&1
 rc=$?
 set -e
+if (( rc != 0 )); then
+  false
+fi
+trap - ERR
 python3 - "$OUT/runtime.log" "$OUT/runtime.json" "$rc" <<'PY'
 import json,sys
 from pathlib import Path
