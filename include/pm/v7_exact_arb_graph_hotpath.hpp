@@ -164,6 +164,12 @@ struct HotDecision {
             ++out.levels_used;
         }
     }
+    if (quantity <= 0) {
+        if (out.reject == HotReject::Accepted || out.reject == HotReject::InvalidRelation) {
+            out.reject = HotReject::NoPositiveEdge;
+        }
+        return out;
+    }
     if (quantity < minimum) { out.reject = HotReject::MinimumOrder; return out; }
     out.reject = HotReject::Accepted; out.quantity_microunits = quantity;
     out.gross_pnl_microunits = static_cast<std::int64_t>(std::llround(gross * kShareMicrounits));

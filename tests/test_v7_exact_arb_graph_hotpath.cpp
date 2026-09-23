@@ -32,6 +32,10 @@ int main() {
     auto truncated = books;
     truncated[1].ask_truncated = 1;
     assert(evaluate_buy(relation, truncated).reject == HotReject::IncompleteDepth);
+    auto no_edge = books;
+    no_edge[0].ask_levels[0].price_e4 = 6000;
+    no_edge[1].ask_levels[0].price_e4 = 6000;
+    assert(evaluate_buy(relation, no_edge).reject == HotReject::NoPositiveEdge);
     std::array<CompiledRelation, 1> relations{relation};
     std::array<TokenDependency, 1> dependencies{TokenDependency{42, 0, 1}};
     std::array<std::uint32_t, 1> handles{0}; int callbacks = 0;
