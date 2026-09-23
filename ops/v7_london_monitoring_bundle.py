@@ -107,8 +107,14 @@ def build(root: Path, output: Path, deployed_directory: Path, expected_sha: str)
                 f'Environment="PROVISIONING_CFG_DIR={destination}/grafana/provisioning"\n'
                 f'Environment="GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH={home}"\n')
     assets['grafana-systemd-override.conf'] = override.encode()
+    # Debian's base prometheus unit loads /etc/default/prometheus via
+    # EnvironmentFile=. Values from that file override Environment= assignments,
+    # so setting ARGS in a drop-in does not reliably replace the packaged config.
+    # Reset ExecStart and pin the immutable V7 config directly instead.
     prom_override = ('[Service]\n'
-                     f'Environment="ARGS=--config.file={destination}/prometheus-v7.yml --storage.tsdb.path=/var/lib/prometheus/metrics2"\n')
+                     'ExecStart=\n'
+                     f'ExecStart=/usr/bin/prometheus --config.file={destination}/prometheus-v7.yml '
+                     '--storage.tsdb.path=/var/lib/prometheus/metrics2\n')
     assets['prometheus-systemd-override.conf'] = prom_override.encode()
     receipt = {'schema': 'polymarket_v7_london_monitoring_bundle_v1',
                'runtime_sha': expected_sha, 'paper_only': True,
