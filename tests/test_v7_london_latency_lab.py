@@ -207,6 +207,24 @@ def test_london_summary_keeps_serial_vs_parallel_signing_evidence():
     assert "candidate(parallel,serial)" in lab
 
 
+def test_selected_az_workflow_python_heredocs_stay_inside_yaml_block_scalars():
+    workflow = (ROOT / ".github/workflows/v7-selected-az-paper-cutover.yml").read_text()
+    lines = workflow.splitlines()
+    in_py = False
+    count = 0
+    for line in lines:
+        if "<<'PY'" in line:
+            in_py = True
+            count += 1
+            continue
+        if in_py:
+            assert line.startswith("          "), line
+            if line.strip() == "PY":
+                in_py = False
+    assert not in_py
+    assert count >= 4
+
+
 def test_selected_az_paper_cutover_is_evidence_bound_and_paper_only():
     workflow = (ROOT / ".github/workflows/v7-selected-az-paper-cutover.yml").read_text()
     helper = (ROOT / "ops/v7_selected_az_cutover_request.py").read_text()
