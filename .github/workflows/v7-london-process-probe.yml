@@ -56,6 +56,13 @@ jobs:
           echo -n "root_cpuset_effective="
           cat /sys/fs/cgroup/cpuset.cpus.effective 2>/dev/null || true
           systemctl show polymarket-v7-paper.service -p AllowedCPUs -p CPUAccounting -p CPUWeight --no-pager 2>/dev/null || true
+          echo "=== SYSTEMD CPU POLICY ==="
+          systemctl cat polymarket-v7-paper.service 2>/dev/null || true
+          systemctl show polymarket-v7-paper.service -p CPUAffinityFromNUMA -p NUMAPolicy -p NUMAMask --no-pager 2>/dev/null || true
+          grep -R --line-number -E '^[[:space:]]*(Default)?CPUAffinity=' /etc/systemd/system.conf /etc/systemd/system.conf.d /etc/systemd/system/polymarket-v7-paper.service.d 2>/dev/null || true
+          echo "pid1_affinity:"
+          taskset -pc 1 2>/dev/null || true
+          grep -E '^(Cpus_allowed|Cpus_allowed_list):' /proc/1/status 2>/dev/null || true
           echo "=== LOCKS ==="
           lslocks -o COMMAND,PID,TYPE,MODE,PATH 2>/dev/null | grep -E "polymarket-v7-london-deploy|COMMAND" || true
           echo "=== PROCESSES ==="
