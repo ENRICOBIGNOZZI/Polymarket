@@ -295,7 +295,7 @@
     },
     {
       "id": "native_engine_manager",
-      "executable": "scripts/v7_native_crypto_engine_manager.py",
+      "executable": "scripts/v7_pure_arb_multi_manager.py",
       "arguments": [
         "--repository-root",
         "${ROOT}",
@@ -307,52 +307,27 @@
         "${RUN_ID}",
         "--server-id",
         "${SERVER_ID}",
-        "--universe",
-        "${RUN_ROOT}/universe/current.json",
-        "--engine",
-        "${CRYPTO_SETTLEMENT_ENGINE}",
-        "--settler",
-        "${ROOT}/scripts/v7_native_paper_settlement.py",
-        "--engine-log",
-        "${RUN_ROOT}/native_crypto_settlement_engine.log",
+        "--selection",
+        "${RUN_ROOT}/universe/book_selection.json",
         "--allocation",
-        "${RUN_ROOT}/control/allocations/crypto_settlement_engine.json",
-        "--market-registry",
-        "${ROOT}/config/v7_crypto_settlement_markets.json",
-        "--signal-policy",
-        "${ROOT}/config/v7_crypto_signal_policy.json",
-        "--legacy-claims",
-        "${RUN_ROOT}/control/legacy_native_claims.json",
-        "--target-quantity-microunits",
-        "5000000",
-        "--maximum-entry-price-e4",
-        "7500",
-        "--minimum-tte-ns",
-        "105000000000",
-        "--maximum-tte-ns",
-        "120000000000",
-        "--maker-share-cap-microunits",
-        "1000000",
-        "--asynchronous-settlement",
-        "--observation-only",
-        "--capture-native-decisions",
-        "--capture-execution-windows",
-        "--execution-window-ns",
-        "5000000000"
+        "${RUN_ROOT}/control/allocations/manifest.json",
+        "--risk-policy",
+        "${ROOT}/config/v7_native_risk_policy.json",
+        "--engine",
+        "${PURE_ARB_MULTI_RUNTIME}",
+        "--settler",
+        "${ROOT}/scripts/v7_native_paper_settlement.py"
       ],
       "profile": "core",
       "inputs": [
-        "universe/current.json",
+        "universe/book_selection.json",
         "ledger/execution.jsonl",
         "control/allocations/manifest.json",
-        "control/allocations/crypto_settlement_engine.json",
-        "config/v7_crypto_settlement_markets.json",
-        "config/v7_native_risk_policy.json",
-        "control/legacy_native_claims.json",
-        "config/v7_crypto_signal_policy.json"
+        "config/v7_native_risk_policy.json"
       ],
       "outputs": [
         "control/native_engine_manager_status.json",
+        "control/pure_arb_multi_runtime.json",
         "native_engine_manager.log"
       ],
       "dependencies": [
@@ -367,15 +342,17 @@
     },
     {
       "id": "crypto_settlement_engine",
-      "executable": "${CRYPTO_SETTLEMENT_ENGINE}",
+      "executable": "${PURE_ARB_MULTI_RUNTIME}",
       "arguments": [],
       "profile": "engine",
-      "inputs": [],
+      "inputs": [
+        "control/pure_arb_multi_runtime.json",
+        "universe/book_selection.json"
+      ],
       "outputs": [
-        "control/native_evidence_status.json",
         "ledger/spool",
-        "native_engine.log",
-        "research/native_observations"
+        "control/pure_arb_latency.bin",
+        "native_pure_arb_multi_runtime.log"
       ],
       "dependencies": [],
       "exact_sha_required": true,
