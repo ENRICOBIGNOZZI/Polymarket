@@ -273,3 +273,26 @@ def test_incremental_graph_replay_is_deterministic(tmp_path: Path) -> None:
             shadow.update(row)
         return args.opportunities.read_text(),dict(shadow.funnel)
     assert replay("left")==replay("right")
+
+
+def test_shadow_reserves_shared_capital_once_per_snapshot(tmp_path: Path) -> None:
+    relations=[{"id":"same","enabled":True,"states":["y","n"],"guaranteed_payout":1,"legs":[
+                 {"selector":{"market_id":"a"},"outcome":"YES","payout_vector":[1,0]},
+                 {"selector":{"market_id":"a"},"outcome":"NO","payout_vector":[0,1]}]},
+               {"id":"cross","enabled":True,"states":["y","n"],"guaranteed_payout":1,"legs":[
+                 {"selector":{"market_id":"a"},"outcome":"YES","payout_vector":[1,0]},
+                 {"selector":{"market_id":"b"},"outcome":"NO","payout_vector":[0,1]}]}]
+    graph=compile_graph([_registry(relations)],_universe(),"a"*40)
+    args=SimpleNamespace(graph=tmp_path/"graph",tape=tmp_path/"tape",status=tmp_path/"status",opportunities=tmp_path/"opportunities",
+                         model_sha="a"*40,interval_ms=10,capital_limit="3")
+    shadow=Shadow(args);shadow.generation=graph["graph_generation"];shadow.relations=graph["relations"];shadow.index=graph["dependency_index"]
+    shadow.books["bn"]={"timestamp_ms":10,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0",
+                         "asks":[[".4","3"]],"bids":[[".6","3"]]}
+    row={"schema":"polymarket_v7_pure_arb_deep_book_snapshot_v1","model_sha":"a"*40,**SAFETY,
+         "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","receive_wall_ms":10,"market_id":"a",
+         "yes_token":"ay","no_token":"an","yes_ask_levels":[{"price":".4","size":"3"}],
+         "no_ask_levels":[{"price":".4","size":"3"}],"yes_bid_levels":[{"price":".6","size":"3"}],
+         "no_bid_levels":[{"price":".6","size":"3"}],"yes_ask_truncated":False,"no_ask_truncated":False}
+    shadow.update(row)
+    assert shadow.funnel["candidate_emitted"]==1 and shadow.funnel["capital_conflicts"]>=1
+    assert len(args.opportunities.read_text().splitlines())==1

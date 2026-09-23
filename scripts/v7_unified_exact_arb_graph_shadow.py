@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse,json,os,time
 from collections import Counter,defaultdict
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 from v7_unified_exact_arb_graph import SAFETY,evaluate
@@ -35,7 +36,7 @@ def native_binary_candidate(relation:dict[str,Any], result:dict[str,Any], now:in
 
 class Shadow:
  def __init__(self,a:argparse.Namespace):
-  self.a=a;self.offset=0;self.books={};self.generation="";self.generation_compiled_at_ms=0;self.relations=[];self.index={};self.funnel=Counter();self.funnel_by_family=defaultdict(Counter);self.rejects=Counter();self.rejects_by_family=defaultdict(Counter);self.dist=defaultdict(list);self.seen=set();self.pending=[];self.claims={};self.latency_us=[];self.capital_limit="0"
+  self.a=a;self.offset=0;self.books={};self.generation="";self.generation_compiled_at_ms=0;self.relations=[];self.index={};self.funnel=Counter();self.funnel_by_family=defaultdict(Counter);self.rejects=Counter();self.rejects_by_family=defaultdict(Counter);self.dist=defaultdict(list);self.seen=set();self.pending=[];self.claims={};self.capital_reserved={};self.latency_us=[];self.capital_limit="0"
  def capital(self):
   path=getattr(self.a,"capital_policy",None)
   if path is None:return str(getattr(self.a,"capital_limit","0"))
@@ -103,14 +104,26 @@ class Shadow:
      key=str(relation.get("economic_identity"))+":"+str(r.get("direction") or "BUY")+":"+str(now)
      self.funnel["raw_path_count"]+=1;self.funnel_by_family[family]["raw_path_count"]+=1
      if key not in event_seen:
+      claims=set()
+      if str(r.get("direction") or "") == "SELL":
+       claims.update("inventory:"+str(leg.get("token_id") or "") for leg in relation.get("legs") or [])
+      transform=relation.get("transformation") if isinstance(relation.get("transformation"),dict) else None
+      if transform is not None:claims.add("transformation:"+str(transform.get("id") or ""))
+      conflict=any((now,claim) in self.claims for claim in claims)
+      try:required,limit=Fraction(str(r["capital_required"])),Fraction(self.capital())
+      except (KeyError,TypeError,ValueError,ZeroDivisionError):required,limit=Fraction(1),Fraction(0)
+      reserved=self.capital_reserved.get(now,Fraction(0))
+      capital_conflict=reserved+required>limit
+      if conflict or capital_conflict:
+       event_seen.add(key)
+       self.funnel["capital_conflicts"]+=1;self.funnel_by_family[family]["capital_conflicts"]+=1
+       self.rejects["capital_conflict"]+=1;self.rejects_by_family[family]["capital_conflict"]+=1
+       continue
       event_seen.add(key);self.funnel["candidate_emitted"]+=1
       self.funnel["unique_economic_opportunity_count"]+=1;self.funnel_by_family[family]["unique_economic_opportunity_count"]+=1
-      claims={"collateral:"+str(relation.get("collateral_denomination") or "PUSD")}
-      claims.update("claim:"+str(leg.get("token_id") or "") for leg in relation.get("legs") or [])
-      conflict=any((now,claim) in self.claims for claim in claims)
-      if conflict:self.funnel["capital_conflicts"]+=1;self.funnel_by_family[family]["capital_conflicts"]+=1
       for claim in claims:self.claims[(now,claim)]=key
-      evidence={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1",**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","graph_generation":self.generation,"relation_id":relation.get("relation_id"),"trigger_token":token,"timestamp_ms":now,"counterfactual_modes":["SEQUENTIAL","PARALLEL","BATCH"],"capital_conflict":conflict,"execution_candidate":native_binary_candidate(relation,r,now),"result":r}
+      self.capital_reserved[now]=reserved+required
+      evidence={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1",**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","graph_generation":self.generation,"relation_id":relation.get("relation_id"),"trigger_token":token,"timestamp_ms":now,"counterfactual_modes":["SEQUENTIAL","PARALLEL","BATCH"],"capital_conflict":False,"execution_candidate":native_binary_candidate(relation,r,now),"result":r}
       with self.a.opportunities.open("a") as f:f.write(json.dumps(evidence,sort_keys=True)+"\n")
       for arm in (1,5,10,25,50):self.pending.append((now+arm,h,arm))
      else:
