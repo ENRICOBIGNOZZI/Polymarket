@@ -233,6 +233,17 @@ def test_selected_az_artifact_command_substitution_stays_inside_run_block():
     assert all(line.startswith("          ") for line in closers)
 
 
+def test_selected_az_generated_python_heredoc_compiles():
+    import sys
+    sys.path.insert(0, str(ROOT / "ops"))
+    from v7_selected_az_pure_arb_paper import remote_command
+    command = remote_command("a" * 40, 180, "ubuntu")
+    marker = "<<'PY'\n"
+    start = command.index(marker) + len(marker)
+    end = command.index("\nPY\nSTEP=cleanup", start)
+    compile(command[start:end], "<selected-az-generated-python>", "exec")
+
+
 def test_selected_az_paper_resolves_relative_registry_from_exact_sha_root():
     runner = (ROOT / "ops/v7_selected_az_pure_arb_paper.py").read_text()
     worktree = runner.index('worktree add --detach "$SRC"')
