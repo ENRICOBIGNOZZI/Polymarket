@@ -154,12 +154,31 @@ root=Path(sys.argv[1]); sha=sys.argv[2]
 def load(name):return json.loads((root/name).read_text())
 base=load("sign-noipo.json"); ipo=load("sign-ipo.json"); pgo=load("sign-pgo-use.json")
 handoff=load("handoff.json"); net=load("public-paired-clob.json")
-def sign(d):
-    x=d["latency_ns"]["parallel_pair_completion"]
+def dist5(x):
     return {"p50":x["p50"],"p95":x["p95"],"p99":x["p99"],"p999":x["p999"],"max":x["max"]}
+def sign(d):
+    return dist5(d["latency_ns"]["parallel_pair_completion"])
 def candidate(test,base):
     return test["p99"] <= base["p99"]*.90 and test["p999"] <= base["p999"]
+def pair_mode(d):
+    latency=d["latency_ns"]
+    serial=dist5(latency["serial_pair_completion"])
+    parallel=dist5(latency["parallel_pair_completion"])
+    serial_skew=dist5(latency["serial_leg_completion_skew"])
+    parallel_skew=dist5(latency["parallel_leg_completion_skew"])
+    return {
+      "serial":serial,
+      "parallel":parallel,
+      "serial_leg_completion_skew":serial_skew,
+      "parallel_leg_completion_skew":parallel_skew,
+      "parallel_p99_improvement_pct":
+        100*(serial["p99"]-parallel["p99"])/serial["p99"] if serial["p99"] else None,
+      "parallel_p999_improvement_pct":
+        100*(serial["p999"]-parallel["p999"])/serial["p999"] if serial["p999"] else None,
+      "parallel_promotion_candidate":candidate(parallel,serial),
+    }
 b=sign(base); i=sign(ipo); p=sign(pgo)
+bm=pair_mode(base); im=pair_mode(ipo); pm=pair_mode(pgo)
 perf={}
 if sys.argv[9]=="1":
     path=root/"perf-public.csv"
@@ -184,6 +203,11 @@ summary={
    "pgo_p99_improvement_pct":100*(b["p99"]-p["p99"])/b["p99"] if b["p99"] else None,
    "ipo_promotion_candidate":candidate(i,b),
    "pgo_promotion_candidate":candidate(p,b),
+ },
+ "signing_pair_mode":{
+   "noipo":bm,
+   "ipo":im,
+   "pgo":pm,
  },
  "handoff":handoff["latency_ns"],
  "direct_decision_queue_depth":0,
