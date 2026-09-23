@@ -79,6 +79,30 @@ jobs:
             cat "$ROOT/control/$name" 2>/dev/null || true
             echo
           done
+          echo "=== FATAL CHILD LOG TAILS ==="
+          for rel in \
+            public_https_proxy.log \
+            external_fair/rtds_monitor.log \
+            external_fair/external_assets_supervisor.log \
+            universe/collector.log \
+            clock_guard.log \
+            fencing_supervisor.log \
+            trade_recorder.log \
+            ledger_router.log \
+            native_engine_manager.log \
+            native_crypto_settlement_engine.log \
+            canonical_economics.log \
+            portfolio_guard.log
+          do
+            path="$ROOT/$rel"
+            echo "--- $rel ---"
+            if [[ -f "$path" ]]; then
+              stat -c 'mtime=%y bytes=%s' "$path" 2>/dev/null || true
+              tail -80 "$path" 2>/dev/null || true
+            else
+              echo MISSING
+            fi
+          done
           echo "=== RUN ROOT BOOTSTRAP MATERIAL ==="
           find "$ROOT" -maxdepth 3 \( -type f -o -type l \) -printf '%P\n' 2>/dev/null | sort | head -400 || true
           echo "--- bootstrap_receipt ---"
