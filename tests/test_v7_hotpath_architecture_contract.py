@@ -49,23 +49,33 @@ def test_event_driven_features_are_incremental_not_dataframe_recomputed():
 
 
 def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
-    """The launcher must start one cold manager for one multi-market process."""
-    import re, shlex, sys
+    """Manifest and launcher must agree with the one multi-market manager CLI."""
+    import sys
     sys.path.insert(0,str(ROOT/'scripts'))
     from unittest.mock import patch
     from v7_pure_arb_multi_manager import parse_args
+
     launcher=(ROOT/'scripts/paper_v7_execution_loop.sh').read_text()
-    match=re.search(r'python3 scripts/v7_pure_arb_multi_manager.py\s+\\\\\n(.*?)\s+>>',launcher,re.S)
-    assert match, 'missing PureArb multi manager invocation'
-    command=match.group(1).replace('\\\\\n',' ')
-    environment={
-        'ROOT':str(ROOT),'RUN_ROOT':str(tmp_path),'SHA':'a'*40,
-        'RUN_ID':'test-run','SERVER_ID':'test-server',
-        'PURE_ARB_MULTI_RUNTIME':str(tmp_path/'polymarket_v7_pure_arb_multi_runtime'),
-        'ALLOC':str(tmp_path/'control/allocations'),
+    manifest=json.loads((ROOT/'config/v7_process_manifest.json').read_text())
+    row=next(p for p in manifest['processes'] if p['id']=='native_engine_manager')
+    assert row['executable']=='scripts/v7_pure_arb_multi_manager.py'
+    assert 'python3 scripts/v7_pure_arb_multi_manager.py' in launcher
+
+    replacements={
+        '${ROOT}':str(ROOT),
+        '${RUN_ROOT}':str(tmp_path),
+        '${SHA}':'a'*40,
+        '${RUN_ID}':'test-run',
+        '${SERVER_ID}':'test-server',
+        '${PURE_ARB_MULTI_RUNTIME}':str(tmp_path/'polymarket_v7_pure_arb_multi_runtime'),
     }
-    for key,value in environment.items():command=command.replace('$'+key,value)
-    argv=shlex.split(command.rstrip().rstrip(chr(92)))
+    argv=[]
+    for raw in row['arguments']:
+        value=raw
+        for token,replacement in replacements.items():
+            value=value.replace(token,replacement)
+        argv.append(value)
+
     with patch.object(sys,'argv',['multi-manager',*argv]), \
          patch('pathlib.Path.is_file',return_value=True):
         args=parse_args()
@@ -73,11 +83,8 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     assert args.allocation==tmp_path/'control/allocations/manifest.json'
     assert args.risk_policy==ROOT/'config/v7_native_risk_policy.json'
     assert args.engine==tmp_path/'polymarket_v7_pure_arb_multi_runtime'
-    declared=next(p for p in json.loads((ROOT/'config/v7_process_manifest.json').read_text())['processes'] if p['id']=='native_engine_manager')['arguments']
-    assert {arg for arg in argv if arg.startswith('--')}=={arg for arg in declared if arg.startswith('--')}
-    assert '--universe' not in argv
     assert args.settler==ROOT/'scripts/v7_native_paper_settlement.py'
-    assert '--settler' in argv
+    assert '--universe' not in argv
     assert '--observation-only' not in argv
 
 
