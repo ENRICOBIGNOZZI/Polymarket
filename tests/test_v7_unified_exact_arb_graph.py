@@ -163,6 +163,7 @@ def test_fee_rounding_is_exact_and_missing_bid_depth_fails_closed() -> None:
                 "asks":[["1/2","1"]]}}
     out=evaluate(relation,books,1)
     assert out["accepted"] is True and out["net_locked_pnl"]=="49/100"
+    assert out["distance_to_after_fee_arbitrage"]=="-49/100"
 
 
 def test_verified_market_fee_exponent_is_applied_per_price_level() -> None:

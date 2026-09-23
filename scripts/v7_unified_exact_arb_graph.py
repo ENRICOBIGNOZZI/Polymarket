@@ -499,20 +499,24 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
     minimum=max((frac(leg.get("minimum_order",0))/coefficient for leg,_,_,_,_,coefficient in prepared),default=Fraction(0))
     cap=frac(capital_limit)
     def distances_for(direction: str) -> dict[str, str]:
+        raw_total, net_total = Fraction(0), Fraction(0)
+        for leg, asks, bids, fee, exponent, coefficient in prepared:
+            price = (asks if direction == "BUY" else bids)[0][0]
+            raw = price * coefficient
+            increment = frac(leg["fee_rounding_increment"]) if leg.get("fee_rounding_increment") is not None else None
+            rounded_fee = round_fee(coefficient * fee_per_share(price, fee, exponent), increment,
+                                    str(leg.get("fee_rounding_mode") or "EXACT"))
+            raw_total += raw
+            net_total += raw + rounded_fee if direction == "BUY" else raw - rounded_fee
         if direction == "BUY":
-            raw_touch=sum((asks[0][0]*coefficient for _,asks,_,_,_,coefficient in prepared),Fraction(0))
-            fee_touch=sum(((asks[0][0] + fee_per_share(asks[0][0], fee, exponent))*coefficient
-                           for _,asks,_,fee,exponent,coefficient in prepared),Fraction(0))
-            return {"distance_to_raw_arbitrage":fstr(raw_touch-guarantee),
-                    "distance_to_after_fee_arbitrage":fstr(fee_touch-guarantee),
-                    "distance_to_after_reserve_arbitrage":fstr(fee_touch+reserve-guarantee)}
-        raw_proceeds=sum((bids[0][0]*coefficient for _,_,bids,_,_,coefficient in prepared),Fraction(0))
-        net_proceeds=sum(((bids[0][0] - fee_per_share(bids[0][0], fee, exponent))*coefficient
-                         for _,_,bids,fee,exponent,coefficient in prepared),Fraction(0))
-        return {"distance_to_raw_arbitrage":fstr(guarantee-raw_proceeds),
-                "distance_to_after_fee_arbitrage":fstr(guarantee-net_proceeds),
-                "distance_to_after_reserve_arbitrage":fstr(guarantee+reserve-net_proceeds)}
-    distances=distances_for("BUY" if buy_enabled else "SELL")
+            return {"distance_to_raw_arbitrage":fstr(raw_total-guarantee),
+                    "distance_to_after_fee_arbitrage":fstr(net_total-guarantee),
+                    "distance_to_after_reserve_arbitrage":fstr(net_total+reserve-guarantee)}
+        return {"distance_to_raw_arbitrage":fstr(guarantee-raw_total),
+                "distance_to_after_fee_arbitrage":fstr(guarantee-net_total),
+                "distance_to_after_reserve_arbitrage":fstr(guarantee+reserve-net_total)}
+    try: distances=distances_for("BUY" if buy_enabled else "SELL")
+    except GraphError: return {"accepted": False, "reason": "fee_rounding_invalid"}
     saw_order, saw_depth, saw_capital, inventory_unavailable, transformation_limited = False, False, False, False, False
     transform = relation.get("transformation") if isinstance(relation.get("transformation"), dict) else None
     try: transformation_capacity = frac(transform["capacity"]) if transform is not None else None
@@ -563,7 +567,8 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
         return {"accepted": False, "reason": reason, **distances}
     if best[3] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
     direction, quantity, cost, pnl, capital = best
-    distances=distances_for(direction)
+    try: distances=distances_for(direction)
+    except GraphError: return {"accepted": False, "reason": "fee_rounding_invalid"}
     lock = relation.get("capital_lock_time_ms")
     if lock is None and transform is not None: lock = transform.get("capital_lock_time_ms")
     try: lock_value = int(lock) if lock is not None else None
