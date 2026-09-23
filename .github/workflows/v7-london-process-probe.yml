@@ -36,6 +36,10 @@ jobs:
       - name: Inspect London runtime and quarantine
         run: |
           set -euo pipefail
+          echo "=== AWS INSTANCE ==="
+          aws ec2 describe-instances --region "$AWS_REGION" --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].{InstanceId:InstanceId,InstanceType:InstanceType,State:State.Name,AvailabilityZone:Placement.AvailabilityZone,PrivateIp:PrivateIpAddress,CpuOptions:CpuOptions}' \
+            --output json
           payload="$(cat <<'SH'
           set -euo pipefail
           echo "=== LOCKS ==="
