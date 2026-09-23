@@ -57,18 +57,24 @@ jobs:
           echo "=== ACTIVE MODEL IDENTITY ==="
           python3 - "$ROOT/control/runtime_artifact_receipt.json" "$ROOT/micro_maker/execution_model.json" <<'PYMODEL'
           import hashlib,json,sys
-          rp,mp=sys.argv[1:3]
-          r=json.load(open(rp));m=json.load(open(mp))
+          from pathlib import Path
+          rp,mp=map(Path,sys.argv[1:3])
+          if not mp.is_file():
+              print(json.dumps({"maker_model_present":False},sort_keys=True)); raise SystemExit(0)
+          m=json.loads(mp.read_text())
+          r=json.loads(rp.read_text()) if rp.is_file() else {}
           ignored={"version","generated_ts_ms","model_sha","code_sha","training_source_model_shas","training_window","validation_window"}
           payload={k:v for k,v in m.items() if k not in ignored}
           mh=hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False).encode()).hexdigest()
-          ident_payload={"maker_economic_sha256":mh,"rich_state":str(r.get("rich_model_state") or "UNAVAILABLE"),"rich_model_hash":r.get("rich_model_hash")}
+          rich_state=str(r.get("rich_model_state") or "UNAVAILABLE")
+          rich_hash=r.get("rich_model_hash")
+          ident_payload={"maker_economic_sha256":mh,"rich_state":rich_state,"rich_model_hash":rich_hash}
           eid=hashlib.sha256(json.dumps(ident_payload,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False).encode()).hexdigest()
-          print(json.dumps({"maker_model_sha":m.get("model_sha"),"maker_model_state":m.get("model_state"),
+          print(json.dumps({"maker_model_present":True,"maker_model_sha":m.get("model_sha"),"maker_model_state":m.get("model_state"),
                             "maker_policy_hash":m.get("policy_hash"),"maker_config_hash":m.get("config_hash"),
-                            "maker_economic_sha256":mh,"rich_model_state":r.get("rich_model_state"),
-                            "rich_model_path":r.get("rich_model_path"),"economic_model_identity_sha256":eid},
-                           sort_keys=True,separators=(",",":")))
+                            "maker_economic_sha256":mh,"runtime_artifact_receipt_present":rp.is_file(),
+                            "rich_model_state":rich_state,"rich_model_path":r.get("rich_model_path"),
+                            "economic_model_identity_sha256":eid},sort_keys=True,separators=(",",":")))
           PYMODEL
           echo "--- KILL ---"
           if [[ -e "$ROOT/control/KILL" ]]; then
