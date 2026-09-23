@@ -1,0 +1,204 @@
+name: V7 selected-AZ PAPER cutover
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-selected-az-paper-cutover-request.json
+
+permissions:
+  contents: read
+  checks: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: polymarket-v7-selected-az-paper-cutover
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      REQUEST_PATH: deploy/v7-selected-az-paper-cutover-request.json
+      STACK_NAME: polymarket-v7-london-shootout
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate selected-AZ PAPER request
+        id: req
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$REQUEST_PATH"
+          parent_sha="${{ github.event.before }}"
+          python3 ops/v7_selected_az_cutover_request.py \
+            --request "$REQUEST_PATH" --parent-sha "$parent_sha" \
+            --role-arn "$ROLE_ARN" --github-output "$GITHUB_OUTPUT"
+
+      - name: Wait for target exact-SHA release gates
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.req.outputs.target_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1200))
+          while true; do
+            set +e
+            python3 scripts/v7_exact_sha_ci_gate.py \
+              --repository "$GITHUB_REPOSITORY" --sha "$TARGET_SHA" \
+              --required-check ci-v7-Release \
+              --required-check ci-v7-Debug \
+              --required-check sanitizer-v7 \
+              --required-check security-audit-v7 \
+              --required-check london-runtime-boundary-v7 \
+              --required-check monitoring-v7 \
+              --required-check single-writer-v7 \
+              --output "$RUNNER_TEMP/selected-az-ci-$TARGET_SHA.json"
+            rc=$?
+            set -e
+            [[ "$rc" == 0 ]] && break
+            (( SECONDS < deadline )) || exit "$rc"
+            sleep 5
+          done
+
+      - name: Download and prove exact latency shootout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.req.outputs.target_sha }}
+          LATENCY_RUN_ID: ${{ steps.req.outputs.latency_run_id }}
+          SELECTED_ZONE: ${{ steps.req.outputs.selected_physical_zone_id }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/latency-evidence"
+          mkdir -p "$evidence"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$LATENCY_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/artifacts.json"
+          artifact_id="$(python3 - "$RUNNER_TEMP/artifacts.json" "$LATENCY_RUN_ID" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1],encoding="utf-8")); run=sys.argv[2]
+rows=[x for x in v.get("artifacts",[]) if x.get("name")==f"v7-london-latency-{run}" and not x.get("expired")]
+assert len(rows)==1,rows
+print(rows[0]["id"])
+PY
+)"
+          gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/latency.zip"
+          unzip -q "$RUNNER_TEMP/latency.zip" -d "$evidence"
+          tar -xzf "$evidence/london-latency-results.tgz" -C "$evidence"
+          shootout="$evidence/latency.$TARGET_SHA.shootout.json"
+          test -s "$shootout"
+          python3 ops/v7_selected_az_cutover_request.py \
+            --request "$REQUEST_PATH" --parent-sha "${{ github.event.before }}" \
+            --role-arn "$ROLE_ARN" --shootout "$shootout"
+          cp "$shootout" selected-az-shootout.json
+
+      - name: Configure AWS credentials through GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-selected-az-paper
+          aws-region: eu-west-2
+          unset-current-credentials: true
+
+      - name: Prove selected zone instance binding
+        shell: bash
+        env:
+          SELECTED_ZONE: ${{ steps.req.outputs.selected_physical_zone_id }}
+          EXPECTED_INSTANCE_ID: ${{ steps.req.outputs.expected_instance_id }}
+        run: |
+          set -euo pipefail
+          aws cloudformation describe-stacks --region eu-west-2 --stack-name "$STACK_NAME" --output json > "$RUNNER_TEMP/stack.json"
+          python3 - "$RUNNER_TEMP/stack.json" "$SELECTED_ZONE" "$EXPECTED_INSTANCE_ID" <<'PY'
+import json,sys
+sys.path.insert(0,"ops")
+from v7_london_ssm_benchmark import stack_instances
+v=json.load(open(sys.argv[1],encoding="utf-8")); mapping=stack_instances(v)
+assert mapping[sys.argv[2]]==sys.argv[3],(mapping,sys.argv[2],sys.argv[3])
+PY
+          aws ssm describe-instance-information --region eu-west-2 --output json > "$RUNNER_TEMP/ssm.json"
+          python3 - "$RUNNER_TEMP/ssm.json" "$EXPECTED_INSTANCE_ID" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1],encoding="utf-8")); target=sys.argv[2]
+rows=[x for x in v.get("InstanceInformationList",[]) if x.get("InstanceId")==target and x.get("PingStatus")=="Online"]
+assert len(rows)==1,rows
+PY
+
+      - name: Build target-SHA PAPER artifact bundle
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.req.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/target-$TARGET_SHA"
+          git worktree add --detach "$target" "$TARGET_SHA"
+          artifact_root="$RUNNER_TEMP/runtime-artifacts"
+          source_root="$RUNNER_TEMP/research-source-empty"
+          archive_root="$RUNNER_TEMP/research-archive-empty"
+          durable_root="$RUNNER_TEMP/research-durable"
+          mkdir -p "$artifact_root" "$source_root" "$archive_root" "$durable_root"
+          (
+            cd "$target"
+            PM_V7_RESEARCH_SOURCE_ROOT="$source_root" \
+            PM_V7_RESEARCH_ARCHIVE_ROOT="$archive_root" \
+            PM_V7_RESEARCH_DURABLE_ROOT="$durable_root" \
+            PM_V7_RESEARCH_ARTIFACT_ROOT="$artifact_root" \
+              bash research/build_runtime_artifacts.sh "$TARGET_SHA"
+          )
+          bundle="$artifact_root/by-sha/$TARGET_SHA"
+          test -s "$bundle/manifest.json"
+          python3 - "$bundle/manifest.json" "$TARGET_SHA" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1],encoding="utf-8"))
+assert v["target_model_sha"]==sys.argv[2]
+assert v["paper_only"] is True and v["authenticated_execution"] is False and v["real_order_submission"] is False
+assert v["runtime_training"] is False
+PY
+          tar -C "$bundle" -czf "$RUNNER_TEMP/runtime-artifact-$TARGET_SHA.tgz" .
+
+      - name: Cut over selected host through AWS SSM
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.req.outputs.target_sha }}
+          EXPECTED_INSTANCE_ID: ${{ steps.req.outputs.expected_instance_id }}
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/selected-az-deploy.json"
+          python3 ops/v7_london_ssm_deploy.py \
+            --expected-sha "$TARGET_SHA" \
+            --expected-instance-id "$EXPECTED_INSTANCE_ID" \
+            --artifact "$RUNNER_TEMP/runtime-artifact-$TARGET_SHA.tgz" \
+            --region eu-west-2 --output "$receipt"
+          python3 - "$receipt" "$TARGET_SHA" "$EXPECTED_INSTANCE_ID" <<'PY'
+import json,sys
+v=json.load(open(sys.argv[1],encoding="utf-8"))
+assert v["schema"]=="polymarket_v7_ssm_deploy_receipt_v1"
+assert v["expected_sha"]==sys.argv[2]
+assert v["selected"]["instance_id"]==sys.argv[3]
+assert v["selected"]["selection_reason"]=="EXACT_INSTANCE_ID"
+assert v["cutover"]["sha"]==sys.argv[2]
+assert v["paper_only"] is True and v["authenticated_execution"] is False and v["real_order_submission"] is False
+PY
+          cp "$receipt" selected-az-deploy.json
+
+      - name: Upload selected-AZ cutover evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-selected-az-paper-cutover-${{ github.run_id }}
+          path: |
+            selected-az-deploy.json
+            selected-az-shootout.json
+          if-no-files-found: warn
+          retention-days: 30
