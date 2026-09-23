@@ -279,6 +279,14 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
             "ack_skew_p99_ns": int(network["ack_skew_ns"]["p99"]),
             "direct_p99_ns": int(row["handoff"]["direct"]["p99"]),
             "spsc_p99_ns": int(row["handoff"]["spsc_decision_core"]["p99"]),
+            "parallel_sign_p99_ns": int(row["signing"]["noipo"]["p99"]),
+            "parallel_sign_p999_ns": int(row["signing"]["noipo"]["p999"]),
+            "serial_sign_p99_ns": int(row["signing"]["noipo_serial"]["p99"]),
+            "serial_sign_p999_ns": int(row["signing"]["noipo_serial"]["p999"]),
+            "parallel_vs_serial_sign_p99_improvement_pct": row["signing"][
+                "parallel_vs_serial_p99_improvement_pct"],
+            "parallel_signing_promotion_candidate": bool(row["signing"][
+                "parallel_vs_serial_promotion_candidate"]),
             "ipo_sign_p99_ns": int(row["signing"]["ipo"]["p99"]),
             "ipo_sign_p999_ns": int(row["signing"]["ipo"]["p999"]),
             "pgo_sign_p99_ns": int(row["signing"]["pgo"]["p99"]),
