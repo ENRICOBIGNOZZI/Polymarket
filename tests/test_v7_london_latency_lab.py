@@ -206,6 +206,16 @@ def test_host_tuning_lab_is_reversible_and_default_off():
     assert "- include/pm/socket_tuning.hpp" in workflow
 
 
+def test_stage8_reducer_accepts_compact_host_tuning_profiles():
+    ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
+    assert 'p.get("name")' in ssm
+    assert 'p.get("promotion_candidate"' in ssm
+    assert 'p.get("p99_improvement_pct"' in ssm
+    assert 'p.get("p999_improvement_pct"' in ssm
+    assert 'p.get("failure_delta"' in ssm
+    assert 'p["profile"]["name"]' not in ssm
+
+
 def test_stage8_ssm_envelope_is_compact_and_full_evidence_stays_on_host():
     ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
     assert "polymarket_v7_host_latency_ab_compact_v1" in ssm
