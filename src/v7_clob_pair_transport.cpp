@@ -25,9 +25,10 @@ struct LaneJob {
 class LaneWorker final {
 public:
     LaneWorker(std::string_view host, std::uint16_t port, int timeout_ms,
-               int socket_busy_poll_us) noexcept
+               int socket_busy_poll_us, bool capture_rx_metadata) noexcept
         : session_(std::make_unique<PersistentTlsSession>(
-              host, port, timeout_ms, socket_busy_poll_us)) {}
+              host, port, timeout_ms, socket_busy_poll_us,
+              capture_rx_metadata)) {}
 
     ~LaneWorker() { stop(); }
 
@@ -152,10 +153,11 @@ struct PairPersistentTlsTransport::Impl {
     bool started = false;
 
     Impl(std::string_view host, std::uint16_t port, int timeout_ms,
-         int socket_busy_poll_us) noexcept
-        : yes(host, port, timeout_ms, socket_busy_poll_us),
-          no(host, port, timeout_ms, socket_busy_poll_us),
-          batch(host, port, timeout_ms, socket_busy_poll_us) {}
+         int socket_busy_poll_us, bool capture_rx_metadata) noexcept
+        : yes(host, port, timeout_ms, socket_busy_poll_us, capture_rx_metadata),
+          no(host, port, timeout_ms, socket_busy_poll_us, capture_rx_metadata),
+          batch(host, port, timeout_ms, socket_busy_poll_us,
+                capture_rx_metadata) {}
 
     [[nodiscard]] std::uint64_t epoch() noexcept {
         ++next_epoch;
@@ -173,9 +175,10 @@ struct PairPersistentTlsTransport::Impl {
 
 PairPersistentTlsTransport::PairPersistentTlsTransport(
     std::string_view host, std::uint16_t port, int timeout_ms,
-    int socket_busy_poll_us) noexcept
+    int socket_busy_poll_us, bool capture_rx_metadata) noexcept
     : impl_(std::make_unique<Impl>(
-          host, port, timeout_ms, socket_busy_poll_us)) {}
+          host, port, timeout_ms, socket_busy_poll_us,
+          capture_rx_metadata)) {}
 
 PairPersistentTlsTransport::~PairPersistentTlsTransport() {
     close();
