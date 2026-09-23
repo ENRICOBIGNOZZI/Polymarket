@@ -258,8 +258,8 @@ class Supervisor:
         self.started_at = int(time.time())
 
     def validate_static_contract(self) -> None:
-        if self.policy.get("version") != 7:
-            raise RuntimeError("supervision policy is not V7")
+        if self.policy.get("version") != 8:
+            raise RuntimeError("supervision policy version is not V8")
         if self.policy.get("paper_only") is not True:
             raise RuntimeError("supervision policy is not PAPER-only")
         for key in ("authenticated_execution", "real_order_submission", "real_capital_at_risk"):
