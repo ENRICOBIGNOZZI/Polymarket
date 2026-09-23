@@ -54,7 +54,7 @@ def terms(row,yes,no):
     }
 
 def test_builds_one_owner_config():
-    v=build_config(snapshot(),allocation(),SHA,"/tmp/latency.bin",terms_resolver=terms)
+    v=build_config(snapshot(),allocation(),SHA,"/tmp/latency.bin",terms_resolver=terms,now_s=1100)
     assert v["paper_only"] is True
     assert v["authenticated_execution"] is False
     assert v["real_order_submission"] is False
@@ -71,7 +71,7 @@ def test_builds_one_owner_config():
 
 def test_wrong_authority_fails():
     a=allocation(); a["capital_scope"]["independent_oms_authority"]=True
-    try: build_config(snapshot(),a,SHA,"/tmp/x",terms_resolver=terms)
+    try: build_config(snapshot(),a,SHA,"/tmp/x",terms_resolver=terms,now_s=1100)
     except ValueError as e: assert "capital_scope_invalid" in str(e)
     else: raise AssertionError("expected fail closed")
 
