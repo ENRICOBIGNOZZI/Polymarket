@@ -28,3 +28,13 @@ def test_runtime_and_research_process_manifests_are_disjoint():
 def test_runtime_dependencies_have_no_research_stack():
     runtime=(ROOT/'requirements-runtime.txt').read_text().lower()
     for name in ['jupyter','matplotlib','optuna','scikit','sklearn','pandas']: assert name not in runtime
+
+
+def test_cutover_forbidden_process_guard_matches_research_manifest_not_london_shadows():
+    cutover=(ROOT/'ops/v7_london_cutover.sh').read_text()
+    assert 'two_sided_complete_set_shadow' not in cutover.split('forbidden research process active on London',1)[0].split('pgrep -af',1)[-1]
+    assert 'v7_pm_repricing_shadow' in cutover
+    assert 'v7_external_rich_train' in cutover
+    runtime=json.loads((ROOT/'config/v7_process_manifest.json').read_text())
+    row=next(p for p in runtime['processes'] if p.get('executable')=='scripts/v7_two_sided_complete_set_shadow.py')
+    assert row.get('london_deployed') is True
