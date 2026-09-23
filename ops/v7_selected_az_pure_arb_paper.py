@@ -22,8 +22,8 @@ def remote_command(sha:str, duration:int, service_user:str)->str:
     if not 30 <= duration <= 1800: raise ValueError("duration out of range")
     return f'''set -euo pipefail
 APP=/home/{service_user}/polymarket
-SRC=/mnt/polymarket-data/benchmarks/selected-src-{sha}
 OUT=/mnt/polymarket-data/benchmarks/selected-pure-arb-{sha}
+SRC="$OUT/source"
 STEP=preflight
 dump_selected_failure() {{
   rc=$?
