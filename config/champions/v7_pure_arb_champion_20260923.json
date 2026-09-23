@@ -1,0 +1,62 @@
+{
+  "schema": "polymarket_v7_pure_arb_champion_v1",
+  "version": 1,
+  "frozen_at_utc": "2026-09-23",
+  "champion_name": "PURE_ARB_CHAMPION_20260923",
+  "champion_branch": "champion/pure-arb-20260923",
+  "model_sha": "6003f263937a75f83a12e8d1e13f72743f5716b0",
+  "deployment": {
+    "region": "eu-west-2",
+    "physical_zone_id": "euw2-az1",
+    "instance_id": "i-04042ca7da7a23215",
+    "mode": "PAPER_24_7"
+  },
+  "safety": {
+    "paper_only": true,
+    "authenticated_execution": false,
+    "real_order_submission": false,
+    "automatic_promotion": false
+  },
+  "frozen_policy": {
+    "reserve_per_share": 0.0005,
+    "maximum_leg_skew_ms": 100,
+    "maximum_receive_to_decision_ms": 50,
+    "prefunded_complete_set_shares": 1000,
+    "survival_arms_ms": [
+      1,
+      5,
+      10,
+      25,
+      50
+    ],
+    "causal_deep_book_levels_per_side": 1024,
+    "exchange_transport_delay_arms_ms": [
+      1,
+      2,
+      5,
+      10
+    ],
+    "exchange_inter_leg_skew_arms_ms": [
+      0,
+      1,
+      2,
+      5,
+      10
+    ],
+    "exchange_transport_modes": [
+      "SEQUENTIAL",
+      "PARALLEL",
+      "BATCH"
+    ]
+  },
+  "evidence_contract": {
+    "opportunity_tape": "research/repricing_book/pure_arb_trades.jsonl",
+    "causal_book_tape": "research/repricing_book/book_observations/current.jsonl",
+    "causal_deep_book_tape": "research/repricing_book/pure_arb_deep_book_snapshots.jsonl",
+    "survival_tape": "research/repricing_book/pure_arb_arrival_survival_cycles.jsonl",
+    "execution_counterfactual_tape": "research/repricing_book/exchange_execution_cycles.jsonl",
+    "latency_status": "research/repricing_book/pure_arb_status.json",
+    "capital_status": "research/repricing_book/capital_allocator_status.json"
+  },
+  "mutation_policy": "CHAMPION_MODEL_AND_PARAMETERS_IMMUTABLE; NEW IDEAS RUN AS CHALLENGERS"
+}
