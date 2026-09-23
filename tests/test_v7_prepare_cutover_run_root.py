@@ -458,3 +458,69 @@ def test_failed_activation_residue_stays_fail_closed_when_unsafe_or_stateful():
             cutover.CutoverArchiveError,'prior_runtime_safety_contract_invalid'):
             cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
 
+def _cooldown_activation_fixture(root: Path, *, safe: bool = True) -> None:
+    root.mkdir(parents=True,exist_ok=True)
+    (root/'control').mkdir(parents=True,exist_ok=True)
+    (root/'control/deployed_sha').write_text(OLD+'\n',encoding='utf-8')
+    write(root/'control/supervisor_status.json',{
+        'schema':'polymarket_v7_supervisor_status_v1',
+        'expected_sha':OLD,
+        'state':'restart_budget_cooldown',
+        'paper_only':True,
+        'authenticated_execution':False,
+        'real_order_submission':False,
+        'p0_full_stack_ready':False,
+        'child_pid':0,
+        'supervisor_pid':99999998,
+    })
+    write(root/'control/cutover_lineage.json',{
+        'schema':'polymarket_v7_cutover_lineage_v1',
+        'target_sha':OLD,
+        'paper_only':True,
+        'authenticated_execution':False,
+        'real_order_submission':False,
+        'ledger_rows':0 if safe else 1,
+        'native_carryover':None,
+        'prior_open_positions':{
+            'paper_account':0,'maker_active_orders':0,'native_open_orders':0,
+            'native_unsettled_markets':0,'native_carryover_microdollars':0,
+        },
+    })
+    ledger=root/'ledger/execution.jsonl'
+    ledger.parent.mkdir(parents=True,exist_ok=True)
+    ledger.write_text('',encoding='utf-8')
+
+
+def test_verified_zero_state_restart_cooldown_is_archived_from_lineage():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_cooldown_activation_fixture(root)
+        result=cutover.prepare(
+            root,base/'archives',base,NEW,now=128,
+            ancestor_check=lambda *_:True)
+        assert result['state']=='ARCHIVED_PRIOR_SHA'
+        assert result['prior_failed_activation_residue'] is True
+        assert result['prior_inventory_contract']=='FAILED_ACTIVATION_NO_RUNTIME'
+        assert result['ledger_rows']==0
+
+
+def test_restart_cooldown_lineage_must_prove_zero_economic_state():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_cooldown_activation_fixture(root,safe=False)
+        with unittest.TestCase().assertRaisesRegex(
+            cutover.CutoverArchiveError,'prior_runtime_safety_contract_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_cooldown_activation_fixture(root)
+        p=root/'control/cutover_lineage.json'
+        row=json.loads(p.read_text());row['prior_open_positions']['native_open_orders']=1;write(p,row)
+        with unittest.TestCase().assertRaisesRegex(
+            cutover.CutoverArchiveError,'prior_runtime_safety_contract_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';_cooldown_activation_fixture(root)
+        p=root/'control/supervisor_status.json'
+        row=json.loads(p.read_text());row['p0_full_stack_ready']=True;write(p,row)
+        with unittest.TestCase().assertRaisesRegex(
+            cutover.CutoverArchiveError,'prior_runtime_safety_contract_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+
