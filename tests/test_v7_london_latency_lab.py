@@ -3,6 +3,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_automatic_latency_pushes_supersede_only_older_automatic_runs():
+    workflow = (ROOT / ".github/workflows/v7-london-aws-provision.yml").read_text()
+    assert "cancel-in-progress: ${{ github.event_name == 'push' }}" in workflow
+    assert "- src/v7_public_event_to_wire_probe.cpp" in workflow
+    assert "Explicit infrastructure/formal workflow_dispatch runs are never cancelled" in workflow
+
+
 def test_causal_event_to_wire_probe_is_public_native_and_non_executing():
     probe = (ROOT / "src/v7_public_event_to_wire_probe.cpp").read_text()
     cmake = (ROOT / "CMakeLists.txt").read_text()
