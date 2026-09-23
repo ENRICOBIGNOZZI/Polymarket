@@ -147,6 +147,14 @@ def test_missing_bid_does_not_suppress_a_valid_buy_direction() -> None:
     assert evaluate(relation,books,1)["direction"]=="BUY"
 
 
+def test_nonpositive_buy_edge_is_never_emitted() -> None:
+    relation={"enabled":True,"guaranteed_payout":"1","legs":[
+        {"token_id":"y","coefficient":"1"},{"token_id":"n","coefficient":"1"}]}
+    books={token:{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0",
+                  "asks":[["3/5","1"]]} for token in ("y","n")}
+    assert evaluate(relation,books,1)["reason"]=="edge_after_costs_nonpositive"
+
+
 def test_fee_rounding_is_exact_and_missing_bid_depth_fails_closed() -> None:
     relation={"enabled":True,"directions":["BUY_BASKET"],"guaranteed_payout":"1","legs":[
         {"token_id":"x","coefficient":"1","minimum_order":"0","fee_rounding_increment":"1/100",

@@ -561,7 +561,7 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
         reason = ("capital_limit" if saw_capital else "transformation_capacity" if transformation_limited else "depth_insufficient" if saw_depth
                   else "inventory_unavailable" if inventory_unavailable else "minimum_order")
         return {"accepted": False, "reason": reason, **distances}
-    if best[2] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
+    if best[3] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
     direction, quantity, cost, pnl, capital = best
     distances=distances_for(direction)
     lock = relation.get("capital_lock_time_ms")
