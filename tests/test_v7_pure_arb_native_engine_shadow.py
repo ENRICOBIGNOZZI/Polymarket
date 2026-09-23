@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
 
-def test_native_shadow_is_same_process_and_zero_authority():
+def test_legacy_native_shadow_remains_zero_authority_and_undeployed():
     engine=(ROOT/"src/v7_crypto_settlement_engine.cpp").read_text()
     manager=(ROOT/"scripts/v7_native_crypto_engine_manager.py").read_text()
     manifest=(ROOT/"config/v7_process_manifest.json").read_text()
@@ -14,7 +14,8 @@ def test_native_shadow_is_same_process_and_zero_authority():
     assert '"pure_arb_execution_authority": False' in manager
     assert '"execution_handoff", false' in engine
     assert '"authority", "ZERO_AUTHORITY_RESEARCH_ONLY"' in engine
-    assert '"--observation-only"' in manifest
+    assert "scripts/v7_native_crypto_engine_manager.py" not in manifest
+    assert "${PURE_ARB_MULTI_RUNTIME}" in manifest
 
     start=engine.index("// Zero-authority complete-set arbitrage shadow.")
     end=engine.index("if (options.capture_native_observations",start)
