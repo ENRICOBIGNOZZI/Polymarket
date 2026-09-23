@@ -376,7 +376,44 @@ def prepare(
     )
     if deployed_sha and runtime_sha and runtime_sha != deployed_sha and not runtime_checkout_drift:
         raise CutoverArchiveError("previous_deployed_runtime_sha_mismatch")
-    if previous_sha == target_sha:
+
+    # A first PAPER activation can fail after the immutable deployment SHA is
+    # written but before runtime_status/portfolio/ledger state exists. Treat
+    # only that narrow, independently safe residue as archival state rather
+    # than pretending a trading runtime ever existed.
+    failed_activation_residue = False
+    if not runtime and deployed_sha:
+        bootstrap = read_json(run_root / "bootstrap_receipt.json")
+        bootstrap_sha = str(bootstrap.get("code_sha") or "")
+        ledger_path_early = run_root / "ledger/execution.jsonl"
+        spool_path_early = run_root / "ledger/spool"
+        failed_activation_residue = (
+            supervisor.get("schema") == "polymarket_v7_supervisor_status_v1"
+            and supervisor.get("expected_sha") == deployed_sha
+            and supervisor.get("state") == "failed"
+            and supervisor.get("paper_only") is True
+            and supervisor.get("authenticated_execution") is False
+            and supervisor.get("real_order_submission") is False
+            and int(supervisor.get("child_pid") or 0) == 0
+            and bootstrap.get("schema") == "polymarket_v7_london_bootstrap_receipt_v1"
+            and bootstrap.get("paper_only") is True
+            and bootstrap.get("authenticated_execution") is False
+            and bootstrap.get("real_order_submission") is False
+            and bootstrap.get("systemd_installed_but_disabled") is True
+            and SHA40.fullmatch(bootstrap_sha) is not None
+            and ancestor_check(repository_root, bootstrap_sha, target_sha)
+            and not (run_root / "control/KILL").exists()
+            and not read_json(run_root / "control/portfolio_state.json")
+            and not read_json(run_root / "control/native_engine_manager_status.json")
+            and not read_json(run_root / "external_fair/paper_router_status.json")
+            and not read_json(run_root / "micro_maker/authorized_make_executor_status.json")
+            and (not ledger_path_early.exists() or ledger_path_early.stat().st_size == 0)
+            and not (spool_path_early.exists() and any(spool_path_early.glob("*.json")))
+        )
+        if not failed_activation_residue:
+            raise CutoverArchiveError("prior_runtime_safety_contract_invalid")
+
+    if previous_sha == target_sha and not failed_activation_residue:
         _, _, model_sha_counts, _ = validate_ledger(
             run_root / "ledger/execution.jsonl", repository_root, target_sha, ancestor_check,
         )
@@ -385,7 +422,14 @@ def prepare(
         return {"state": "SAME_SHA_RECOVERY", "target_sha": target_sha, "archived": False}
     if not ancestor_check(repository_root, previous_sha, target_sha):
         raise CutoverArchiveError("previous_runtime_not_ancestor_of_target")
-    if runtime.get("paper_only") is not True or runtime.get("authenticated_execution") is not False or runtime.get("real_order_submission") is not False:
+    if (
+        not failed_activation_residue
+        and (
+            runtime.get("paper_only") is not True
+            or runtime.get("authenticated_execution") is not False
+            or runtime.get("real_order_submission") is not False
+        )
+    ):
         raise CutoverArchiveError("prior_runtime_safety_contract_invalid")
 
     portfolio = read_json(run_root / "control/portfolio_state.json")
@@ -410,7 +454,8 @@ def prepare(
     executor = read_json(run_root / "micro_maker/authorized_make_executor_status.json")
     native = read_json(run_root / "control/native_engine_manager_status.json")
     native_mode = (
-        native.get("schema") == "polymarket_v7_native_engine_manager_status_v1"
+        not failed_activation_residue
+        and native.get("schema") == "polymarket_v7_native_engine_manager_status_v1"
         and native.get("model_sha") == previous_sha
         and native.get("paper_only") is True
         and native.get("authenticated_execution") is False
@@ -426,7 +471,10 @@ def prepare(
     account_open = pending_maker = active_maker = 0
     native_open_count = 0
     native_unclean_stop = False
-    if native_mode:
+    if failed_activation_residue:
+        if account or executor or native:
+            raise CutoverArchiveError("failed_activation_position_state_present")
+    elif native_mode:
         try:
             active_workers = int(native.get("active_worker_count") or 0)
             engine_pid = int(native.get("engine_pid") or 0)
@@ -567,9 +615,11 @@ def prepare(
         "ledger_strategy_counts": ledger_strategy_counts,
         "runtime_checkout_drift_detected": runtime_checkout_drift,
         "prior_inventory_contract": (
-            "NATIVE_LEDGER_SINGLE_OWNER" if native_mode
+            "FAILED_ACTIVATION_NO_RUNTIME" if failed_activation_residue
+            else "NATIVE_LEDGER_SINGLE_OWNER" if native_mode
             else "LEGACY_PAPER_ACCOUNT_AND_MAKER_EXECUTOR"
         ),
+        "prior_failed_activation_residue": failed_activation_residue,
         "prior_native_unclean_stop": native_unclean_stop if native_mode else False,
         "prior_open_positions": durable_open,
         "native_carryover": None if carryover is None else {
