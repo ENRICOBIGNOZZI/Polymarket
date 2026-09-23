@@ -3,6 +3,33 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_causal_event_to_wire_probe_is_public_native_and_non_executing():
+    probe = (ROOT / "src/v7_public_event_to_wire_probe.cpp").read_text()
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
+    ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
+    assert "MarketWebSocketFeed" in probe
+    assert "MarketWsShard" in probe
+    assert "PersistentTlsSession" in probe
+    assert '"GET /time HTTP/1.1' in probe
+    assert "frame_receive_to_write_start" in probe
+    assert "frame_receive_to_http_ack" in probe
+    assert "APPLICATION_SSL_WRITE_CALL_START_NOT_KERNEL_OR_NIC_FIRST_BYTE" in probe
+    assert '"real_order_submission", false' in probe
+    assert '"authenticated_execution", false' in probe
+    for forbidden in (
+        '"POST /order', '"POST /orders', '"GET /order',
+        "NativeSettlementAuthority", "NativeClobOrderLane",
+        "private_key", "sign_prepared_poly1271",
+    ):
+        assert forbidden not in probe
+    assert "polymarket_v7_public_event_to_wire_probe" in cmake
+    assert "event-to-wire.json" in lab
+    assert '"event_to_public_wire":reaction' in lab
+    assert "event_receive_to_wire_start_p99_ns" in ssm
+    assert "event_receive_to_http_ack_p99_ns" in ssm
+
+
 def test_transport_probe_is_public_and_non_executing():
     source = (ROOT / "src/v7_public_paired_clob_transport_probe.cpp").read_text()
     header = (ROOT / "include/pm/v7_clob_pair_transport.hpp").read_text()
