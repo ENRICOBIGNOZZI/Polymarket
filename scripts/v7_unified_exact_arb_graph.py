@@ -157,6 +157,23 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
     return relation, nodes
 
 
+def automatic_binary_relations(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Generate only explicitly machine-attested same-condition partitions."""
+    result=[]
+    for market in markets:
+        mapping=token_map(market)
+        if (mapping is None or market.get("binary_partition_verified") is not True
+                or not str(market.get("condition_id") or "")
+                or len(str(market.get("settlement_semantic_hash") or "")) != 64): continue
+        selector={"market_id":str(market["market_id"])}
+        result.append({"id":"binary:"+str(market["market_id"]),"enabled":True,
+            "relation_family":"SAME_MARKET_BINARY_COMPLETE_SET","discovery":"AUTO_VERIFIED_BINARY_PARTITION",
+            "states":["YES","NO"],"guaranteed_payout":1,"legs":[
+            {"selector":selector,"outcome":"YES","coefficient":1,"payout_vector":[1,0]},
+            {"selector":selector,"outcome":"NO","coefficient":1,"payout_vector":[0,1]}]})
+    return result
+
+
 def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], model_sha: str) -> dict[str, Any]:
     if not safe(universe, model_sha): raise GraphError("unsafe_universe")
     sources: list[dict[str, Any]] = []
@@ -171,6 +188,7 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
         sources.extend(row for row in rows if isinstance(row, dict) and row.get("enabled") is True)
     markets = [row for row in universe.get("markets") or [] if isinstance(row, dict)
                and row.get("active") is True and row.get("closed") is not True]
+    sources.extend(automatic_binary_relations(markets))
     relations, nodes, rejected = [], {}, []
     for source in sources:
         try:
@@ -239,6 +257,11 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
     if not prepared: return {"accepted": False, "reason": "empty_relation"}
     if max(times) - min(times) > maximum_skew_ms: return {"accepted": False, "reason": "leg_skew"}
     guarantee, reserve, best = frac(relation["guaranteed_payout"]), frac(relation.get("reserve_per_unit", 0)), None
+    raw_touch=sum((depth[0][0]*coefficient for _,depth,_,coefficient in prepared),Fraction(0))
+    fee_touch=sum((depth[0][0]*(1+fee)*coefficient for _,depth,fee,coefficient in prepared),Fraction(0))
+    distances={"distance_to_raw_arbitrage":fstr(raw_touch-guarantee),
+               "distance_to_after_fee_arbitrage":fstr(fee_touch-guarantee),
+               "distance_to_after_reserve_arbitrage":fstr(fee_touch+reserve-guarantee)}
     for quantity in sorted(candidates):
         if quantity <= 0: continue
         total = Fraction(0)
@@ -249,11 +272,10 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
         else:
             pnl = quantity * guarantee - total - quantity * reserve
             if best is None or pnl > best[2]: best = (quantity, total, pnl)
-    if best is None or best[2] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive"}
+    if best is None or best[2] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
     quantity, cost, pnl = best
     return {"accepted": True, "reason": "candidate", "quantity": fstr(quantity), "capital_required": fstr(cost + quantity * reserve),
-            "net_locked_pnl": fstr(pnl), "distance_to_raw_arbitrage": fstr(cost / quantity - guarantee),
-            "distance_to_after_reserve_arbitrage": fstr((cost + quantity * reserve) / quantity - guarantee)}
+            "net_locked_pnl": fstr(pnl), **distances}
 
 
 def main() -> int:

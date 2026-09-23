@@ -28,3 +28,13 @@ def test_truncated_or_unproven_relation_is_not_actionable() -> None:
     # The evaluator specifically refuses a depth snapshot that cannot prove capacity.
     assert evaluate({"enabled":True,"legs":[{"token_id":"x","coefficient":"1"}],"guaranteed_payout":"1"},
                     {"x":{"lineage_continuous":True,"depth_truncated":True}}, 1)["reason"] == "truncated_depth"
+
+
+def test_machine_attested_binary_partition_is_auto_compiled() -> None:
+    model, semantic = "d" * 40, "e" * 64
+    universe={**SAFETY,"model_sha":model,"markets":[{"market_id":"m","condition_id":"c","active":True,"closed":False,
+        "binary_partition_verified":True,"asset":"BTC","horizon":"M5","contract_family":"binary","settlement_semantic_hash":semantic,
+        "clob_token_ids":["y","n"],"outcomes":["YES","NO"]}]}
+    registry={**SAFETY,"schema":"polymarket_v7_exact_arb_relation_registry_v1","version":1,"relations":[]}
+    graph=compile_graph([registry],universe,model)
+    assert graph["relations"][0]["relation_family"]=="SAME_MARKET_BINARY_COMPLETE_SET"

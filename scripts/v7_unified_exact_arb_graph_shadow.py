@@ -41,6 +41,14 @@ class Shadow:
     self.funnel["relations_considered"]+=1
     try:r=evaluate(self.relations[h],self.books,now)
     except Exception:r={"accepted":False,"reason":"evaluation_error"}
+    family=str(self.relations[h].get("relation_family") or "UNKNOWN")
+    for field in ("distance_to_raw_arbitrage","distance_to_after_fee_arbitrage","distance_to_after_reserve_arbitrage"):
+     try:self.dist[family+":"+field].append(float(r[field]))
+     except (KeyError,TypeError,ValueError):pass
+    for field,name in (("distance_to_raw_arbitrage","raw_positive"),("distance_to_after_fee_arbitrage","after_fee_positive"),("distance_to_after_reserve_arbitrage","after_reserve_positive")):
+     try:
+      if float(r.get(field,0))<0:self.funnel[name]+=1
+     except (TypeError,ValueError):pass
     if r.get("accepted"):
      key=str(self.relations[h].get("economic_identity"))+":"+str(now)
      if key not in event_seen:
@@ -62,7 +70,9 @@ class Shadow:
       except (ValueError,UnicodeDecodeError):continue
    except OSError:pass
    if time.monotonic()>=next_status:
-    atomic(self.a.status,{"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":"COLLECTING","graph_generation":self.generation,"relations_compiled":len(self.relations),"relations_evaluated":self.funnel["relations_considered"],"funnel":dict(self.funnel),"rejection_reasons":dict(self.rejects),"timestamp_ms":time.time_ns()//1_000_000});next_status=time.monotonic()+1
+    def pct(v):
+     v=sorted(v);return {str(p):v[min(len(v)-1,max(0,int(len(v)*p/100)-1))] for p in (.1,1,5,10,25,50,90,99)}|{"min":v[0]} if v else {}
+    atomic(self.a.status,{"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":"COLLECTING","graph_generation":self.generation,"relations_compiled":len(self.relations),"relations_evaluated":self.funnel["relations_considered"],"funnel":dict(self.funnel),"rejection_reasons":dict(self.rejects),"near_arbitrage":{k:pct(v) for k,v in self.dist.items()},"timestamp_ms":time.time_ns()//1_000_000});next_status=time.monotonic()+1
    time.sleep(max(.001,self.a.interval_ms/1000))
 def main()->int:
  p=argparse.ArgumentParser();p.add_argument("--graph",type=Path,required=True);p.add_argument("--tape",type=Path,required=True);p.add_argument("--status",type=Path,required=True);p.add_argument("--opportunities",type=Path,required=True);p.add_argument("--model-sha",required=True);p.add_argument("--interval-ms",type=int,default=10);a=p.parse_args()
