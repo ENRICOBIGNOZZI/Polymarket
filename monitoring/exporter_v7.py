@@ -582,6 +582,56 @@ def _render_exact_arb_warm_screen_metrics(status: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _render_exact_arb_hotset_selection_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_exact_arb_hotset_selection_status_v1"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("real_capital_at_risk") is False
+        and status.get("automatic_promotion") is False
+        and status.get("execution_authority") is False
+    )
+    return [
+        _metric("exact_arb_hotset_selection_up", safe and status.get("state") in {"READY", "EMPTY"}),
+        _metric("exact_arb_hotset_selection_ready", safe and status.get("state") == "READY"),
+        _metric("exact_arb_hotset_selected_relations", status.get("selected_relations")),
+        _metric("exact_arb_hotset_selected_markets", status.get("selected_markets")),
+        _metric("exact_arb_hotset_selected_tokens", status.get("selected_tokens")),
+    ]
+
+
+def _render_exact_arb_hotset_observer_metrics(status: dict[str, Any]) -> list[str]:
+    safe = (
+        status.get("schema") == "polymarket_v7_maker_fillability_ws_status_v1"
+        and status.get("paper_only") is True
+        and status.get("authenticated_execution") is False
+        and status.get("real_order_submission") is False
+        and status.get("pure_arb_paper_enabled") is False
+        and status.get("graph_continuous_deep_evidence") is True
+    )
+    return [
+        _metric("exact_arb_hotset_observer_up", safe and status.get("state") == "running"),
+        _metric("exact_arb_hotset_observer_subscribed_markets", status.get("subscribed_markets")),
+        _metric("exact_arb_hotset_observer_subscribed_tokens", status.get("subscribed_tokens")),
+        _metric("exact_arb_hotset_observer_observed_markets", status.get("observed_markets")),
+        _metric("exact_arb_hotset_observer_observed_tokens", status.get("observed_tokens")),
+        _metric("exact_arb_hotset_observer_subscription_coverage_complete",
+                status.get("subscription_coverage_complete")),
+        _metric("exact_arb_hotset_observer_feed_workers", status.get("feed_workers")),
+        _metric("exact_arb_hotset_observer_feed_connected_workers", status.get("feed_connected_workers")),
+        _metric("exact_arb_hotset_observer_feed_messages_total", status.get("feed_messages")),
+        _metric("exact_arb_hotset_observer_feed_reconnects_total", status.get("feed_reconnects")),
+        _metric("exact_arb_hotset_observer_feed_errors_total", status.get("feed_errors")),
+        _metric("exact_arb_hotset_observer_dropped_events_total", status.get("dropped_events")),
+        _metric("exact_arb_hotset_observer_decoder_failures_total", status.get("decoder_failures")),
+        _metric("exact_arb_hotset_observer_deep_snapshots_total",
+                status.get("pure_arb_deep_snapshots_written")),
+        _metric("exact_arb_hotset_observer_deep_queue_drops_total",
+                status.get("pure_arb_deep_queue_drops")),
+    ]
+
+
 def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]:
     safe = (status.get("schema") == "polymarket_v7_unified_exact_arb_graph_shadow_status_v1"
             and status.get("paper_only") is True and status.get("authenticated_execution") is False
@@ -820,6 +870,10 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         run_root / "research/repricing_book/exact_arb_exchange_universe_status.json")
     snapshot["exact_arb_warm_screen"] = _json(
         run_root / "research/repricing_book/unified_exact_arb_warm_status.json")
+    snapshot["exact_arb_hotset_selection"] = _json(
+        run_root / "research/repricing_book/unified_exact_arb_hotset_selection_status.json")
+    snapshot["exact_arb_hotset_observer"] = _json(
+        run_root / "research/repricing_book/graph_hotset/fillability_ws_status.json")
     snapshot["unified_exact_arb_graph"] = _json(
         run_root / "research/repricing_book/unified_exact_arb_graph_status.json")
     snapshot["unified_exact_arb_graph_execution"] = _json(
@@ -1202,6 +1256,8 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     lines.extend(_render_cross_market_exact_arb_metrics(snapshot.get("cross_market_exact_arb") or {}))
     lines.extend(_render_exact_arb_exchange_universe_metrics(snapshot.get("exact_arb_exchange_universe") or {}))
     lines.extend(_render_exact_arb_warm_screen_metrics(snapshot.get("exact_arb_warm_screen") or {}))
+    lines.extend(_render_exact_arb_hotset_selection_metrics(snapshot.get("exact_arb_hotset_selection") or {}))
+    lines.extend(_render_exact_arb_hotset_observer_metrics(snapshot.get("exact_arb_hotset_observer") or {}))
     lines.extend(_render_unified_exact_arb_graph_metrics(snapshot.get("unified_exact_arb_graph") or {}))
     lines.extend(_render_unified_exact_arb_graph_execution_metrics(snapshot.get("unified_exact_arb_graph_execution") or {}))
     retention=operations.get('retention') or {}
