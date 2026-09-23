@@ -74,7 +74,8 @@ build_one(){
   cmake --build "$dir" --parallel "$(nproc)" --target \
     polymarket_v7_paired_sign_bench \
     polymarket_v7_pure_arb_handoff_bench \
-    polymarket_v7_public_paired_clob_transport_probe >/dev/null
+    polymarket_v7_public_paired_clob_transport_probe \
+    polymarket_v7_public_event_to_wire_probe >/dev/null
 }
 
 build_one noipo OFF
@@ -97,6 +98,28 @@ run_sign pgo-use
 
 "$WORK/build-ipo/polymarket_v7_pure_arb_handoff_bench" --samples "$SAMPLES" \
   > "$OUT_DIR/handoff.json"
+
+mapfile -t PM_EVENT_TOKENS < <(python3 - "$WORK" <<'PY'
+import sys
+from pathlib import Path
+root=Path(sys.argv[1])
+sys.path.insert(0,str(root/"scripts"))
+from v7_public_book_wire_probe import discover_market
+market=discover_market()
+tokens=[str(x) for x in market.get("_tokens",[])]
+if len(tokens)<2 or tokens[0]==tokens[1]:
+    raise SystemExit("two distinct public market token ids required")
+print(tokens[0]); print(tokens[1])
+PY
+)
+[[ "${#PM_EVENT_TOKENS[@]}" == 2 ]]
+EVENT_SAMPLES="$SAMPLES"
+(( EVENT_SAMPLES > 250 )) && EVENT_SAMPLES=250
+"$WORK/build-ipo/polymarket_v7_public_event_to_wire_probe" \
+  --yes-token "${PM_EVENT_TOKENS[0]}" \
+  --no-token "${PM_EVENT_TOKENS[1]}" \
+  --samples "$EVENT_SAMPLES" --min-interval-ms 100 --timeout-seconds 180 \
+  > "$OUT_DIR/event-to-wire.json"
 
 install -m 0755 \
   "$WORK/build-ipo/polymarket_v7_public_paired_clob_transport_probe" \
@@ -154,6 +177,7 @@ root=Path(sys.argv[1]); sha=sys.argv[2]
 def load(name):return json.loads((root/name).read_text())
 base=load("sign-noipo.json"); ipo=load("sign-ipo.json"); pgo=load("sign-pgo-use.json")
 handoff=load("handoff.json"); net=load("public-paired-clob.json")
+reaction=load("event-to-wire.json")
 def dist5(x):
     return {"p50":x["p50"],"p95":x["p95"],"p99":x["p99"],"p999":x["p999"],"max":x["max"]}
 def sign(d):
@@ -211,6 +235,7 @@ summary={
  },
  "handoff":handoff["latency_ns"],
  "direct_decision_queue_depth":0,
+ "event_to_public_wire":reaction,
  "public_transport":net,
  "host_counters_delta":{
    "softirq":max(0,int(sys.argv[4])-int(sys.argv[3])),
