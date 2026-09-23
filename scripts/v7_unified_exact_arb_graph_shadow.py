@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Read-only incremental evaluator for compiled exact-arbitrage graph generations."""
+from __future__ import annotations
+import argparse,json,os,time
+from collections import Counter,defaultdict
+from pathlib import Path
+from typing import Any
+from v7_unified_exact_arb_graph import SAFETY,evaluate
+
+SCHEMA="polymarket_v7_unified_exact_arb_graph_shadow_status_v1"
+
+def load(path:Path)->dict[str,Any]:
+    try:v=json.loads(path.read_text())
+    except (OSError,json.JSONDecodeError):return {}
+    return v if isinstance(v,dict) else {}
+
+def atomic(path:Path,value:dict[str,Any])->None:
+    path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(path.suffix+".tmp")
+    tmp.write_text(json.dumps(value,sort_keys=True)+"\n");os.replace(tmp,path)
+
+class Shadow:
+ def __init__(self,a:argparse.Namespace):
+  self.a=a;self.offset=0;self.books={};self.generation="";self.relations=[];self.index={};self.funnel=Counter();self.rejects=Counter();self.dist=defaultdict(list);self.seen=set()
+ def graph(self):
+  g=load(self.a.graph)
+  if g.get("schema")!="polymarket_v7_unified_exact_arb_graph_v1" or any(g.get(k) is not v for k,v in SAFETY.items()):return
+  if g.get("graph_generation")!=self.generation:
+   self.generation=str(g.get("graph_generation") or "");self.relations=g.get("relations") or [];self.index=g.get("dependency_index") or {}
+ def update(self,row:dict[str,Any]):
+  if (row.get("schema")!="polymarket_v7_pure_arb_deep_book_snapshot_v1" or row.get("model_sha")!=self.a.model_sha or row.get("paper_only") is not True or row.get("authenticated_execution") is not False or row.get("real_order_submission") is not False or row.get("execution_authority")!="ZERO_AUTHORITY_RESEARCH_ONLY"):return
+  try: now=int(row["receive_wall_ms"]); mid=str(row["market_id"]);pairs=(("yes_token","yes_ask_levels","yes_ask_truncated"),("no_token","no_ask_levels","no_ask_truncated"))
+  except (KeyError,TypeError,ValueError):return
+  changed=[]
+  for token,levels,truncated in pairs:
+   t=str(row.get(token) or "")
+   if not t:continue
+   self.books[t]={"timestamp_ms":now,"lineage_continuous":True,"depth_truncated":row.get(truncated) is True,"asks":[[x.get("price"),x.get("size")] for x in row.get(levels) or []]};changed.append(t)
+  event_seen=set()
+  for token in changed:
+   for h in self.index.get(token,[]):
+    self.funnel["relations_considered"]+=1
+    try:r=evaluate(self.relations[h],self.books,now)
+    except Exception:r={"accepted":False,"reason":"evaluation_error"}
+    if r.get("accepted"):
+     key=str(self.relations[h].get("economic_identity"))+":"+str(now)
+     if key not in event_seen:
+      event_seen.add(key);self.funnel["candidate_emitted"]+=1
+      evidence={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1",**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","graph_generation":self.generation,"relation_id":self.relations[h].get("relation_id"),"trigger_token":token,"timestamp_ms":now,"result":r}
+      with self.a.opportunities.open("a") as f:f.write(json.dumps(evidence,sort_keys=True)+"\n")
+    else:self.rejects[str(r.get("reason") or "unknown")]+=1
+ def run(self):
+  self.a.opportunities.parent.mkdir(parents=True,exist_ok=True);next_status=0.
+  while True:
+   self.graph()
+   try:
+    with self.a.tape.open("rb") as f:
+     f.seek(self.offset)
+     for raw in f:
+      if not raw.endswith(b"\n"):break
+      self.offset=f.tell()
+      try:self.update(json.loads(raw))
+      except (ValueError,UnicodeDecodeError):continue
+   except OSError:pass
+   if time.monotonic()>=next_status:
+    atomic(self.a.status,{"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":"COLLECTING","graph_generation":self.generation,"relations_compiled":len(self.relations),"relations_evaluated":self.funnel["relations_considered"],"funnel":dict(self.funnel),"rejection_reasons":dict(self.rejects),"timestamp_ms":time.time_ns()//1_000_000});next_status=time.monotonic()+1
+   time.sleep(max(.001,self.a.interval_ms/1000))
+def main()->int:
+ p=argparse.ArgumentParser();p.add_argument("--graph",type=Path,required=True);p.add_argument("--tape",type=Path,required=True);p.add_argument("--status",type=Path,required=True);p.add_argument("--opportunities",type=Path,required=True);p.add_argument("--model-sha",required=True);p.add_argument("--interval-ms",type=int,default=10);a=p.parse_args()
+ if len(a.model_sha)!=40 or not 1<=a.interval_ms<=1000:raise SystemExit("invalid arguments")
+ Shadow(a).run();return 0
+if __name__=="__main__":raise SystemExit(main())
