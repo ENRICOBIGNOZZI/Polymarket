@@ -527,6 +527,11 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
              _metric("exact_arb_candidates_total", funnel.get("candidate_emitted", 0))]
     for key in ("relations_considered", "candidate_emitted"):
         lines.append(_metric("exact_arb_graph_funnel_total", funnel.get(key, 0), {"stage": key}))
+    for arm in (1, 5, 10, 25, 50):
+        checked = funnel.get(f"survival_{arm}ms_checked", 0)
+        survived = funnel.get(f"survival_{arm}ms", 0)
+        lines.append(_metric("exact_arb_survival_total", survived, {"delay_ms": arm}))
+        lines.append(_metric("exact_arb_survival_checked_total", checked, {"delay_ms": arm}))
     for reason, count in sorted((status.get("rejection_reasons") or {}).items()):
         lines.append(_metric("exact_arb_graph_rejections_total", count, {"reason": reason}))
     for key, values in sorted((status.get("near_arbitrage") or {}).items()):

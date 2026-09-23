@@ -20,7 +20,7 @@ def atomic(path:Path,value:dict[str,Any])->None:
 
 class Shadow:
  def __init__(self,a:argparse.Namespace):
-  self.a=a;self.offset=0;self.books={};self.generation="";self.relations=[];self.index={};self.funnel=Counter();self.rejects=Counter();self.dist=defaultdict(list);self.seen=set()
+  self.a=a;self.offset=0;self.books={};self.generation="";self.relations=[];self.index={};self.funnel=Counter();self.rejects=Counter();self.dist=defaultdict(list);self.seen=set();self.pending=[]
  def graph(self):
   g=load(self.a.graph)
   if g.get("schema")!="polymarket_v7_unified_exact_arb_graph_v1" or any(g.get(k) is not v for k,v in SAFETY.items()):return
@@ -35,6 +35,13 @@ class Shadow:
    t=str(row.get(token) or "")
    if not t:continue
    self.books[t]={"timestamp_ms":now,"lineage_continuous":True,"depth_truncated":row.get(truncated) is True,"asks":[[x.get("price"),x.get("size")] for x in row.get(levels) or []]};changed.append(t)
+  pending,self.pending=self.pending,[]
+  for due,h,arm in pending:
+   if now<due:self.pending.append((due,h,arm));continue
+   try:survived=evaluate(self.relations[h],self.books,now).get("accepted") is True
+   except (IndexError,KeyError,TypeError):survived=False
+   self.funnel["survival_"+str(arm)+"ms_checked"]+=1
+   if survived:self.funnel["survival_"+str(arm)+"ms"]+=1
   event_seen=set()
   for token in changed:
    for h in self.index.get(token,[]):
@@ -55,6 +62,7 @@ class Shadow:
       event_seen.add(key);self.funnel["candidate_emitted"]+=1
       evidence={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1",**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","graph_generation":self.generation,"relation_id":self.relations[h].get("relation_id"),"trigger_token":token,"timestamp_ms":now,"result":r}
       with self.a.opportunities.open("a") as f:f.write(json.dumps(evidence,sort_keys=True)+"\n")
+      for arm in (1,5,10,25,50):self.pending.append((now+arm,h,arm))
     else:self.rejects[str(r.get("reason") or "unknown")]+=1
  def run(self):
   self.a.opportunities.parent.mkdir(parents=True,exist_ok=True);next_status=0.
