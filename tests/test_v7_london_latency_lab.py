@@ -157,6 +157,17 @@ def test_multipath_outputs_are_service_user_owned_and_latency_evidence_survives_
     assert shootout < multipath_call
 
 
+def test_london_signing_report_compares_serial_and_parallel():
+    lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
+    ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
+    assert '"noipo_serial":serial' in lab
+    assert '"parallel_vs_serial_p99_improvement_pct"' in lab
+    assert '"parallel_vs_serial_promotion_candidate":candidate(b,serial)' in lab
+    assert '"parallel_sign_p99_ns"' in ssm
+    assert '"serial_sign_p99_ns"' in ssm
+    assert '"parallel_signing_promotion_candidate"' in ssm
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
