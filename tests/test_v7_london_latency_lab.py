@@ -28,6 +28,9 @@ def test_causal_event_to_wire_probe_is_public_native_and_non_executing():
     assert '"event_to_public_wire":reaction' in lab
     assert "event_receive_to_wire_start_p99_ns" in ssm
     assert "event_receive_to_http_ack_p99_ns" in ssm
+    assert "event_receive_to_http_ack_p999_ns" in ssm
+    assert "causal PM event receive-to-public HTTP ACK p99 then p999" in ssm
+    assert 'x["event_receive_to_http_ack_p99_ns"]' in ssm
 
 
 def test_transport_probe_is_public_and_non_executing():
