@@ -92,11 +92,26 @@ jobs:
           systemctl --no-pager --full status polymarket-v7-paper.service || true
           echo "=== SUPERVISOR CONTROL ==="
           ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
-          for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json runtime_artifact_receipt.json runtime_resource_plan.json fencing_supervisor_status.json native_engine_manager_status.json clock_guard.json; do
+          echo "--- KILL EARLY ---"
+          cat "$ROOT/control/KILL" 2>/dev/null || echo ABSENT
+          for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json runtime_artifact_receipt.json runtime_resource_plan.json fencing_supervisor_status.json clock_guard.json; do
             echo "--- $name ---"
             cat "$ROOT/control/$name" 2>/dev/null || true
             echo
           done
+          echo "--- native_engine_manager_status.summary ---"
+          python3 - "$ROOT/control/native_engine_manager_status.json" <<'PYNATIVE'
+          import json,sys
+          try:
+              v=json.load(open(sys.argv[1],encoding="utf-8"))
+          except Exception:
+              v={}
+          keys=("schema","model_sha","state","blocker","active_worker_count","managed_context_count",
+                "target_context_count","hot_cpuset","native_observations_written",
+                "native_observations_dropped","slow_context_failures","launch_retry_count",
+                "pending_settlement_count","paper_only","authenticated_execution","real_order_submission")
+          print(json.dumps({k:v.get(k) for k in keys},sort_keys=True))
+          PYNATIVE
           echo "=== FATAL CHILD LOG TAILS ==="
           for rel in \
             public_https_proxy.log \
