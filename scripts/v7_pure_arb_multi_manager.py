@@ -184,6 +184,14 @@ def build_config(
         markets.append({
             "market_handle": unique("market", market_id),
             "event_handle": unique("event", event_id),
+            "market_id": market_id,
+            "event_id": event_id,
+            "asset": str(row.get("asset") or ""),
+            "horizon": str(row.get("horizon") or ""),
+            "fee_source": ("GAMMA_FEES_DISABLED_EXPLICIT"
+                           if row.get("fees_enabled_explicit") is True
+                           and row.get("fees_enabled") is not True
+                           else "GAMMA_FEE_SCHEDULE"),
             "yes_instrument_handle": unique("token", yes_token),
             "no_instrument_handle": unique("token", no_token),
             "market_start_wall_ms": start_ms,
@@ -213,6 +221,11 @@ def build_config(
         "real_order_submission": False,
         "pm_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
         "latency_tape": str(latency_tape),
+        "run_root": str(latency_tape.parent.parent),
+        "model_sha": model_sha,
+        "run_id": "__RUNTIME_RUN_ID__",
+        "server_id": "__RUNTIME_SERVER_ID__",
+        "risk_policy_sha256": str(risk["risk_policy_sha256"]),
         "capital_limits": {
             "sleeve_budget_microdollars": int(limits["sleeve_budget_microdollars"]),
             "max_total_exposure_microdollars": int(limits["max_total_exposure_microdollars"]),
@@ -325,6 +338,8 @@ class Manager:
             latency_tape=self.latency_tape)
         self.contexts = contexts
         self.generation = str(selection.get("generation_sha256") or "")
+        config["run_id"] = self.args.run_id
+        config["server_id"] = self.args.server_id
         atomic_json(self.config_path, config)
         command = [str(self.args.engine), "--config", str(self.config_path)]
         hot = str(os.environ.get("PM_V7_HOT_CPUSET") or "").strip()
