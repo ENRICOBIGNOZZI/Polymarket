@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 
 from v7_execution_ledger import canonical_ledger_path, iter_events
-from v7_native_risk_policy import load_native_limits, unsettled_exposure
+from v7_native_risk_policy import load_native_limits, remaining_capital_lease, unsettled_exposure
 
 STATUS_SCHEMA = "polymarket_v7_native_engine_manager_status_v1"
 CONFIG_SCHEMA = "polymarket_v7_pure_arb_multi_runtime_v1"
@@ -116,20 +116,57 @@ def load_risk(risk_policy: Path, allocation: Path) -> dict[str, Any]:
     return load_native_limits(policy, alloc)
 
 
-def assert_zero_carryover(run_root: Path, model_sha: str) -> None:
+def ledger_state(
+    run_root: Path, model_sha: str,
+) -> tuple[dict[str, Any], dict[tuple[str, str], tuple[int, int]], set[str]]:
     ledger = canonical_ledger_path(run_root)
     if not ledger.is_file() or ledger.stat().st_size == 0:
-        return
-    rows = [asdict(event) for event in iter_events(
-        ledger, expected_model_sha=model_sha)]
+        exposure = {
+            "unsettled_market_claims_microdollars": {},
+            "total_unsettled_microdollars": 0,
+            "settled_markets": 0,
+            "paper_only": True,
+            "expected_model_sha": model_sha,
+        }
+        return exposure, {}, set()
+    events = list(iter_events(ledger, expected_model_sha=model_sha))
+    rows = [asdict(event) for event in events]
     exposure = unsettled_exposure(rows, model_sha)
-    if int(exposure.get("total_unsettled_microdollars") or 0) != 0:
-        raise RuntimeError("pure_arb_multi_cutover_requires_zero_unsettled_exposure")
+    unsettled = set(exposure["unsettled_market_claims_microdollars"])
+    inventory: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
+    for event in events:
+        if (event.event_type != "FILL" or event.market_id not in unsettled
+                or not event.token_id or not event.side
+                or event.filled_size is None or event.fill_price is None):
+            continue
+        qty = Decimal(str(event.filled_size))
+        price = Decimal(str(event.fill_price))
+        key = (event.market_id, event.token_id)
+        held, basis = inventory.get(key, (Decimal(0), Decimal(0)))
+        if event.side == "BUY":
+            held += qty
+            basis += qty * price
+        elif event.side == "SELL":
+            if held < qty:
+                raise RuntimeError("ledger_inventory_unbacked_sell")
+            basis = basis * (held - qty) / held if held else Decimal(0)
+            held -= qty
+        inventory[key] = (held, basis)
+    converted: dict[tuple[str, str], tuple[int, int]] = {}
+    for key, (held, basis) in inventory.items():
+        quantity = int((held * 1_000_000).to_integral_value())
+        collateral = int((basis * 1_000_000).to_integral_value())
+        if quantity < 0 or collateral < 0:
+            raise RuntimeError("ledger_inventory_negative")
+        converted[key] = (quantity, collateral)
+    return exposure, converted, unsettled
+
 
 
 def build_config(
     selection: dict[str, Any], *, model_sha: str, risk: dict[str, Any],
     latency_tape: Path,
+    inventory: dict[tuple[str, str], tuple[int, int]],
 ) -> tuple[dict[str, Any], list[str]]:
     if (selection.get("schema") != SELECTION_SCHEMA
             or selection.get("version") != 2
@@ -206,12 +243,14 @@ def build_config(
             "no_token": no_token,
             "yes_tick_size_e4": yes_tick,
             "no_tick_size_e4": no_tick,
-            # Zero is deliberate. SELL complete-set is admitted only after
-            # independently recovered prefunded inventory exists.
-            "yes_inventory_microunits": 0,
-            "no_inventory_microunits": 0,
-            "yes_collateral_basis_microdollars": 0,
-            "no_collateral_basis_microdollars": 0,
+            "yes_inventory_microunits":
+                inventory.get((market_id, yes_token), (0, 0))[0],
+            "no_inventory_microunits":
+                inventory.get((market_id, no_token), (0, 0))[0],
+            "yes_collateral_basis_microdollars":
+                inventory.get((market_id, yes_token), (0, 0))[1],
+            "no_collateral_basis_microdollars":
+                inventory.get((market_id, no_token), (0, 0))[1],
         })
     limits = dict(risk["limits"])
     return ({
@@ -250,8 +289,13 @@ class Manager:
         self.stopping = False
         self.generation = ""
         self.contexts: list[str] = []
-        self.risk = load_risk(args.risk_policy, args.allocation)
-        self.global_budget = int(self.risk["limits"]["sleeve_budget_microdollars"])
+        self.base_risk = load_risk(args.risk_policy, args.allocation)
+        self.current_risk = self.base_risk
+        self.global_budget = int(self.base_risk["limits"]["sleeve_budget_microdollars"])
+        self.unsettled_microdollars = 0
+        self.settlements: dict[str, subprocess.Popen[bytes]] = {}
+        self.settlement_retry_after: dict[str, float] = {}
+        self.settlement_failures = 0
 
     def status(self, state: str, blocker: str = "") -> None:
         alive = self.child is not None and self.child.poll() is None
@@ -274,11 +318,11 @@ class Manager:
             "partitioned_native_workers": False,
             "worker_process_count": 1 if alive else 0,
             "asynchronous_settlement": False,
-            "pending_settlement_markets": [],
-            "pending_settlement_count": 0,
-            "risk_policy_sha256": self.risk["risk_policy_sha256"],
+            "pending_settlement_markets": sorted(self.settlements),
+            "pending_settlement_count": len(self.settlements),
+            "risk_policy_sha256": self.base_risk["risk_policy_sha256"],
             "allocated_execution_budget_microdollars":
-                int(self.risk["canonical_engine_budget_microdollars"]),
+                int(self.base_risk["canonical_engine_budget_microdollars"]),
             "engine_pid": pid,
             "engine_pids": [pid] if pid else [],
             "hot_path_executable": str(self.args.engine),
@@ -296,10 +340,11 @@ class Manager:
             "partition_budget_microdollars": 0,
             "partition_count": 1,
             "partition_total_microdollars": self.global_budget,
-            "native_carryover_present": False,
-            "native_carryover_microdollars": 0,
-            "native_carryover_market_count": 0,
-            "new_risk_budget_microdollars": self.global_budget,
+            "native_carryover_present": self.unsettled_microdollars > 0,
+            "native_carryover_microdollars": self.unsettled_microdollars,
+            "native_carryover_market_count": len(self.settlements),
+            "new_risk_budget_microdollars": max(0, self.global_budget - self.unsettled_microdollars),
+            "settlement_blocked_count": self.settlement_failures,
             "pure_arb_native_shadow": False,
             "pure_arb_reserve_per_share": 0.0005,
             "pure_arb_max_leg_skew_ns": 100_000_000,
@@ -314,7 +359,6 @@ class Manager:
             "slow_context_failures": 0,
             "slow_context_error": "",
             "evidence_worker_count": 1 if alive else 0,
-            "settlement_blocked_count": 0,
             "configuration_generation_sha256": self.generation or None,
         })
 
@@ -332,10 +376,15 @@ class Manager:
             self.log_handle = None
 
     def launch(self, selection: dict[str, Any]) -> None:
-        assert_zero_carryover(self.run_root, self.args.model_sha)
+        exposure, inventory, _ = ledger_state(self.run_root, self.args.model_sha)
+        self.unsettled_microdollars = int(exposure["total_unsettled_microdollars"])
+        lease = remaining_capital_lease(self.base_risk, exposure)
+        if not lease.get("lease_available") or not isinstance(lease.get("limits"), dict):
+            raise RuntimeError("native_capital_fully_reserved_by_unsettled_exposure")
+        self.current_risk = lease
         config, contexts = build_config(
-            selection, model_sha=self.args.model_sha, risk=self.risk,
-            latency_tape=self.latency_tape)
+            selection, model_sha=self.args.model_sha, risk=lease,
+            latency_tape=self.latency_tape, inventory=inventory)
         self.contexts = contexts
         self.generation = str(selection.get("generation_sha256") or "")
         config["run_id"] = self.args.run_id
@@ -355,6 +404,48 @@ class Manager:
             stdout=self.log_handle, stderr=subprocess.STDOUT,
             env=os.environ.copy())
         self.status("RUNNING")
+
+    def reap_settlements(self) -> None:
+        for market_id, child in list(self.settlements.items()):
+            rc = child.poll()
+            if rc is None:
+                continue
+            del self.settlements[market_id]
+            if rc == 0:
+                self.settlement_retry_after.pop(market_id, None)
+            elif rc == 79:
+                self.settlement_retry_after[market_id] = time.monotonic() + 60.0
+            else:
+                self.settlement_failures += 1
+                self.settlement_retry_after[market_id] = time.monotonic() + 60.0
+
+    def start_settlements(self, selection: dict[str, Any]) -> None:
+        self.reap_settlements()
+        _, _, unsettled = ledger_state(self.run_root, self.args.model_sha)
+        rows = selection.get("markets") if isinstance(selection, dict) else []
+        current = {
+            str(row.get("market_id") or "") for row in (rows or [])
+            if isinstance(row, dict) and row.get("role") == "CURRENT"
+        }
+        now = time.monotonic()
+        for market_id in sorted(unsettled - current):
+            if len(self.settlements) >= 8:
+                break
+            if market_id in self.settlements or now < self.settlement_retry_after.get(market_id, 0.0):
+                continue
+            status = self.run_root / "control/native_paper_settlement" / f"{market_id}.json"
+            command = [
+                __import__("sys").executable, str(self.args.settler),
+                "--run-root", str(self.run_root),
+                "--model-sha", self.args.model_sha,
+                "--market-id", market_id,
+                "--timeout-seconds", "15",
+                "--status-path", str(status),
+            ]
+            self.settlements[market_id] = subprocess.Popen(
+                command, cwd=self.args.repository_root,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=os.environ.copy())
 
     def run(self) -> int:
         lock_path = self.run_root / "control/native_engine_manager.lock"
@@ -379,6 +470,7 @@ class Manager:
                     generation = str(selection.get("generation_sha256") or "")
                     if not generation:
                         raise RuntimeError("book_selection_generation_missing")
+                    self.start_settlements(selection)
                     if self.child is None:
                         self.launch(selection)
                     elif self.child.poll() is not None:
@@ -389,7 +481,6 @@ class Manager:
                         # Whole-process rollover is cold-plane and preserves the
                         # one-worker hot-path invariant.  Never roll with an
                         # unresolved PAPER capital claim.
-                        assert_zero_carryover(self.run_root, self.args.model_sha)
                         self.stop_child()
                         self.status("WAITING_FOR_ROLLOVER")
                         self.launch(selection)
@@ -405,6 +496,13 @@ class Manager:
                     # metadata refresh is temporarily unavailable.
                 time.sleep(0.5)
             self.stop_child()
+            for child in self.settlements.values():
+                if child.poll() is None:
+                    child.terminate()
+            for child in self.settlements.values():
+                try: child.wait(timeout=3)
+                except subprocess.TimeoutExpired: child.kill()
+            self.settlements.clear()
             self.status("STOPPED")
             return 0
 
@@ -420,11 +518,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--allocation", type=Path, required=True)
     p.add_argument("--risk-policy", type=Path, required=True)
     p.add_argument("--engine", type=Path, required=True)
+    p.add_argument("--settler", type=Path, required=True)
     args = p.parse_args()
     if not exact_sha(args.model_sha):
         p.error("--model-sha must be exact lowercase 40-hex SHA")
     if not args.engine.is_file():
         p.error("--engine must exist")
+    if not args.settler.is_file():
+        p.error("--settler must exist")
     return args
 
 
