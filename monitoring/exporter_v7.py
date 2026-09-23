@@ -529,6 +529,13 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
         lines.append(_metric("exact_arb_graph_funnel_total", funnel.get(key, 0), {"stage": key}))
     for reason, count in sorted((status.get("rejection_reasons") or {}).items()):
         lines.append(_metric("exact_arb_graph_rejections_total", count, {"reason": reason}))
+    for key, values in sorted((status.get("near_arbitrage") or {}).items()):
+        if not isinstance(values, dict): continue
+        family, _, stage = str(key).partition(":")
+        for percentile, value in sorted(values.items()):
+            lines.append(_metric("exact_arb_distance_to_arbitrage", value,
+                                 {"family": family or "UNKNOWN", "stage": stage or "UNKNOWN",
+                                  "percentile": percentile}))
     return lines
 
 

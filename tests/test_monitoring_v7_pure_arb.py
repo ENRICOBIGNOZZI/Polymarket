@@ -156,6 +156,15 @@ def test_unified_exact_graph_metrics_are_zero_authority_only() -> None:
     assert "exact_arb_graph_up 0" in "\n".join(exporter._render_unified_exact_arb_graph_metrics(status))
 
 
+def test_unified_graph_exports_near_arb_distribution() -> None:
+    status={"schema":"polymarket_v7_unified_exact_arb_graph_shadow_status_v1","paper_only":True,
+      "authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,
+      "automatic_promotion":False,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+      "near_arbitrage":{"SAME_MARKET_BINARY_COMPLETE_SET:distance_to_raw_arbitrage":{"min":-.01,"p50":.002}}}
+    rendered="\n".join(exporter._render_unified_exact_arb_graph_metrics(status))
+    assert "exact_arb_distance_to_arbitrage" in rendered and 'percentile="p50"' in rendered
+
+
 if __name__ == "__main__":
     test_canonical_exporter_emits_pure_arb_metrics()
     test_unsafe_status_never_exports_context_economics()
