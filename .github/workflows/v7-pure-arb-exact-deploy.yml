@@ -100,6 +100,50 @@ jobs:
           PM_V7_RESEARCH_SOURCE_ROOT="$source_root"             PM_V7_RESEARCH_ARCHIVE_ROOT="$archive_root"             PM_V7_RESEARCH_DURABLE_ROOT="$durable_root"             PM_V7_RESEARCH_ARTIFACT_ROOT="$artifact_root"             research/build_runtime_artifacts.sh "$TARGET_SHA"
           bundle="$artifact_root/by-sha/$TARGET_SHA"
           test -s "$bundle/manifest.json"
+          reviewed="$GITHUB_WORKSPACE/docs/research/pure-arb-champion-2026-09-23/reviewed_paper_activation_evidence.json"
+          test -s "$reviewed"
+          cp "$reviewed" "$bundle/reviewed_backtest_report"
+          python3 - "$bundle" "$TARGET_SHA" <<'PY'
+          import hashlib,json,sys
+          from pathlib import Path
+          sys.path.insert(0,"scripts")
+          from v7_model_runtime_approval import economic_identity
+          root=Path(sys.argv[1]); target=sys.argv[2]
+          manifest=json.loads((root/"manifest.json").read_text())
+          maker=json.loads((root/"maker_execution_model.json").read_text())
+          review=json.loads((root/"reviewed_backtest_report").read_text())
+          assert review["champion_semantic_sha"]=="6003f263937a75f83a12e8d1e13f72743f5716b0"
+          assert review["safety_contract"]=={
+              "paper_only":True,"authenticated_execution":False,
+              "real_order_submission":False,"real_capital_at_risk":False,
+              "automatic_promotion":False}
+          assert maker.get("model_state")=="COLD_START"
+          assert (manifest.get("rich_research_model") or {}).get("state")=="UNAVAILABLE"
+          identity=economic_identity(root/"manifest.json",root)
+          report_hash=hashlib.sha256((root/"reviewed_backtest_report").read_bytes()).hexdigest()
+          approval={
+              "schema":"polymarket_v7_model_runtime_approval_v1","version":1,
+              "approved":True,"approval_scope":"PAPER_RUNTIME_NEW_MODEL_ACTIVATION",
+              "explicit_user_approval_required":True,"review_backtest_before_approval":True,
+              "automatic_promotion":False,"target_model_sha":target,
+              "bundle_id":manifest["bundle_id"],
+              "economic_model_identity_sha256":identity["economic_model_identity_sha256"],
+              "approval_id":"pure-arb-champion-paper-20260923",
+              "backtest_report_path":"reviewed_backtest_report",
+              "backtest_report_sha256":report_hash,
+              "operator_authorization":"EXPLICIT_USER_FREEZE_AND_PAPER_24_7_2026_09_23",
+              "champion_semantic_sha":"6003f263937a75f83a12e8d1e13f72743f5716b0",
+              "paper_only":True,"authenticated_execution":False,
+              "real_order_submission":False,"real_capital_at_risk":False
+          }
+          (root/"model_runtime_approval.json").write_text(
+              json.dumps(approval,sort_keys=True,indent=2)+"\\n",encoding="utf-8")
+          PY
+          python3 scripts/v7_model_runtime_approval.py \
+            --manifest "$bundle/manifest.json" --artifact-root "$bundle" \
+            --approval "$bundle/model_runtime_approval.json" \
+            --reviewed-report "$bundle/reviewed_backtest_report" \
+            --target-sha "$TARGET_SHA" >/dev/null
           artifact_tgz="$RUNNER_TEMP/runtime-artifact-$TARGET_SHA.tgz"
           tar -C "$bundle" -czf "$artifact_tgz" .
           receipt="$RUNNER_TEMP/pure-arb-deploy-$TARGET_SHA.json"
