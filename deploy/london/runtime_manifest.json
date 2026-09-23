@@ -38,6 +38,7 @@
     "scripts/v7_crypto_universe.py",
     "scripts/v7_exact_relation_discovery.py",
     "scripts/v7_unified_exact_arb_graph.py",
+    "scripts/v7_unified_exact_arb_graph_shadow.py",
     "scripts/v7_exact_sha_ci_gate.py",
     "scripts/v7_external_source_registry.py",
     "scripts/v7_fee_reward_registry.py",

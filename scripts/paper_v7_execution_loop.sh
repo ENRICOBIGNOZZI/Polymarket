@@ -504,6 +504,14 @@ v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph.py \
   >> "$PURE_ARB_DIR/unified_exact_arb_graph.log" 2>&1 &
 v7_register_optional_child "$!"
 
+v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph_shadow.py \
+  --graph "$PURE_ARB_DIR/unified_exact_arb_graph.json" \
+  --tape "$PURE_ARB_DIR/pure_arb_deep_book_snapshots.jsonl" \
+  --status "$PURE_ARB_DIR/unified_exact_arb_graph_status.json" \
+  --opportunities "$PURE_ARB_DIR/unified_exact_arb_graph_opportunities.jsonl" \
+  --model-sha "$SHA" >> "$PURE_ARB_DIR/unified_exact_arb_graph_shadow.log" 2>&1 &
+v7_register_optional_child "$!"
+
 # Public Combo catalog. No credentials and no quoting authority.
 v7_exec_class COLLECTOR python3 scripts/v7_combo_market_source.py \
   --model-sha "$SHA" --output "$PURE_ARB_DIR/combo_market_source.json" \
@@ -815,7 +823,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 31
+v7_assert_registered_child_count 32
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
