@@ -372,6 +372,7 @@ jobs:
           python3 -m pytest \
             tests/test_v7_fee_reward_registry.py \
             tests/test_v7_hotpath_architecture_contract.py \
+            tests/test_v7_pure_arb_multi_manager.py \
             tests/test_v7_hotpath_data_plane.py \
             tests/test_v7_runtime_research_boundary.py -q
           python3 tests/test_v7_canonical_economics_health_loop.py
