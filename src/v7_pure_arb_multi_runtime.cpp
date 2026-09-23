@@ -2,6 +2,7 @@
 #include "pm/v7_native_latency_tape.hpp"
 #include "pm/v7_native_paper_execution.hpp"
 #include "pm/v7_native_settlement_oms_endpoint.hpp"
+#include "pm/v7_pure_arb_multi_ledger.hpp"
 #include "pm/v7_pure_arb_multi_engine.hpp"
 
 #include <boost/json.hpp>
@@ -87,6 +88,11 @@ json::object load(std::string_view path) {
 
 struct MarketRuntimeConfig {
     MultiMarketConfig arb{};
+    std::string market_id;
+    std::string event_id;
+    std::string asset;
+    std::string horizon;
+    std::string fee_source;
     std::string yes_token;
     std::string no_token;
     std::int32_t yes_tick_e4=0;
@@ -99,6 +105,11 @@ struct MarketRuntimeConfig {
 struct Config {
     std::string pm_ws_url;
     std::string latency_tape;
+    std::string run_root;
+    std::string model_sha;
+    std::string run_id;
+    std::string server_id;
+    std::string risk_policy_sha256;
     CapitalLimits capital{};
     std::vector<MarketRuntimeConfig> markets;
 };
@@ -113,6 +124,14 @@ Config parse_config(std::string_view path) {
     Config out{};
     out.pm_ws_url=string_at(root,"pm_ws_url");
     out.latency_tape=string_at(root,"latency_tape");
+    out.run_root=string_at(root,"run_root");
+    out.model_sha=string_at(root,"model_sha");
+    out.run_id=string_at(root,"run_id");
+    out.server_id=string_at(root,"server_id");
+    out.risk_policy_sha256=string_at(root,"risk_policy_sha256");
+    if(out.run_root.empty() || out.model_sha.size()!=40 || out.run_id.empty()
+       || out.server_id.empty() || out.risk_policy_sha256.size()!=64)
+        throw std::invalid_argument("ledger identity invalid");
     const auto& capital=object_at(root,"capital_limits");
     out.capital.sleeve_budget_microdollars=int_at(capital,"sleeve_budget_microdollars");
     out.capital.max_total_exposure_microdollars=int_at(capital,"max_total_exposure_microdollars");
@@ -130,6 +149,11 @@ Config parse_config(std::string_view path) {
         MarketRuntimeConfig m{};
         m.arb.market_handle=static_cast<std::uint64_t>(int_at(row,"market_handle"));
         m.arb.event_handle=static_cast<std::uint64_t>(int_at(row,"event_handle"));
+        m.market_id=string_at(row,"market_id");
+        m.event_id=string_at(row,"event_id");
+        m.asset=string_at(row,"asset");
+        m.horizon=string_at(row,"horizon");
+        m.fee_source=string_at(row,"fee_source");
         m.arb.yes_instrument_handle=static_cast<std::uint64_t>(int_at(row,"yes_instrument_handle"));
         m.arb.no_instrument_handle=static_cast<std::uint64_t>(int_at(row,"no_instrument_handle"));
         m.arb.market_start_wall_ms=int_at(row,"market_start_wall_ms");
@@ -148,7 +172,9 @@ Config parse_config(std::string_view path) {
         m.no_inventory=int_at(row,"no_inventory_microunits");
         m.yes_basis=int_at(row,"yes_collateral_basis_microdollars");
         m.no_basis=int_at(row,"no_collateral_basis_microdollars");
-        if(m.yes_token.empty() || m.no_token.empty()
+        if(m.market_id.empty() || m.event_id.empty() || m.asset.empty()
+           || m.horizon.empty() || m.fee_source.empty()
+           || m.yes_token.empty() || m.no_token.empty()
            || m.yes_tick_e4<=0 || m.no_tick_e4<=0
            || m.yes_inventory<0 || m.no_inventory<0
            || m.yes_basis<0 || m.no_basis<0) {
@@ -203,6 +229,23 @@ int main(int argc,char**argv){
         }
 
         NativeSettlementAuthority authority(config.capital);
+        PureArbMultiLedgerConfig ledger_config{};
+        ledger_config.run_root=config.run_root;
+        ledger_config.model_sha=config.model_sha;
+        ledger_config.run_id=config.run_id;
+        ledger_config.server_id=config.server_id;
+        ledger_config.risk_policy_sha256=config.risk_policy_sha256;
+        ledger_config.markets.reserve(config.markets.size());
+        for(const auto& m:config.markets){
+            ledger_config.markets.push_back(PureArbLedgerMarket{
+                m.market_id,m.event_id,m.asset,m.horizon,
+                m.yes_token,m.no_token,m.fee_source,
+                m.arb.yes_instrument_handle,m.arb.no_instrument_handle,
+                m.arb.fee_rate,m.arb.fee_exponent});
+        }
+        PureArbMultiLedgerWriter ledger(std::move(ledger_config));
+        if(ledger.snapshot().healthy==0)
+            throw std::runtime_error("multi ledger writer unavailable");
         for(const auto& m:config.markets){
             if(!authority.sync_inventory(m.arb.market_handle,
                     m.arb.yes_instrument_handle,m.yes_inventory,m.yes_basis,1)
@@ -271,7 +314,14 @@ int main(int argc,char**argv){
                     paired_fills+=executed.paired_fill;
                     one_leg_fills+=executed.one_leg_fill;
                     if(executed.invalid) ++invalid_pairs;
-                    if(!executed.accepted) ++no_fills;
+                    if(!executed.accepted) {
+                        ++no_fills;
+                    } else if(executed.paired_fill!=0) {
+                        if(!ledger.publish(decision.context_index,executed.yes.fill)
+                           || !ledger.publish(decision.context_index,executed.no.fill)) {
+                            ++invalid_pairs;
+                        }
+                    }
                 }
             },
             [&](std::size_t,std::string_view){
@@ -293,12 +343,17 @@ int main(int argc,char**argv){
         }
         feed.stop();
         tape.stop();
+        ledger.stop();
         const auto feed_status=feed.snapshot();
         const auto tape_status=tape.snapshot();
+        const auto ledger_status=ledger.snapshot();
         const bool clean=feed_status.workers==1
             && one_leg_fills==0 && invalid_pairs==0
             && tape_status.dropped==0 && tape_status.queued==0
-            && tape_status.published==tape_status.written;
+            && tape_status.published==tape_status.written
+            && ledger_status.healthy!=0 && ledger_status.dropped==0
+            && ledger_status.queued==0
+            && ledger_status.published==ledger_status.written;
         std::cout<<json::serialize(json::object{
             {"schema","polymarket_v7_pure_arb_multi_runtime_v1"},
             {"paper_only",true},{"authenticated_execution",false},
@@ -318,6 +373,10 @@ int main(int argc,char**argv){
             {"latency_published",tape_status.published},
             {"latency_written",tape_status.written},
             {"latency_dropped",tape_status.dropped},
+            {"ledger_published",ledger_status.published},
+            {"ledger_written",ledger_status.written},
+            {"ledger_dropped",ledger_status.dropped},
+            {"ledger_queue_depth",ledger_status.queued},
             {"clean",clean}})<<'\n';
         return clean?0:2;
     }catch(const std::exception& e){
