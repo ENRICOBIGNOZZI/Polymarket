@@ -118,6 +118,23 @@ jobs:
           wc -c "$ROOT/ledger/execution.jsonl" 2>/dev/null || true
           echo "--- spool files ---"
           find "$ROOT/ledger/spool" -type f -printf '%P %s\n' 2>/dev/null | sort | head -100 || true
+          echo "=== FATAL CHILD LOG TAILS ==="
+          for rel in \
+            public_https_proxy.log \
+            external_fair/rtds_monitor.log \
+            external_fair/external_assets_supervisor.log \
+            universe/collector.log \
+            clock_guard.log \
+            fencing_supervisor.log \
+            trade_recorder.log \
+            ledger_router.log \
+            native_engine_manager.log \
+            canonical_economics.log \
+            portfolio_guard.log
+          do
+            echo "--- $rel ---"
+            tail -80 "$ROOT/$rel" 2>/dev/null || true
+          done
           echo "=== ACTIVE MODEL IDENTITY ==="
           python3 - "$ROOT/control/runtime_artifact_receipt.json" "$ROOT/micro_maker/execution_model.json" <<'PYMODEL'
           import hashlib,json,sys
