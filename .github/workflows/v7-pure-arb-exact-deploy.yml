@@ -137,7 +137,7 @@ jobs:
               "real_order_submission":False,"real_capital_at_risk":False
           }
           (root/"model_runtime_approval.json").write_text(
-              json.dumps(approval,sort_keys=True,indent=2)+"\\n",encoding="utf-8")
+              json.dumps(approval,sort_keys=True,indent=2)+"\n",encoding="utf-8")
           PY
           python3 scripts/v7_model_runtime_approval.py \
             --manifest "$bundle/manifest.json" --artifact-root "$bundle" \
