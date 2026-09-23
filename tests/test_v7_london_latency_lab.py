@@ -235,7 +235,7 @@ def test_selected_az_artifact_command_substitution_stays_inside_run_block():
 
 def test_selected_az_paper_uses_detached_exact_sha_worktree():
     runner = (ROOT / "ops/v7_selected_az_pure_arb_paper.py").read_text()
-    assert "SRC=/mnt/polymarket-data/benchmarks/selected-src-" in runner
+    assert 'SRC="$OUT/source"' in runner
     assert 'worktree add --detach "$SRC"' in runner
     assert 'git -C "$SRC" rev-parse HEAD' in runner
     assert '"$SRC/scripts/v7_capital_allocator.py"' in runner
