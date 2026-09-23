@@ -332,6 +332,38 @@ def test_native_unclean_manager_with_live_pid_blocks(monkeypatch) -> None:
         p=root/'control/native_engine_manager_status.json'
         row=json.loads(p.read_text());row.update({'state':'STARTING','engine_pid':123});write(p,row)
         monkeypatch.setattr(cutover,'open_native_orders',lambda *_:{})
+        monkeypatch.setattr(cutover,'pid_alive',lambda pid: int(pid)==123)
+        with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'prior_native_manager_not_stopped'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+
+
+def test_stale_running_native_manager_with_dead_recorded_pids_can_archive(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';native_fixture(root)
+        p=root/'control/native_engine_manager_status.json'
+        row=json.loads(p.read_text())
+        row.update({
+            'state':'RUNNING','active_worker_count':2,
+            'engine_pid':123,'engine_pids':[123,124],
+            'workers':[{'pid':123},{'pid':124}],
+        })
+        write(p,row)
+        monkeypatch.setattr(cutover,'pid_alive',lambda _pid:False)
+        monkeypatch.setattr(cutover,'open_native_orders',lambda *_:{})
+        result=cutover.prepare(root,base/'archives',base,NEW,now=132,ancestor_check=lambda *_:True)
+        assert result['state']=='ARCHIVED_PRIOR_SHA'
+        assert result['prior_native_unclean_stop'] is True
+        assert result['prior_open_positions']['native_open_orders']==0
+
+
+def test_stale_native_worker_count_without_pid_identity_stays_fail_closed(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';native_fixture(root)
+        p=root/'control/native_engine_manager_status.json'
+        row=json.loads(p.read_text())
+        row.update({'state':'RUNNING','active_worker_count':2,'engine_pid':0,'engine_pids':[],'workers':[]})
+        write(p,row)
+        monkeypatch.setattr(cutover,'open_native_orders',lambda *_:{})
         with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'prior_native_manager_not_stopped'):
             cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
 
