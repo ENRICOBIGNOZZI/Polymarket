@@ -238,7 +238,8 @@ target_compile_options(polymarket_v7_crypto_settlement_engine PRIVATE
 # Dedicated complete-set arbitrage PAPER runtime: one PM feed worker, one
 # fixed multi-market state owner and one settlement authority.
 add_executable(polymarket_v7_pure_arb_multi_runtime
-  src/v7_pure_arb_multi_runtime.cpp)
+  src/v7_pure_arb_multi_runtime.cpp
+  src/v7_pure_arb_multi_ledger.cpp)
 target_link_libraries(polymarket_v7_pure_arb_multi_runtime PRIVATE
   pm_v7_common pm_fast_arb pm_core Threads::Threads)
 target_compile_options(polymarket_v7_pure_arb_multi_runtime PRIVATE
