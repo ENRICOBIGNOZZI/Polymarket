@@ -21,10 +21,12 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <csignal>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -68,9 +70,14 @@ T bounded_integer(std::string_view text, T lo, T hi) {
 }
 
 double bounded_double(std::string_view text, double lo, double hi) {
-    double value{};
-    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (result.ec != std::errc{} || result.ptr != text.data() + text.size()
+    // libc++ on the macOS toolchain intentionally does not provide floating
+    // point from_chars. This parser is CLI/control-plane only; retain the
+    // former whole-string, finite, bounded contract on every platform.
+    std::string owned{text};
+    char* end = nullptr;
+    errno = 0;
+    const double value = std::strtod(owned.c_str(), &end);
+    if (errno == ERANGE || end != owned.c_str() + owned.size()
         || !std::isfinite(value) || value < lo || value > hi) {
         throw std::invalid_argument("bounded floating point required");
     }
