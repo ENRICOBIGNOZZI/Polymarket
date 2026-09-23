@@ -509,12 +509,18 @@ def prepare(
             ]
         except (TypeError, ValueError, OverflowError) as exc:
             raise CutoverArchiveError("prior_native_manager_state_invalid") from exc
-        if (
-            active_workers != 0
-            or engine_pid != 0
-            or any(pid > 0 for pid in engine_pids)
-            or any(pid > 0 for pid in worker_pids)
-        ):
+        tracked_pids = sorted({
+            pid for pid in [engine_pid, *engine_pids, *worker_pids] if pid > 0
+        })
+        live_tracked_pids = [pid for pid in tracked_pids if pid_alive(pid)]
+        if live_tracked_pids:
+            raise CutoverArchiveError("prior_native_manager_not_stopped")
+        # A nonzero worker count without any recorded process identities cannot
+        # be proven quiescent, so remain fail-closed. If process identities are
+        # present and all are dead, the manager status may simply be stale after
+        # systemd killed the service cgroup; continue as an unclean-but-quiescent
+        # stop and still enforce open-order / ledger / carryover guards below.
+        if active_workers != 0 and not tracked_pids:
             raise CutoverArchiveError("prior_native_manager_not_stopped")
         manager_state = str(native.get("state") or "")
         if manager_state != "STOPPED":
