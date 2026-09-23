@@ -1,0 +1,76 @@
+name: V7 exact-arbitrage review
+
+on:
+  push:
+    branches: [research/unified-exact-arb-graph]
+  pull_request:
+    paths:
+      - 'scripts/v7_*arb*'
+      - 'include/pm/v7_*arb*'
+      - 'tests/*v7*arb*'
+      - '.github/workflows/v7-exact-arb-review.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-arb-review-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  python-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Source contracts (no network calls)
+        run: python3 -m unittest discover -s tests -p 'test_v7_exact_arb_exchange_source_contracts.py' -v
+      - name: Graph regression suite
+        run: |
+          python3 -m venv /tmp/exact-arb-review
+          /tmp/exact-arb-review/bin/pip install pytest
+          /tmp/exact-arb-review/bin/python -m pytest -q \
+            tests/test_v7_unified_exact_arb_graph.py \
+            tests/test_v7_exact_arb_adversarial.py
+  native-contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [Release, Debug, Sanitizer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build build-essential cmake pkg-config \
+            libcurl4-openssl-dev libboost-all-dev libssl-dev libsecp256k1-dev
+      - name: Build and test graph and unchanged champion
+        env:
+          VARIANT: ${{ matrix.variant }}
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          mode="$VARIANT"
+          extra=()
+          if [[ "$VARIANT" == Sanitizer ]]; then
+            mode=Debug
+            extra=(-DPM_V7_ENABLE_IPO=OFF \
+              '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
+              '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined')
+          fi
+          cmake -S . -B /tmp/exact-arb-native -G Ninja \
+            -DCMAKE_BUILD_TYPE="$mode" -DPM_LONDON_RUNTIME_ONLY=ON \
+            -DBUILD_TESTING=ON "${extra[@]}"
+          cmake --build /tmp/exact-arb-native --parallel 2 --target \
+            pm_v7_exact_arb_graph_hotpath_tests pm_v7_pure_arb_lane_tests \
+            pm_v7_pure_arb_replay_parity_tests pm_v7_pure_arb_multi_engine_tests
+          ctest --test-dir /tmp/exact-arb-native --output-on-failure \
+            -R '^pm_v7_(exact_arb_graph_hotpath|pure_arb_lane|pure_arb_replay_parity|pure_arb_multi_engine)_tests$'
