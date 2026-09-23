@@ -247,11 +247,19 @@ target_compile_options(polymarket_v7_crypto_settlement_engine PRIVATE
   -Wall -Wextra -Wpedantic)
 
 # Dedicated complete-set arbitrage PAPER runtime: one PM feed worker, one
-# fixed multi-market state owner and one settlement authority.
+# fixed multi-market state owner and one settlement authority. Ledger JSON and
+# filesystem work stays on one off-thread SPSC consumer.
+add_library(pm_v7_pure_arb_multi_ledger STATIC
+  src/v7_pure_arb_multi_ledger.cpp)
+target_link_libraries(pm_v7_pure_arb_multi_ledger PRIVATE
+  pm_v7_common Threads::Threads)
+target_compile_options(pm_v7_pure_arb_multi_ledger PRIVATE
+  -Wall -Wextra -Wpedantic)
+
 add_executable(polymarket_v7_pure_arb_multi_runtime
   src/v7_pure_arb_multi_runtime.cpp)
 target_link_libraries(polymarket_v7_pure_arb_multi_runtime PRIVATE
-  pm_v7_common pm_fast_arb pm_core Threads::Threads)
+  pm_v7_pure_arb_multi_ledger pm_v7_common pm_fast_arb pm_core Threads::Threads)
 target_compile_options(polymarket_v7_pure_arb_multi_runtime PRIVATE
   -Wall -Wextra -Wpedantic)
 
@@ -457,6 +465,14 @@ if(BUILD_TESTING)
   target_compile_options(pm_v7_pure_arb_multi_engine_tests PRIVATE -UNDEBUG)
   add_test(NAME pm_v7_pure_arb_multi_engine_tests
     COMMAND pm_v7_pure_arb_multi_engine_tests)
+
+  add_executable(pm_v7_pure_arb_multi_ledger_tests
+    tests/test_v7_pure_arb_multi_ledger.cpp)
+  target_link_libraries(pm_v7_pure_arb_multi_ledger_tests PRIVATE
+    pm_v7_pure_arb_multi_ledger pm_v7_common)
+  target_compile_options(pm_v7_pure_arb_multi_ledger_tests PRIVATE -UNDEBUG)
+  add_test(NAME pm_v7_pure_arb_multi_ledger_tests
+    COMMAND pm_v7_pure_arb_multi_ledger_tests)
 
   add_test(NAME pm_v7_native_clob_full_prewire_bench_smoke
     COMMAND polymarket_v7_native_clob_full_prewire_bench 64)
