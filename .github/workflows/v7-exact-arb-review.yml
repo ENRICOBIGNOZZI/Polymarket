@@ -34,7 +34,13 @@ jobs:
           /tmp/exact-arb-review/bin/pip install pytest
           /tmp/exact-arb-review/bin/python -m pytest -q \
             tests/test_v7_unified_exact_arb_graph.py \
-            tests/test_v7_exact_arb_adversarial.py
+            tests/test_v7_exact_arb_adversarial.py \
+            tests/test_v7_exact_arb_exchange_universe.py \
+            tests/test_v7_exact_arb_warm_scan.py \
+            tests/test_v7_exact_arb_hotset_selection.py \
+            tests/test_v7_maker_fillability_observer_contract.py \
+            tests/test_v7_process_manifest.py \
+            tests/test_monitoring_v7_pure_arb.py
   native-contracts:
     strategy:
       fail-fast: false
@@ -70,6 +76,7 @@ jobs:
             -DCMAKE_BUILD_TYPE="$mode" -DPM_LONDON_RUNTIME_ONLY=ON \
             -DBUILD_TESTING=ON "${extra[@]}"
           cmake --build /tmp/exact-arb-native --parallel 2 --target \
+            polymarket_v7_maker_fillability_observer \
             pm_v7_exact_arb_graph_hotpath_tests pm_v7_pure_arb_lane_tests \
             pm_v7_pure_arb_replay_parity_tests pm_v7_pure_arb_multi_engine_tests
           ctest --test-dir /tmp/exact-arb-native --output-on-failure \
