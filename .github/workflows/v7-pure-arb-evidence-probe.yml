@@ -39,6 +39,24 @@ jobs:
           payload="$(cat <<'SH'
           set -euo pipefail
           ROOT=/mnt/polymarket-data/paper_v7_london
+          echo "COLLECTOR_PROCESSES_BEGIN"
+          for pattern in \
+            v7_pure_arb_arrival_survival_shadow.py \
+            v7_pure_arb_deep_sizing_shadow.py \
+            v7_pure_arb_exchange_execution_shadow.py \
+            v7_two_sided_complete_set_shadow.py
+          do
+            matches="$(pgrep -af "$pattern" || true)"
+            echo "$pattern=$matches"
+            [[ -n "$matches" ]] || { echo "missing collector: $pattern" >&2; exit 3; }
+          done
+          echo "COLLECTOR_PROCESSES_END"
+          echo "COLLECTOR_LOG_TAILS_BEGIN"
+          for rel in pure_arb_arrival_survival.log pure_arb_deep_sizing.log exchange_execution.log two_sided_complete_set.log; do
+            echo "--- $rel ---"
+            tail -20 "$ROOT/research/repricing_book/$rel" 2>/dev/null || true
+          done
+          echo "COLLECTOR_LOG_TAILS_END"
           python3 - "$ROOT" <<'PY'
           import json,os,sys,time
           from pathlib import Path
