@@ -351,7 +351,10 @@ def test_causal_observer_persists_l10_ladders_and_runtime_wires_all_modes():
     assert "5000, 5500" in observer
     assert "capture_origin_wall_ms" in observer
     assert runtime.count("v7_complete_set_merge_shadow.py")==1
-    assert "v7_assert_registered_child_count 33" in runtime
+    manifest=json.loads((ROOT/"config/v7_process_manifest.json").read_text())
+    child_count=manifest["expected_launcher_child_count"]
+    assert type(child_count) is int and child_count > 0
+    assert f"v7_assert_registered_child_count {child_count}" in runtime
     assert '--merge-evidence "$RUN_ROOT/control/verified_complete_set_merge_evidence.json"' in runtime
     assert '--taker-tier-snapshot "$RUN_ROOT/control/verified_taker_tier.json"' in runtime
     assert '--account-source "$RUN_ROOT/control/account_execution_mode.json"' in runtime
@@ -382,6 +385,7 @@ def test_native_lane_classifies_restricted_http_responses_without_blind_retry():
         assert token in header and token in source
     assert "out.http_status == 425" in source
     assert "out.http_status == 503" in source
+    assert "out.http_status == 429" in source
     assert "out.http_status == 429" in source
     assert "never performs" in source and "automatic retry" in source
     assert 'iequals(name, "Retry-After")' in parser
