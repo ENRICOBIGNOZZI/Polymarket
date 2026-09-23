@@ -174,11 +174,9 @@ def test_service_entrypoint_auto_recovers_budget_but_not_safety_quarantine() -> 
     assert 'restart_budget_cooldown' in (ROOT / "ops/v7_runtime_supervisor.py").read_text()
 
 
-def test_service_entrypoint_expands_linux_affinity_before_supervisor() -> None:
+def test_service_entrypoint_preserves_housekeeping_affinity() -> None:
     entrypoint = (ROOT / "ops/v7_service_entrypoint.sh").read_text()
-    assert "/sys/devices/system/cpu/online" in entrypoint
-    assert 'taskset -pc "$online_cpus" "$"' in entrypoint
-    assert "cannot expand PAPER service CPU affinity" in entrypoint
-    widen = entrypoint.index('taskset -pc "$online_cpus" "$"')
-    supervisor = entrypoint.index('exec python3 "$APP_DIR/ops/v7_runtime_supervisor.py"')
-    assert widen < supervisor
+    assert "taskset -pc" not in entrypoint
+    planner = (ROOT / "scripts/v7_runtime_resource_plan.py").read_text()
+    assert "cpuset.cpus.effective" in planner
+    assert "_cgroup_effective_cpus" in planner
