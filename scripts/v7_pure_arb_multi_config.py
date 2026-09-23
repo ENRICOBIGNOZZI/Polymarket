@@ -126,10 +126,11 @@ def build_config(
     *,
     pm_ws_url: str = DEFAULT_WS,
     terms_resolver: Callable[[dict[str, Any], str, str], dict[str, Any]] = default_terms,
+    now_s: int | None = None,
 ) -> dict[str, Any]:
     if len(model_sha) != 40 or any(c not in "0123456789abcdef" for c in model_sha):
         raise ValueError("exact_model_sha_required")
-    selected = select_markets(snapshot, model_sha)
+    selected = select_markets(snapshot, model_sha, now_s=now_s)
     if not selected:
         raise ValueError("no_active_registered_markets")
     if len(selected) > MAX_MARKETS:
