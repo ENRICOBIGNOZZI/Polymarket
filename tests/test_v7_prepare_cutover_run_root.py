@@ -458,3 +458,11 @@ def test_failed_activation_residue_stays_fail_closed_when_unsafe_or_stateful():
             cutover.CutoverArchiveError,'prior_runtime_safety_contract_invalid'):
             cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
 
+def test_validate_ledger_missing_file_returns_four_fields():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d)
+        result=cutover.validate_ledger(
+            base/'missing.jsonl',base,NEW,lambda *_:True)
+        assert result==(0,cutover.hashlib.sha256(b'').hexdigest(),{},{})
+
+
