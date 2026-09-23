@@ -486,6 +486,16 @@ PURE_ARB_DIR="$RUN_ROOT/research/repricing_book"
 mkdir -p "$PURE_ARB_DIR"
 touch "$PURE_ARB_DIR/combo_rfq_tape.jsonl"
 
+# Exchange-wide exact-arbitrage discovery is a separate public observer plane.
+# It never changes the canonical crypto universe or champion selection.
+v7_exec_class COLLECTOR python3 scripts/v7_exact_arb_exchange_universe.py \
+  --model-sha "$SHA" \
+  --output "$PURE_ARB_DIR/exact_arb_exchange_universe.json" \
+  --status "$PURE_ARB_DIR/exact_arb_exchange_universe_status.json" \
+  --interval-seconds 60 --max-pages 50 \
+  >> "$PURE_ARB_DIR/exact_arb_exchange_universe.log" 2>&1 &
+v7_register_optional_child "$!"
+
 # Exact finite-state relations are discovered only from payoff-identical markets
 # and are independently proved with rational arithmetic before the cross-market
 # scanner may consume them.
@@ -498,7 +508,7 @@ v7_register_optional_child "$!"
 # Compiled graph generations are immutable, exact-proof-only and observer-only.
 # This process has no order, wallet, authenticated endpoint or capital authority.
 v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph.py \
-  --universe "$RUN_ROOT/universe/current.json" \
+  --universe "$PURE_ARB_DIR/exact_arb_exchange_universe.json" \
   --registry "$ROOT/config/v7_exact_arb_relations.json" \
   --registry "$PURE_ARB_DIR/exact_arb_relations.generated.json" \
   --component-status "$PURE_ARB_DIR/cross_market_exact_arb_status.json" \
@@ -510,6 +520,17 @@ v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph.py \
   --component-status "$PURE_ARB_DIR/combo_collateral_return_status.json" \
   --model-sha "$SHA" --output "$PURE_ARB_DIR/unified_exact_arb_graph.json" \
   >> "$PURE_ARB_DIR/unified_exact_arb_graph.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Non-atomic public REST screening only ranks relations for later causal hot
+# observation. It cannot emit actionable candidates or acquire execution authority.
+v7_exec_class COLLECTOR python3 scripts/v7_exact_arb_warm_scan.py \
+  --graph "$PURE_ARB_DIR/unified_exact_arb_graph.json" \
+  --status "$PURE_ARB_DIR/unified_exact_arb_warm_status.json" \
+  --hotset "$PURE_ARB_DIR/unified_exact_arb_hotset.json" \
+  --model-sha "$SHA" --interval-seconds 2 \
+  --max-tokens-per-cycle 500 --hotset-relations 64 \
+  >> "$PURE_ARB_DIR/unified_exact_arb_warm_screen.log" 2>&1 &
 v7_register_optional_child "$!"
 
 v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph_shadow.py \
