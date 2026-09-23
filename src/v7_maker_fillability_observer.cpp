@@ -300,13 +300,24 @@ load_selected_pairs(const fs::path& path, bool require_selection_only = false,
         throw std::runtime_error("fillability observer selection enables real order submission");
     }
     if (require_selection_only) {
-        if (text(find_value(object, "schema")) != "polymarket_v7_multi_crypto_book_selection_v1"
+        const auto schema = text(find_value(object, "schema"));
+        const bool schema_allowed =
+            schema == "polymarket_v7_multi_crypto_book_selection_v1"
+            || schema == "polymarket_v7_exact_arb_hotset_selection_v1";
+        if (!schema_allowed
             || !boolean(find_value(object, "selection_only"), false)
             || boolean(find_value(object, "execution_authority"), true)
             || boolean(find_value(object, "real_capital_at_risk"), true)
+            || boolean(find_value(object, "automatic_promotion"), true)
             || expected_model_sha.empty()
             || text(find_value(object, "model_sha")) != expected_model_sha) {
             throw std::runtime_error("selection-only contract invalid");
+        }
+        if (schema == "polymarket_v7_exact_arb_hotset_selection_v1"
+            && (text(find_value(object, "selection_purpose"))
+                    != "CAUSAL_HOT_OBSERVATION_PRIORITY_ONLY"
+                || boolean(find_value(object, "source_actionable"), true))) {
+            throw std::runtime_error("exact-arb hotset selection contract invalid");
         }
     }
     const auto* raw = find_value(object, "markets");
@@ -804,9 +815,11 @@ public:
             restore_pure_arb_status();
             pure_arb_output_.open(pure_arb_trades_path_, std::ios::app);
             if (!pure_arb_output_) throw std::runtime_error("cannot open pure arb PAPER evidence file");
+        }
+        if (pure_arb_paper_ || graph_deep_evidence_) {
             pure_arb_deep_book_output_.open(pure_arb_deep_book_path_, std::ios::app);
             if (!pure_arb_deep_book_output_) {
-                throw std::runtime_error("cannot open pure arb deep book evidence file");
+                throw std::runtime_error("cannot open causal deep book evidence file");
             }
         }
     }
@@ -815,7 +828,7 @@ public:
         const MarketWsEvent& event, const pm::fast::FeedReceiveStamp& receive,
         std::int64_t decode_complete_monotonic_ns,
         std::int64_t hot_enqueue_monotonic_ns) noexcept {
-        if (!pure_arb_paper_ || event.instrument_handle == 0
+        if ((!pure_arb_paper_ && !graph_deep_evidence_) || event.instrument_handle == 0
             || event.instrument_handle >= pure_arb_pair_by_handle_.size()
             || event.book.valid == 0 || event.book.lineage_continuous == 0) {
             return;
