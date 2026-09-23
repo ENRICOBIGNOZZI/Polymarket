@@ -385,23 +385,46 @@ def prepare(
     if not runtime and deployed_sha:
         bootstrap = read_json(run_root / "bootstrap_receipt.json")
         bootstrap_sha = str(bootstrap.get("code_sha") or "")
+        lineage = read_json(run_root / "control/cutover_lineage.json")
         ledger_path_early = run_root / "ledger/execution.jsonl"
         spool_path_early = run_root / "ledger/spool"
-        failed_activation_residue = (
-            supervisor.get("schema") == "polymarket_v7_supervisor_status_v1"
-            and supervisor.get("expected_sha") == deployed_sha
-            and supervisor.get("state") == "failed"
-            and supervisor.get("paper_only") is True
-            and supervisor.get("authenticated_execution") is False
-            and supervisor.get("real_order_submission") is False
-            and int(supervisor.get("child_pid") or 0) == 0
-            and bootstrap.get("schema") == "polymarket_v7_london_bootstrap_receipt_v1"
+        bootstrap_safe = (
+            bootstrap.get("schema") == "polymarket_v7_london_bootstrap_receipt_v1"
             and bootstrap.get("paper_only") is True
             and bootstrap.get("authenticated_execution") is False
             and bootstrap.get("real_order_submission") is False
             and bootstrap.get("systemd_installed_but_disabled") is True
             and SHA40.fullmatch(bootstrap_sha) is not None
             and ancestor_check(repository_root, bootstrap_sha, target_sha)
+        )
+        lineage_open = lineage.get("prior_open_positions")
+        lineage_zero = (
+            isinstance(lineage_open, dict)
+            and all(int(lineage_open.get(key) or 0) == 0 for key in (
+                "paper_account", "maker_active_orders", "native_open_orders",
+                "native_unsettled_markets", "native_carryover_microdollars"))
+        )
+        lineage_safe = (
+            lineage.get("schema") == "polymarket_v7_cutover_lineage_v1"
+            and lineage.get("target_sha") == deployed_sha
+            and lineage.get("paper_only") is True
+            and lineage.get("authenticated_execution") is False
+            and lineage.get("real_order_submission") is False
+            and int(lineage.get("ledger_rows") or 0) == 0
+            and lineage.get("native_carryover") is None
+            and lineage_zero
+            and ancestor_check(repository_root, deployed_sha, target_sha)
+        )
+        failed_activation_residue = (
+            supervisor.get("schema") == "polymarket_v7_supervisor_status_v1"
+            and supervisor.get("expected_sha") == deployed_sha
+            and supervisor.get("state") in {"failed", "restart_budget_cooldown"}
+            and supervisor.get("paper_only") is True
+            and supervisor.get("authenticated_execution") is False
+            and supervisor.get("real_order_submission") is False
+            and supervisor.get("p0_full_stack_ready") is not True
+            and int(supervisor.get("child_pid") or 0) == 0
+            and (bootstrap_safe or lineage_safe)
             and not (run_root / "control/KILL").exists()
             and not read_json(run_root / "control/portfolio_state.json")
             and not read_json(run_root / "control/native_engine_manager_status.json")
