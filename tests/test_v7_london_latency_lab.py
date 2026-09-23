@@ -206,6 +206,21 @@ def test_host_tuning_lab_is_reversible_and_default_off():
     assert "- include/pm/socket_tuning.hpp" in workflow
 
 
+def test_stage8_ssm_envelope_is_compact_and_full_evidence_stays_on_host():
+    ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
+    assert "polymarket_v7_host_latency_ab_compact_v1" in ssm
+    assert "'full_evidence_path':str(sys.argv[2])" in ssm
+    assert "'profiles':compact_profiles" in ssm
+    assert "v['host_tuning']=t" not in ssm
+    for key in (
+        "promotion_candidate", "p99_improvement_pct",
+        "p999_improvement_pct", "failure_delta",
+        "candidate_p99_ns", "baseline_p99_ns",
+        "candidate_p999_ns", "baseline_p999_ns",
+    ):
+        assert key in ssm
+
+
 def test_host_tuning_is_evidence_only_and_has_tail_gate():
     host = (ROOT / "ops/v7_host_latency_ab.py").read_text()
     assert 'cp99 <= bp99 * 0.90' in host

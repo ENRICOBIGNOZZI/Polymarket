@@ -216,8 +216,31 @@ assert t['paper_only'] is True
 assert t['authenticated_execution'] is False
 assert t['real_order_submission'] is False
 assert t['restored_exactly'] is True
+compact_profiles=[]
+for p in t.get('profiles',[]):
+    profile=p.get('profile') or {{}}
+    comparison=p.get('comparison') or {{}}
+    compact_profiles.append({{
+        'name':profile.get('name'),
+        'supported':bool(p.get('supported')),
+        'error':p.get('error'),
+        'promotion_candidate':bool(comparison.get('promotion_candidate',False)),
+        'p99_improvement_pct':comparison.get('p99_improvement_pct'),
+        'p999_improvement_pct':comparison.get('p999_improvement_pct'),
+        'failure_delta':comparison.get('failure_delta'),
+        'candidate_p99_ns':comparison.get('candidate_p99_ns'),
+        'baseline_p99_ns':comparison.get('baseline_p99_ns'),
+        'candidate_p999_ns':comparison.get('candidate_p999_ns'),
+        'baseline_p999_ns':comparison.get('baseline_p999_ns'),
+    }})
 v['physical_zone_id']='{zone_id}'
-v['host_tuning']=t
+v['host_tuning']={{
+    'schema':'polymarket_v7_host_latency_ab_compact_v1',
+    'restored_exactly':True,
+    'persistent_tuning':False,
+    'full_evidence_path':str(sys.argv[2]),
+    'profiles':compact_profiles,
+}}
 print('V7_LATENCY='+json.dumps(v,sort_keys=True,separators=(',',':')))
 PY'''
 
