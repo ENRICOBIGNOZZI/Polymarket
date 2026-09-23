@@ -202,6 +202,30 @@ def test_warm_screen_metrics_cannot_claim_actionable_candidates() -> None:
         exporter._render_exact_arb_warm_screen_metrics(status))
 
 
+def test_hotset_selection_and_causal_observer_metrics_are_separate_from_champion() -> None:
+    selection={"schema":"polymarket_v7_exact_arb_hotset_selection_status_v1","state":"READY",
+      "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+      "real_capital_at_risk":False,"automatic_promotion":False,"execution_authority":False,
+      "selected_relations":12,"selected_markets":20,"selected_tokens":40}
+    rendered="\n".join(exporter._render_exact_arb_hotset_selection_metrics(selection))
+    assert "exact_arb_hotset_selection_up 1" in rendered
+    assert "exact_arb_hotset_selected_markets 20" in rendered
+
+    observer={"schema":"polymarket_v7_maker_fillability_ws_status_v1","state":"running",
+      "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+      "pure_arb_paper_enabled":False,"graph_continuous_deep_evidence":True,
+      "subscribed_markets":20,"subscribed_tokens":40,"observed_markets":20,"observed_tokens":40,
+      "subscription_coverage_complete":True,"feed_workers":1,"feed_connected_workers":1,
+      "feed_messages":100,"feed_reconnects":0,"feed_errors":0,"dropped_events":0,
+      "decoder_failures":0,"pure_arb_deep_snapshots_written":20,"pure_arb_deep_queue_drops":0}
+    rendered="\n".join(exporter._render_exact_arb_hotset_observer_metrics(observer))
+    assert "exact_arb_hotset_observer_up 1" in rendered
+    assert "exact_arb_hotset_observer_subscription_coverage_complete 1" in rendered
+    observer["pure_arb_paper_enabled"]=True
+    assert "exact_arb_hotset_observer_up 0" in "\n".join(
+        exporter._render_exact_arb_hotset_observer_metrics(observer))
+
+
 def test_unified_graph_execution_metrics_remain_zero_authority_only() -> None:
     status={"schema":"polymarket_v7_pure_arb_exchange_execution_status_v1","state":"COLLECTING",
       "paper_only":True,"authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,
