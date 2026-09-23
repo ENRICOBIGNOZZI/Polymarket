@@ -226,6 +226,17 @@ target_link_libraries(polymarket_v7_public_paired_clob_transport_probe PRIVATE
 target_compile_options(polymarket_v7_public_paired_clob_transport_probe PRIVATE
   -Wall -Wextra -Wpedantic)
 
+# Causal public latency probe: real PM market event receive/decode followed by
+# a public GET /time over preconnected TLS. It never builds or submits orders.
+if(NOT PM_LONDON_RUNTIME_ONLY OR PM_LONDON_LATENCY_BENCHMARKS)
+add_executable(polymarket_v7_public_event_to_wire_probe
+  src/v7_public_event_to_wire_probe.cpp)
+target_link_libraries(polymarket_v7_public_event_to_wire_probe PRIVATE
+  pm_v7_clob_native pm_v7_common pm_fast_arb pm_core Threads::Threads)
+target_compile_options(polymarket_v7_public_event_to_wire_probe PRIVATE
+  -Wall -Wextra -Wpedantic)
+endif()
+
 # One canonical London PAPER native executable; no parallel candidate runtime.
 add_executable(polymarket_v7_crypto_settlement_engine
   src/v7_crypto_settlement_engine.cpp)
@@ -339,6 +350,10 @@ if(BUILD_TESTING)
 
   add_test(NAME pm_v7_public_paired_clob_transport_probe_validate
     COMMAND polymarket_v7_public_paired_clob_transport_probe --validate-only)
+  if(TARGET polymarket_v7_public_event_to_wire_probe)
+  add_test(NAME pm_v7_public_event_to_wire_probe_validate
+    COMMAND polymarket_v7_public_event_to_wire_probe --validate-only)
+  endif()
   add_test(NAME pm_v7_public_paired_clob_transport_probe_reject_busy_poll
     COMMAND polymarket_v7_public_paired_clob_transport_probe
       --socket-busy-poll-us 2001 --validate-only)
