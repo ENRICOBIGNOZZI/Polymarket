@@ -152,6 +152,19 @@ def prove(raw: dict[str, Any]) -> dict[str, Any]:
     """Equality is actionable; proven inequalities are retained but disabled."""
     kind=str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY")
     if kind == "CONSTANT_PAYOUT_EQUALITY": return prove_relation(raw)
+    if kind == "LOGICAL_IMPLICATION":
+        states, lhs, rhs = raw.get("states"), raw.get("antecedent_payout_vector"), raw.get("consequent_payout_vector")
+        if (not isinstance(states,list) or not states or not isinstance(lhs,list) or not isinstance(rhs,list)
+                or len(lhs)!=len(states) or len(rhs)!=len(states)):
+            raise GraphError("implication_shape")
+        try: left,right=[frac(value) for value in lhs],[frac(value) for value in rhs]
+        except GraphError: raise GraphError("implication_rational") from None
+        if any(value < 0 for value in left+right) or any(a>b for a,b in zip(left,right)):
+            raise GraphError("invalid_implication")
+        body={"type":kind,"states":[str(value) for value in states],"antecedent":[fstr(value) for value in left],
+              "consequent":[fstr(value) for value in right]}
+        return {"proof_type":"FINITE_STATE_EXACT_RATIONAL_IMPLICATION","proof_sha256":sha(body),
+                "state_totals":[f"{fstr(a)}<={fstr(b)}" for a,b in zip(left,right)]}
     if kind not in {"PAYOFF_UPPER_BOUND","PAYOFF_LOWER_BOUND"}: raise GraphError("relation_type")
     states, legs, guarantee=raw.get("states"),raw.get("legs"),frac(raw.get("guaranteed_payout"))
     if not isinstance(states,list) or not states or not isinstance(legs,list) or not legs: raise GraphError("inequality_shape")
@@ -190,7 +203,7 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
         nodes.append(claim)
     terminal = {str(state): fstr(sum((frac(leg["coefficient"]) * frac(leg["payout_vector"][i]) for leg in compiled_legs), Fraction(0)))
                 for i, state in enumerate(states)}
-    guarantee = fstr(frac(raw["guaranteed_payout"]))
+    guarantee = fstr(frac(raw.get("guaranteed_payout", 0)))
     relation = {"relation_id": str(raw.get("id") or raw.get("relation_id") or ""),
                 "relation_family": str(raw.get("relation_family") or raw.get("discovery") or "EXPLICIT_EXACT"),
                 "states": [str(value) for value in states], "legs": compiled_legs,

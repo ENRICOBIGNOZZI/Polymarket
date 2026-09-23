@@ -80,6 +80,17 @@ def test_proven_inequality_is_retained_but_never_actionable() -> None:
     assert relation["proof_type"]=="FINITE_STATE_EXACT_RATIONAL_INEQUALITY" and relation["enabled"] is False
 
 
+def test_logical_implication_has_its_own_statewise_proof_and_fails_invalid_direction() -> None:
+    relation={"id":"implies","enabled":True,"relation_type":"LOGICAL_IMPLICATION","states":["a","b"],
+      "antecedent_payout_vector":[1,0],"consequent_payout_vector":[1,1],"legs":[
+        {"selector":{"market_id":"a"},"outcome":"YES","payout_vector":[1,0]},
+        {"selector":{"market_id":"b"},"outcome":"YES","payout_vector":[1,1]}]}
+    graph=compile_graph([_registry([relation])],_universe(),"a"*40)
+    assert graph["relations"][0]["proof_type"]=="FINITE_STATE_EXACT_RATIONAL_IMPLICATION"
+    relation["consequent_payout_vector"]=[0,1]
+    assert not compile_graph([_registry([relation])],_universe(),"a"*40)["relations"]
+
+
 def test_minimum_order_and_capital_are_fail_closed() -> None:
     relation={"enabled":True,"guaranteed_payout":"1","reserve_per_unit":"0","legs":[{"token_id":"a","coefficient":"1","minimum_order":"10"}]}
     books={"a":{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0","asks":[[".5","5"]]}}
