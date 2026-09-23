@@ -573,6 +573,9 @@ struct PureArbDeepEvidence {
     std::uint64_t connection_epoch = 0;
     std::int64_t receive_wall_ms = 0;
     std::int64_t trigger_receive_monotonic_ns = 0;
+    std::int64_t trigger_decode_complete_monotonic_ns = 0;
+    std::int64_t trigger_hot_enqueue_monotonic_ns = 0;
+    std::int64_t deep_enqueue_monotonic_ns = 0;
     std::int64_t capture_origin_wall_ms = 0;
     std::uint8_t evaluate_candidate = 0;
     std::array<std::uint8_t, 7> reserved{};
@@ -804,7 +807,9 @@ public:
     }
 
     void maybe_queue_pure_arb_deep(
-        const MarketWsEvent& event, const pm::fast::FeedReceiveStamp& receive) noexcept {
+        const MarketWsEvent& event, const pm::fast::FeedReceiveStamp& receive,
+        std::int64_t decode_complete_monotonic_ns,
+        std::int64_t hot_enqueue_monotonic_ns) noexcept {
         if (!pure_arb_paper_ || event.instrument_handle == 0
             || event.instrument_handle >= pure_arb_pair_by_handle_.size()
             || event.book.valid == 0 || event.book.lineage_continuous == 0) {
@@ -872,6 +877,8 @@ public:
         deep.connection_epoch = connection_epoch_.load(std::memory_order_relaxed);
         deep.receive_wall_ms = receive.wall_ms;
         deep.trigger_receive_monotonic_ns = receive.monotonic_ns;
+        deep.trigger_decode_complete_monotonic_ns = decode_complete_monotonic_ns;
+        deep.trigger_hot_enqueue_monotonic_ns = hot_enqueue_monotonic_ns;
         deep.capture_origin_wall_ms = capture_origin;
         deep.evaluate_candidate = evaluate_candidate ? 1 : 0;
         deep.yes = decoder_->deep_snapshot(binding.yes_handle);
@@ -882,6 +889,7 @@ public:
             ++pure_arb_deep_snapshot_rejections_;
             return;
         }
+        deep.deep_enqueue_monotonic_ns = monotonic_ns();
         if (!pure_arb_deep_queue_->try_push(deep)) {
             ++pure_arb_deep_queue_drops_;
             return;
@@ -970,9 +978,14 @@ public:
             row.quantity_microunits = event.quantity_microunits;
             row.aggressor_side = event.side;
             row.lineage_continuous = event.book.lineage_continuous;
-            maybe_queue_pure_arb_deep(event, receive);
+            // Put the latency-critical observation on its decision queue before
+            // taking the zero-authority 1024-level deep snapshot. The decoder
+            // cannot advance to another frame on this thread meanwhile, so the
+            // subsequent deep snapshot remains causal to this exact event.
             row.enqueue_monotonic_ns = monotonic_ns();
             if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
+            maybe_queue_pure_arb_deep(
+                event, receive, decode_complete_ns, row.enqueue_monotonic_ns);
         }
         // A later full WS snapshot may already have healed the affected token.
         // Do not restart a recovered stream merely because a past root failure
@@ -1494,6 +1507,7 @@ public:
     }
 
     void write_pure_arb_deep_snapshot(const PureArbDeepEvidence& row) {
+        const auto deep_dequeue_monotonic_ns = monotonic_ns();
         if (!pure_arb_deep_book_output_.is_open()
             || row.market_handle == 0 || row.market_handle >= pure_arb_markets_.size()) return;
         const auto& market = pure_arb_markets_[row.market_handle];
@@ -1514,6 +1528,18 @@ public:
             {"receive_wall_ms", row.receive_wall_ms},
             {"capture_origin_wall_ms", row.capture_origin_wall_ms},
             {"candidate_decision_snapshot", row.evaluate_candidate != 0},
+            {"trigger_receive_monotonic_ns", row.trigger_receive_monotonic_ns},
+            {"trigger_decode_complete_monotonic_ns", row.trigger_decode_complete_monotonic_ns},
+            {"trigger_hot_enqueue_monotonic_ns", row.trigger_hot_enqueue_monotonic_ns},
+            {"deep_enqueue_monotonic_ns", row.deep_enqueue_monotonic_ns},
+            {"receive_to_decode_ns", std::max<std::int64_t>(
+                0, row.trigger_decode_complete_monotonic_ns - row.trigger_receive_monotonic_ns)},
+            {"decode_to_hot_enqueue_ns", std::max<std::int64_t>(
+                0, row.trigger_hot_enqueue_monotonic_ns - row.trigger_decode_complete_monotonic_ns)},
+            {"hot_enqueue_to_deep_enqueue_ns", std::max<std::int64_t>(
+                0, row.deep_enqueue_monotonic_ns - row.trigger_hot_enqueue_monotonic_ns)},
+            {"deep_queue_wait_ns", std::max<std::int64_t>(
+                0, deep_dequeue_monotonic_ns - row.deep_enqueue_monotonic_ns)},
             {"snapshot_sequence", pure_arb_deep_snapshots_written_ + 1},
             {"market_id", market.market_id},
             {"yes_token", by_handle_[market.yes_handle]->token_id},
