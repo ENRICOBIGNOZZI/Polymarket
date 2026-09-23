@@ -61,6 +61,17 @@ def test_machine_attested_binary_partition_is_auto_compiled() -> None:
     assert graph["relations"][0]["relation_family"]=="SAME_MARKET_BINARY_COMPLETE_SET"
 
 
+def test_machine_attested_n_way_partition_is_a_single_hyperedge() -> None:
+    model, semantic="d"*40,"e"*64
+    universe={**SAFETY,"model_sha":model,"markets":[{"market_id":"p","condition_id":"cp","active":True,"closed":False,
+      "asset":"BTC","horizon":"M5","contract_family":"partition","settlement_semantic_hash":semantic,
+      "clob_token_ids":["pa","pb","pc"],"outcomes":["A","B","C"],"partition_verified":True,
+      "partition_states":["A","B","C"],"partition_payout_vectors":{"A":[1,0,0],"B":[0,1,0],"C":[0,0,1]}}]}
+    graph=compile_graph([_registry([])],universe,model)
+    relation=graph["relations"][0]
+    assert relation["relation_family"]=="N_WAY_COMPLETE_PARTITION" and len(relation["legs"])==3
+
+
 def test_proven_inequality_is_retained_but_never_actionable() -> None:
     model, semantic="f"*40,"a"*64
     universe={**SAFETY,"model_sha":model,"markets":[{"market_id":"m","active":True,"closed":False,"asset":"BTC","horizon":"M5","contract_family":"binary","settlement_semantic_hash":semantic,"clob_token_ids":["y","n"],"outcomes":["YES","NO"]}]}
@@ -117,6 +128,15 @@ def test_verified_market_fee_exponent_is_applied_per_price_level() -> None:
     books={"x":{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"1/10",
                 "asks":[["1/2","1"]]}}
     assert evaluate(relation,books,1)["net_locked_pnl"]=="19/40"
+
+
+def test_capital_time_economics_are_explicit_when_attested() -> None:
+    relation={"enabled":True,"guaranteed_payout":"1","capital_lock_time_ms":1000,
+              "legs":[{"token_id":"x","coefficient":"1","minimum_order":"0"}]}
+    books={"x":{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0",
+                "asks":[["1/2","2"]]}}
+    out=evaluate(relation,books,1)
+    assert out["capital_required"]=="1" and out["net_locked_pnl_per_capital_time"]=="1/1000"
 
 
 def test_invalid_inequality_and_unverified_components_remain_non_actionable() -> None:

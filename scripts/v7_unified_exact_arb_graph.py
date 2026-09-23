@@ -57,11 +57,19 @@ def safe(value: dict[str, Any], model_sha: str | None = None) -> bool:
             and (model_sha is None or value.get("model_sha") == model_sha))
 
 
-def token_map(market: dict[str, Any]) -> dict[str, str] | None:
+def outcome_map(market: dict[str, Any]) -> dict[str, str] | None:
     ids, outcomes = market.get("clob_token_ids"), market.get("outcomes")
-    if not isinstance(ids, list) or not isinstance(outcomes, list) or len(ids) != 2 or len(outcomes) < 2:
+    if (not isinstance(ids, list) or not isinstance(outcomes, list) or len(ids) < 2
+            or len(ids) != len(outcomes) or len(ids) > 32):
         return None
-    found = {str(outcomes[i]).upper(): str(ids[i]) for i in range(2)}
+    found = {str(outcomes[i]).upper(): str(ids[i]) for i in range(len(ids))}
+    return found if all(found) and all(found.values()) and len(found) == len(ids) else None
+
+
+def token_map(market: dict[str, Any]) -> dict[str, str] | None:
+    found = outcome_map(market)
+    if found is None or len(found) != 2:
+        return None
     yes, no = found.get("YES") or found.get("UP"), found.get("NO") or found.get("DOWN")
     return {"YES": yes, "NO": no} if yes and no and yes != no else None
 
@@ -163,7 +171,7 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
     for leg in legs:
         outcome = str(leg.get("outcome") or "").upper()
         market = resolve_market(markets, leg.get("selector"))
-        mapping = token_map(market) if market is not None else None
+        mapping = outcome_map(market) if market is not None else None
         if mapping is None or outcome not in mapping:
             raise GraphError("unresolved_claim")
         claim = node(market, mapping[outcome], outcome)
@@ -171,6 +179,8 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
         if coefficient <= 0: raise GraphError("non_positive_coefficient")
         vector = [fstr(frac(value)) for value in leg["payout_vector"]]
         compiled_legs.append({"node_id": claim["node_id"], "token_id": claim["token_id"],
+                              "market_id": claim.get("market_id"), "condition_id": claim.get("condition_id"),
+                              "settlement_semantic_hash": claim.get("settlement_semantic_hash"),
                               "coefficient": fstr(coefficient), "payout_vector": vector,
                               "fee_semantics": leg.get("fee_semantics", "MARKET_VERIFIED_REQUIRED"),
                               "fee_rate": fee_rate(market),
@@ -191,6 +201,9 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
                 "verification": "EXPLICIT_VERIFIED", "verified_at_ms": int(raw.get("verified_at_ms") or 0),
                 "execution_semantics": raw.get("execution_semantics", "SEQUENTIAL_PARALLEL_BATCH_SHADOW"),
                 "capital_transformation_semantics": raw.get("capital_transformation_semantics", "SETTLEMENT_LOCKED"),
+                "capital_lock_time_ms": int(raw["capital_lock_time_ms"]) if raw.get("capital_lock_time_ms") is not None else None,
+                "collateral_denomination": raw.get("collateral_denomination") or next((item.get("collateral_denomination") for item in nodes if item.get("collateral_denomination")), None),
+                "transformation": raw.get("transformation") if isinstance(raw.get("transformation"), dict) else None,
                 "reserve_per_unit": fstr(frac(raw.get("reserve_per_unit", 0))),
                 "relation_type": str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY"),
                 "directions": directions(raw),
@@ -216,6 +229,35 @@ def automatic_binary_relations(markets: list[dict[str, Any]]) -> list[dict[str, 
             "states":["YES","NO"],"guaranteed_payout":1,"legs":[
             {"selector":selector,"outcome":"YES","coefficient":1,"payout_vector":[1,0]},
             {"selector":selector,"outcome":"NO","coefficient":1,"payout_vector":[0,1]}]})
+    return result
+
+
+def automatic_partition_relations(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compile an N-way hyperedge only from a machine-attested payout matrix."""
+    result = []
+    for market in markets:
+        mapping = outcome_map(market)
+        states = market.get("partition_states")
+        vectors = market.get("partition_payout_vectors")
+        if (mapping is None or len(mapping) <= 2 or market.get("partition_verified") is not True
+                or not str(market.get("condition_id") or "")
+                or len(str(market.get("settlement_semantic_hash") or "")) != 64
+                or not isinstance(states, list) or not states or not isinstance(vectors, dict)):
+            continue
+        legs = []
+        try:
+            for outcome in sorted(mapping):
+                vector = vectors.get(outcome)
+                if not isinstance(vector, list) or len(vector) != len(states): raise GraphError("partition_vector")
+                legs.append({"selector":{"market_id":str(market["market_id"])}, "outcome":outcome,
+                             "coefficient":1, "payout_vector":vector})
+            raw = {"id":"partition:"+str(market["market_id"]), "enabled":True,
+                   "relation_family":"N_WAY_COMPLETE_PARTITION", "discovery":"AUTO_VERIFIED_PARTITION",
+                   "directions":["BUY_BASKET"], "states":states, "guaranteed_payout":1, "legs":legs}
+            prove_relation(raw)
+        except (GraphError, ValueError, KeyError, TypeError):
+            continue
+        result.append(raw)
     return result
 
 
@@ -283,6 +325,7 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
     markets = [row for row in universe.get("markets") or [] if isinstance(row, dict)
                and row.get("active") is True and row.get("closed") is not True]
     sources.extend(automatic_binary_relations(markets))
+    sources.extend(automatic_partition_relations(markets))
     component_rows, component_candidates, component_provenance = component_sources(component_inputs or [], model_sha)
     sources.extend(component_rows)
     relations, nodes, rejected = [], {}, []
@@ -427,8 +470,15 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
     if best is None: return {"accepted": False, "reason": "minimum_order_or_capital",**distances}
     if best[2] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
     direction, quantity, cost, pnl, capital = best
-    return {"accepted": True, "reason": "candidate", "direction": direction, "quantity": fstr(quantity), "capital_required": fstr(capital),
-            "net_locked_pnl": fstr(pnl), **distances}
+    lock = relation.get("capital_lock_time_ms")
+    try: lock_value = int(lock) if lock is not None else None
+    except (TypeError, ValueError): return {"accepted": False, "reason": "capital_lock_invalid", **distances}
+    if lock_value is not None and lock_value <= 0: return {"accepted": False, "reason": "capital_lock_invalid", **distances}
+    result = {"accepted": True, "reason": "candidate", "direction": direction, "quantity": fstr(quantity), "capital_required": fstr(capital),
+              "net_locked_pnl": fstr(pnl), "capital_lock_time_ms": lock_value, **distances}
+    if lock_value is not None and capital > 0:
+        result["net_locked_pnl_per_capital_time"] = fstr(pnl / capital / lock_value)
+    return result
 
 
 def main() -> int:
