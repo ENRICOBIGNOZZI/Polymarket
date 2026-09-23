@@ -169,6 +169,39 @@ def test_unified_graph_exports_near_arb_distribution() -> None:
     assert "exact_arb_distance_to_arbitrage" in rendered and 'percentile="p50"' in rendered
 
 
+def test_exchange_universe_metrics_are_zero_authority_only() -> None:
+    status={"schema":"polymarket_v7_exact_arb_exchange_universe_status_v1","state":"READY",
+      "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+      "real_capital_at_risk":False,"automatic_promotion":False,"execution_authority":False,
+      "events":120,"markets":900,"negrisk_events":20,"verified_negrisk_events":12,
+      "discovery_exhaustive":True,"pagination_loop_guard_hit":False,"scan_duration_ms":123.0}
+    rendered="\n".join(exporter._render_exact_arb_exchange_universe_metrics(status))
+    assert "exact_arb_exchange_universe_up 1" in rendered
+    assert "exact_arb_exchange_universe_verified_negrisk_events 12" in rendered
+    status["real_order_submission"]=True
+    assert "exact_arb_exchange_universe_up 0" in "\n".join(
+        exporter._render_exact_arb_exchange_universe_metrics(status))
+
+
+def test_warm_screen_metrics_cannot_claim_actionable_candidates() -> None:
+    status={"schema":"polymarket_v7_exact_arb_warm_screen_status_v1","state":"SCREENING",
+      "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
+      "real_capital_at_risk":False,"automatic_promotion":False,"execution_authority":False,
+      "evidence_quality":"NONATOMIC_PUBLIC_REST_SCREEN_ONLY","actionable_candidates":0,
+      "relations_selected":30,"relations_screened":29,"tokens_requested":80,"books_missing":1,
+      "raw_positive_screen_only":3,"after_fee_positive_screen_only":2,
+      "after_reserve_positive_screen_only":1,"hotset_relations":20,"hotset_tokens":50,
+      "scan_duration_ms":55.0,"relations_by_family":{"NEGRISK_COMPLETE_SET":4},
+      "near_arbitrage":{"after_reserve":{"min":-.01,"p50":.02}}}
+    rendered="\n".join(exporter._render_exact_arb_warm_screen_metrics(status))
+    assert "exact_arb_warm_screen_up 1" in rendered
+    assert "exact_arb_warm_after_reserve_positive_screen_only_total 1" in rendered
+    assert 'family="NEGRISK_COMPLETE_SET"' in rendered
+    status["actionable_candidates"]=1
+    assert "exact_arb_warm_screen_up 0" in "\n".join(
+        exporter._render_exact_arb_warm_screen_metrics(status))
+
+
 def test_unified_graph_execution_metrics_remain_zero_authority_only() -> None:
     status={"schema":"polymarket_v7_pure_arb_exchange_execution_status_v1","state":"COLLECTING",
       "paper_only":True,"authenticated_execution":False,"real_order_submission":False,"real_capital_at_risk":False,
