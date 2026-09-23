@@ -1,8 +1,10 @@
 # Exchange source contract review
 
-Reviewed baseline: `5a47981a6aade0e7a0410f9f3d8c4f237c6bd327`.
-This change stays on the research branch. No champion economics, trading
-credentials, real orders, deployment requests or execution authority are changed.
+Reviewed source baseline: `5a47981a6aade0e7a0410f9f3d8c4f237c6bd327`.
+Source hardening commit: `ab20ed6abe5c254a9827d78709c5b3a1ef23c56e`.
+This work remains on `research/unified-exact-arb-graph`; no merge, deployment,
+trading credentials, real orders or execution authority are changed by this review.
+The frozen champion economics are outside this patch.
 
 ## Fixed
 
@@ -21,26 +23,54 @@ credentials, real orders, deployment requests or execution authority are changed
 - A failed refresh atomically replaces the published universe with a safe empty
   source-invalid snapshot; an old successful universe is not kept active by the
   collector's error handler.
+- The SOTA launcher child-count assertion now reads the canonical process manifest
+  instead of assuming a historical literal count. The equality check remains.
+- The dedicated native review configures the test-enabled CMake tree. The
+  deployment-only configuration cannot be combined with BUILD_TESTING=ON.
+  Test dependencies are installed; no CMake safety assertion was weakened.
 
-## Validation
+## Reproducible validation checkpoint
 
-28 standalone Python source-contract tests passed locally on Python 3.11.
-They are deterministic fixtures; they are not current live venue evidence.
-A read-only Linux workflow also runs these tests, existing graph/adversarial
-Python tests, and native graph/champion/replay tests in Release, Debug and
-ASan/UBSan. Its result must be inspected before claiming hosted validation.
-The new workflow does not provide AWS credentials or a deployment action.
+Validated code SHA: `32b5eae22290b03d5c5d825573c05c22e9859957`.
+Workflow: `V7 exact-arbitrage review`.
+GitHub Actions run: `35891257958`, completed successfully at
+`2026-09-23T16:49:43Z` on Ubuntu 24.04 runners.
 
-## Not resolved by this patch
+- Python job `107284000589`: 28 standalone source-contract tests PASS and
+  72 graph/adversarial/universe/warm-screen/hotset/observer/manifest/monitoring
+  tests PASS. These are two separate test commands, 100 Python tests in total.
+- Native Release job `107284000749`: PASS.
+- Native Debug job `107284000807`: PASS.
+- Native ASan/UBSan job `107284001006`: PASS.
 
-- Independent NegRisk membership/settlement attestations and broad causal
-  subscription integration remain required for enabled non-binary opportunities.
+Each native job builds the observer and the four selected graph, PureArb lane,
+PureArb replay-parity and PureArb multi-engine test targets, then runs the selected
+CTest group. This is a scoped review matrix, not a claim that every repository
+workflow, every economic property, or a London deployment has passed.
+
+A separate local rerun of the 28 source tests passed on Python **3.13.5**.
+The earlier report's local Python 3.11 label was incorrect. Local validation used
+only the reconstructed source/test files; it was not a full repository build.
+
+Run evidence:
+https://github.com/ENRICOBIGNOZZI/Polymarket/actions/runs/35891257958
+
+Later commits on the active branch require their own checks. This document does
+not transfer the checkpoint's green result to an untested moving branch head.
+
+## Evidence boundary and remaining acceptance requirements
+
+- Independent NegRisk membership/settlement attestations are still required
+  before Gamma-derived non-binary candidate groups may become enabled relations.
 - REST warm-screen apparent edges remain NONATOMIC_PUBLIC_REST_SCREEN_ONLY.
   They are not fills, executable arbitrage, or realized PnL.
-- Consumer-side source-age gating is still needed if the collector stops rather
-  than executing its refresh error handler.
-- Full Linux repository gates and London side-by-side non-regression validation
-  are separate requirements. This patch does not authorize merge or promotion.
+- This source patch handles refresh errors; consumer-side source-age gates are
+  a separate requirement when a collector stops without publishing an error.
+- Broad causal subscription coverage, current live relation yield, controlled
+  champion latency non-regression, the full repository release gates and London
+  PAPER observation are not established by the tests listed above.
+- PR #1470 remains a research review, not an execution-authority promotion.
+  No PROMOTABLE artifact or successful London cutover is asserted here.
 
 Protocol references reviewed on 2026-09-23:
 https://docs.polymarket.com/concepts/negative-risk
