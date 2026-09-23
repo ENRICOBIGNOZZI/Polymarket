@@ -18,7 +18,7 @@ jobs:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
       ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
-      INSTANCE_ID: i-04042ca7da7a23215
+      INSTANCE_ID: i-0fba2bac9fdc5cbeb
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Validate request
