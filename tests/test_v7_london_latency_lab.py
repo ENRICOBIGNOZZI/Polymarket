@@ -221,6 +221,14 @@ def test_stage8_ssm_envelope_is_compact_and_full_evidence_stays_on_host():
         assert key in ssm
 
 
+def test_stage8_compact_profiles_are_parsed_without_legacy_nested_shape():
+    ssm = (ROOT / "ops/v7_london_ssm_benchmark.py").read_text()
+    assert '"name": p.get("name")' in ssm
+    assert '"promotion_candidate": bool(\n                        p.get("promotion_candidate", False))' in ssm
+    assert 'p["profile"]["name"]' not in ssm
+    assert '(p.get("comparison") or {})' not in ssm
+
+
 def test_host_tuning_is_evidence_only_and_has_tail_gate():
     host = (ROOT / "ops/v7_host_latency_ab.py").read_text()
     assert 'cp99 <= bp99 * 0.90' in host
