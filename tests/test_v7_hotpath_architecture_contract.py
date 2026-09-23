@@ -5,14 +5,14 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def test_hot_path_has_no_database_dataframe_or_python_execution_owner():
-    native=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
+    native=(ROOT/'src/v7_pure_arb_multi_runtime.cpp').read_text()
     manager=(ROOT/'scripts/v7_pure_arb_multi_manager.py').read_text()
     forbidden=('sqlite3','sqlalchemy','psycopg','pandas','DataFrame')
     for token in forbidden:
         assert token not in native, token
-    assert 'NativeCryptoDecisionLane' in native
+    assert 'MultiMarketEngine engine' in native
     assert 'NativeSettlementAuthority authority' in native
-    assert 'NativePaperExecutionAdapter' in native
+    assert 'NativePaperExecutionAdapter paper' in native
     assert 'subprocess.Popen(' in manager
     assert 'self.child = subprocess.Popen' in manager
     assert '"partitioned_native_workers": False' in manager
@@ -79,7 +79,8 @@ def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
     declared=next(p for p in json.loads((ROOT/'config/v7_process_manifest.json').read_text())['processes'] if p['id']=='native_engine_manager')['arguments']
     assert {arg for arg in argv if arg.startswith('--')}=={arg for arg in declared if arg.startswith('--')}
     assert '--universe' not in argv
-    assert '--settler' not in argv
+    assert args.settler==ROOT/'scripts/v7_native_paper_settlement.py'
+    assert '--settler' in argv
     assert '--observation-only' not in argv
 
 
