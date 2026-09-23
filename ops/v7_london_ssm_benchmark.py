@@ -287,14 +287,24 @@ def evaluate_latency(rows: dict[str, dict[str, Any]], sha: str) -> dict[str, Any
             "pgo_promotion_candidate": bool(row["signing"]["pgo_promotion_candidate"]),
             "host_tuning": [
                 {
-                    "name": p["profile"]["name"],
+                    "name": p.get("name")
+                        or (p.get("profile") or {}).get("name"),
                     "supported": bool(p.get("supported")),
                     "promotion_candidate": bool(
-                        (p.get("comparison") or {}).get("promotion_candidate", False)),
-                    "p99_improvement_pct": (p.get("comparison") or {}).get(
-                        "p99_improvement_pct"),
-                    "p999_improvement_pct": (p.get("comparison") or {}).get(
-                        "p999_improvement_pct"),
+                        p.get("promotion_candidate",
+                              (p.get("comparison") or {}).get(
+                                  "promotion_candidate", False))),
+                    "p99_improvement_pct": p.get(
+                        "p99_improvement_pct",
+                        (p.get("comparison") or {}).get(
+                            "p99_improvement_pct")),
+                    "p999_improvement_pct": p.get(
+                        "p999_improvement_pct",
+                        (p.get("comparison") or {}).get(
+                            "p999_improvement_pct")),
+                    "failure_delta": p.get(
+                        "failure_delta",
+                        (p.get("comparison") or {}).get("failure_delta")),
                 }
                 for p in (row.get("host_tuning") or {}).get("profiles", [])
             ],
