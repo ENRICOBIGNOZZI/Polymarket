@@ -4,7 +4,7 @@
     "polymarket_v7_trade_recorder",
     "polymarket_v7_maker_fillability_observer",
     "polymarket_v7_external_venue_runtime",
-    "polymarket_v7_crypto_settlement_engine"
+    "polymarket_v7_pure_arb_multi_runtime"
   ],
   "forbidden_path_fragments": [
     "/research/",
@@ -49,7 +49,6 @@
     "scripts/v7_multi_az_fencing_guard.py",
     "scripts/v7_multi_az_fencing_supervisor.py",
     "scripts/v7_multi_crypto_oracle_hub.py",
-    "scripts/v7_native_crypto_engine_manager.py",
     "scripts/v7_native_paper_settlement.py",
     "scripts/v7_polymarket_status_source.py",
     "scripts/v7_portfolio_guard.py",
@@ -69,7 +68,8 @@
     "scripts/v7_runtime_profile.py",
     "scripts/v7_runtime_resource_plan.py",
     "scripts/v7_settlement_source_arb_shadow.py",
-    "scripts/v7_two_sided_complete_set_shadow.py"
+    "scripts/v7_two_sided_complete_set_shadow.py",
+    "scripts/v7_pure_arb_multi_manager.py"
   ],
   "real_order_submission": false,
   "schema": "polymarket_v7_london_runtime_bundle_v1",
@@ -141,5 +141,5 @@
     "scripts/v7_collection_plane.sh",
     "scripts/v7_process_runtime.sh"
   ],
-  "version": 10
+  "version": 11
 }
