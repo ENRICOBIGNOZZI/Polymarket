@@ -85,9 +85,11 @@ void openssl_error(char* output, std::size_t capacity, const char* prefix) noexc
 PersistentTlsSession::PersistentTlsSession(std::string_view host,
                                            std::uint16_t port,
                                            int timeout_ms,
-                                           int socket_busy_poll_us) noexcept
+                                           int socket_busy_poll_us,
+                                           bool capture_rx_metadata) noexcept
     : port_(port), timeout_ms_(timeout_ms),
-      socket_busy_poll_us_(socket_busy_poll_us) {
+      socket_busy_poll_us_(socket_busy_poll_us),
+      capture_rx_metadata_(capture_rx_metadata) {
     if (!host.empty() && host.size() < host_.size()) {
         host_size_ = host.size();
         std::memcpy(host_.data(), host.data(), host.size());
@@ -305,8 +307,10 @@ TlsReadResult PersistentTlsSession::read_some(std::span<char> output) noexcept {
     std::size_t received = 0;
     const int rc = SSL_read_ex(connection, output.data(), output.size(), &received);
     out.completed_monotonic_ns = now_ns();
-    out.incoming_cpu = pm::network::incoming_cpu(fd_);
-    out.incoming_napi_id = pm::network::incoming_napi_id(fd_);
+    if (capture_rx_metadata_) {
+        out.incoming_cpu = pm::network::incoming_cpu(fd_);
+        out.incoming_napi_id = pm::network::incoming_napi_id(fd_);
+    }
     if (rc == 1 && received > 0) {
         out.bytes = received;
         out.ok = 1;
