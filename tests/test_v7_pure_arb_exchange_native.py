@@ -75,14 +75,16 @@ def test_fok_revalidation_rejects_price_move_depth_and_stale():
     assert not execution.fok_fill(p,side="BUY",limit=.40,quantity=5,target_ms=1200,maximum_book_age_ms=100)
 
 
-def test_graph_binary_opportunity_is_adapted_to_existing_execution_shadow(tmp_path: Path):
+def test_graph_binary_opportunity_is_adapted_to_existing_execution_shadow():
     candidate={"schema":"polymarket_v7_unified_exact_arb_graph_execution_candidate_v1","market_id":"m1",
                "kind":"BUY_COMPLETE_SET","receive_wall_ms":1000,"executable_shares_local_deep":"5"}
     opportunity={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1","model_sha":SHA,
                  "paper_only":True,"authenticated_execution":False,"real_order_submission":False,
                  "execution_candidate":candidate}
-    path=tmp_path/"graph-opportunities.jsonl";path.write_text(json.dumps(opportunity)+"\n",encoding="utf-8")
-    rows=execution.Tail(path,SHA).poll()
+    with tempfile.TemporaryDirectory() as d:
+        path=Path(d)/"graph-opportunities.jsonl"
+        path.write_text(json.dumps(opportunity)+"\n",encoding="utf-8")
+        rows=execution.Tail(path,SHA).poll()
     assert rows==[candidate]
 
 
@@ -360,7 +362,7 @@ def test_runtime_remains_zero_authority():
         "v7_pure_arb_maker_policy.py",
     ):
         assert loop.count(worker)==1
-    assert "v7_assert_registered_child_count 33" in loop
+    assert "v7_assert_registered_child_count 35" in loop
     assert '--fee-reward-registry "$PURE_ARB_DIR/fee_reward_registry.json"' in loop
     assert '"authenticated_execution":false' in loop.replace(" ", "")
     assert '"real_order_submission":false' in loop.replace(" ", "")
