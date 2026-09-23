@@ -352,3 +352,46 @@ def test_nonempty_skeleton_without_identity_still_fails_closed():
         (root/'control/unknown-state').write_text('x')
         with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'previous_runtime_sha_missing_or_invalid'):
             cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+
+
+def _bootstrap_receipt(root: Path, *, safe: bool = True) -> None:
+    write(root/'bootstrap_receipt.json',{
+        'schema':'polymarket_v7_london_bootstrap_receipt_v1',
+        'code_sha':OLD,
+        'paper_only':True,
+        'authenticated_execution':False,
+        'real_order_submission':False if safe else True,
+        'systemd_installed_but_disabled':True,
+    })
+
+
+def test_verified_bootstrap_receipt_is_clean_first_activation():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';root.mkdir()
+        _bootstrap_receipt(root)
+        result=cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+        assert result=={
+            'state':'BOOTSTRAP_RUN_ROOT','target_sha':NEW,
+            'bootstrap_sha':OLD,'archived':False}
+
+
+def test_bootstrap_receipt_fails_closed_if_unsafe_or_mixed_with_other_state():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';root.mkdir()
+        _bootstrap_receipt(root,safe=False)
+        with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'bootstrap_receipt_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';root.mkdir()
+        _bootstrap_receipt(root)
+        (root/'unknown-state').write_text('x')
+        with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'previous_runtime_sha_missing_or_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:True)
+
+
+def test_bootstrap_receipt_requires_ancestor_code_sha():
+    with tempfile.TemporaryDirectory() as d:
+        base=Path(d);root=base/'run';root.mkdir()
+        _bootstrap_receipt(root)
+        with unittest.TestCase().assertRaisesRegex(cutover.CutoverArchiveError,'bootstrap_receipt_invalid'):
+            cutover.prepare(root,base/'archives',base,NEW,ancestor_check=lambda *_:False)
