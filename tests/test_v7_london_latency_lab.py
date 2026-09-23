@@ -267,6 +267,17 @@ def test_selected_az_paper_remote_failure_is_bounded_and_diagnostic():
     assert "trap - ERR" in runner
 
 
+def test_selected_az_generated_remote_python_is_syntactically_valid():
+    import sys
+    sys.path.insert(0, str(ROOT / "ops"))
+    from v7_selected_az_pure_arb_paper import remote_command
+    command = remote_command("a" * 40, 30, "ubuntu")
+    marker = "<<'PY'\n"
+    start = command.index(marker) + len(marker)
+    end = command.index("\nPY\nSTEP=cleanup", start)
+    compile(command[start:end], "<selected-az-remote-python>", "exec")
+
+
 def test_selected_az_paper_cutover_is_evidence_bound_and_paper_only():
     workflow = (ROOT / ".github/workflows/v7-selected-az-paper-cutover.yml").read_text()
     helper = (ROOT / "ops/v7_selected_az_cutover_request.py").read_text()
