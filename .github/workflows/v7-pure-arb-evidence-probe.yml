@@ -13,7 +13,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 8
     env:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
@@ -26,7 +26,9 @@ jobs:
           python3 - deploy/v7-pure-arb-evidence-probe-request.json <<'PY'
           import json,sys
           v=json.load(open(sys.argv[1]))
-          assert v=={"schema":"polymarket_v7_pure_arb_evidence_probe_v1","read_only":True}
+          assert v.get("schema")=="polymarket_v7_pure_arb_evidence_probe_v1"
+          assert v.get("read_only") is True
+          assert int(v.get("window_seconds") or 10) in {10,300}
           PY
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
@@ -39,6 +41,13 @@ jobs:
           payload="$(cat <<'SH'
           set -euo pipefail
           ROOT=/mnt/polymarket-data/paper_v7_london
+          WINDOW_SECONDS="$(python3 - deploy/v7-pure-arb-evidence-probe-request.json <<'PYWIN'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          print(int(v.get('window_seconds') or 10))
+          PYWIN
+          )"
+          export WINDOW_SECONDS
           echo "COLLECTOR_PROCESSES_BEGIN"
           for pattern in \
             v7_pure_arb_arrival_survival_shadow.py \
@@ -108,8 +117,18 @@ jobs:
                   except OSError:
                       out[rel]={"bytes":None,"mtime_ns":None}
               return out
-          a=sample(); time.sleep(10); b=sample()
+          def lines(path):
+              try:
+                  with path.open("rb") as h:
+                      return sum(1 for _ in h)
+              except OSError:
+                  return None
+          counts0={k:lines(base/k) for k in rels}
+          window=int(os.environ.get("WINDOW_SECONDS","10"))
+          a=sample(); time.sleep(window); b=sample()
+          counts1={k:lines(base/k) for k in rels}
           growth={k:None if a[k]["bytes"] is None or b[k]["bytes"] is None else b[k]["bytes"]-a[k]["bytes"] for k in rels}
+          row_growth={k:None if counts0[k] is None or counts1[k] is None else counts1[k]-counts0[k] for k in rels}
           statuses={}
           for name in ("pure_arb_status.json","pure_arb_arrival_survival_status.json","pure_arb_deep_sizing_status.json","exchange_execution_status.json","fillability_ws_status.json"):
               v=load(base/name)
@@ -117,7 +136,9 @@ jobs:
           print("HEALTH="+json.dumps(health,sort_keys=True,separators=(",",":")))
           print("EVIDENCE_T0="+json.dumps(a,sort_keys=True,separators=(",",":")))
           print("EVIDENCE_T1="+json.dumps(b,sort_keys=True,separators=(",",":")))
+          print("WINDOW_SECONDS="+str(window))
           print("EVIDENCE_GROWTH="+json.dumps(growth,sort_keys=True,separators=(",",":")))
+          print("ROW_GROWTH="+json.dumps(row_growth,sort_keys=True,separators=(",",":")))
           for name,v in statuses.items():
               keys=("schema","model_sha","state","cycles","evaluated","candidates","scenarios","status_window_size","observations","events","paper_only","authenticated_execution","real_order_submission")
               print("STATUS_"+name+"="+json.dumps({k:v.get(k) for k in keys if k in v},sort_keys=True,separators=(",",":")))
@@ -133,9 +154,9 @@ jobs:
           )"
           encoded="$(printf '%s' "$payload" | base64 -w0)"
           wrapped="printf '%s' '$encoded' | base64 -d | bash"
-          params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["60"]},separators=(",",":")))' "$wrapped")"
+          params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["390"]},separators=(",",":")))' "$wrapped")"
           cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$params" --comment "Polymarket V7 PureArb evidence read-only probe" --region "$AWS_REGION" --query 'Command.CommandId' --output text)"
-          for i in $(seq 1 45); do
+          for i in $(seq 1 210); do
             status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query Status --output text 2>/dev/null || true)"
             case "$status" in
               Success)
