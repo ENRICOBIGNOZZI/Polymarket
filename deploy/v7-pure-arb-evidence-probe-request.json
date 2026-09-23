@@ -1,4 +1,5 @@
 {
   "schema": "polymarket_v7_pure_arb_evidence_probe_v1",
-  "read_only": true
+  "read_only": true,
+  "window_seconds": 300
 }
