@@ -28,6 +28,21 @@ class V7PaperLoopBash3PortabilityTest(unittest.TestCase):
         self.assertIn("trap cleanup EXIT", cleanup)
         self.assertIn("trap shutdown INT TERM", cleanup)
 
+    def test_fencing_supervisor_launcher_matches_current_cli_contract(self) -> None:
+        text = LOOP.read_text(encoding="utf-8")
+        start = text.index("scripts/v7_multi_az_fencing_supervisor.py")
+        end = text.index('v7_register_child "$!"', start)
+        block = text[start:end]
+        self.assertIn('--config "$ROOT/config/v7_failover_fencing.json"', block)
+        self.assertIn('--run-id "$RUN_ID"', block)
+        self.assertIn('--server-id "$SERVER_ID"', block)
+        self.assertIn('--interval-seconds 1', block)
+        for stale in (
+            "--owner-id", "--lease-id", "--region", "--lease-ms",
+            "--renew-ms", "--minimum-remaining-ms", "--poll-ms",
+        ):
+            self.assertNotIn(stale, block)
+
     def test_runtime_readiness_requires_live_native_engine_identity(self) -> None:
         text = LOOP.read_text(encoding="utf-8")
         ready = text[text.index("native_engine_ready()") : text.index("write_runtime_status()")]
