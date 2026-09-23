@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 34,
-  "expected_launcher_child_count": 33,
+  "expected_process_count": 36,
+  "expected_launcher_child_count": 35,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -928,13 +928,85 @@
       "authority_overrides": {}
     },
     {
+      "id": "exact_arb_exchange_universe",
+      "executable": "scripts/v7_exact_arb_exchange_universe.py",
+      "arguments": [
+        "--model-sha",
+        "${SHA}",
+        "--output",
+        "${RUN_ROOT}/research/repricing_book/exact_arb_exchange_universe.json",
+        "--status",
+        "${RUN_ROOT}/research/repricing_book/exact_arb_exchange_universe_status.json",
+        "--interval-seconds",
+        "60",
+        "--max-pages",
+        "50"
+      ],
+      "profile": "observer",
+      "inputs": [],
+      "outputs": [
+        "research/repricing_book/exact_arb_exchange_universe.json",
+        "research/repricing_book/exact_arb_exchange_universe_status.json",
+        "research/repricing_book/exact_arb_exchange_universe.log"
+      ],
+      "dependencies": [],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/exact_arb_exchange_universe.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
       "id": "unified_exact_arb_graph_compiler",
       "executable": "scripts/v7_unified_exact_arb_graph.py",
-      "arguments": ["--universe", "${RUN_ROOT}/universe/current.json", "--registry", "config/v7_exact_arb_relations.json", "--registry", "${RUN_ROOT}/research/repricing_book/exact_arb_relations.generated.json", "--component-status", "${RUN_ROOT}/research/repricing_book/cross_market_exact_arb_status.json", "--component-status", "${RUN_ROOT}/research/repricing_book/complete_set_merge_status.json", "--component-status", "${RUN_ROOT}/research/repricing_book/two_sided_complete_set_status.json", "--component-status", "${RUN_ROOT}/research/repricing_book/combo_market_source.json", "--component-status", "${RUN_ROOT}/research/repricing_book/combo_rfq_gateway_status.json", "--component-status", "${RUN_ROOT}/research/repricing_book/combo_rfq_shadow_status.json", "--component-status", "${RUN_ROOT}/research/repricing_book/combo_collateral_return_status.json", "--model-sha", "${SHA}", "--output", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json"],
+      "arguments": [
+        "--universe",
+        "${RUN_ROOT}/research/repricing_book/exact_arb_exchange_universe.json",
+        "--registry",
+        "config/v7_exact_arb_relations.json",
+        "--registry",
+        "${RUN_ROOT}/research/repricing_book/exact_arb_relations.generated.json",
+        "--component-status",
+        "${RUN_ROOT}/research/repricing_book/cross_market_exact_arb_status.json",
+        "--component-status",
+        "${RUN_ROOT}/research/repricing_book/complete_set_merge_status.json",
+        "--component-status",
+        "${RUN_ROOT}/research/repricing_book/two_sided_complete_set_status.json",
+        "--component-status",
+        "${RUN_ROOT}/research/repricing_book/combo_market_source.json",
+        "--component-status",
+        "${RUN_ROOT}/research/repricing_book/combo_rfq_gateway_status.json",
+        "--component-status",
+        "${RUN_ROOT}/research/repricing_book/combo_rfq_shadow_status.json",
+        "--component-status",
+        "${RUN_ROOT}/research/repricing_book/combo_collateral_return_status.json",
+        "--model-sha",
+        "${SHA}",
+        "--output",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json"
+      ],
       "profile": "observer",
-      "inputs": ["universe/current.json", "research/repricing_book/exact_arb_relations.generated.json", "config/v7_exact_arb_relations.json", "research/repricing_book/cross_market_exact_arb_status.json", "research/repricing_book/complete_set_merge_status.json", "research/repricing_book/two_sided_complete_set_status.json", "research/repricing_book/combo_market_source.json", "research/repricing_book/combo_rfq_gateway_status.json", "research/repricing_book/combo_rfq_shadow_status.json", "research/repricing_book/combo_collateral_return_status.json"],
-      "outputs": ["research/repricing_book/unified_exact_arb_graph.json", "research/repricing_book/unified_exact_arb_graph.log"],
-      "dependencies": ["pure_arb_exact_relation_discovery"],
+      "inputs": [
+        "research/repricing_book/exact_arb_exchange_universe.json",
+        "research/repricing_book/exact_arb_relations.generated.json",
+        "config/v7_exact_arb_relations.json",
+        "research/repricing_book/cross_market_exact_arb_status.json",
+        "research/repricing_book/complete_set_merge_status.json",
+        "research/repricing_book/two_sided_complete_set_status.json",
+        "research/repricing_book/combo_market_source.json",
+        "research/repricing_book/combo_rfq_gateway_status.json",
+        "research/repricing_book/combo_rfq_shadow_status.json",
+        "research/repricing_book/combo_collateral_return_status.json"
+      ],
+      "outputs": [
+        "research/repricing_book/unified_exact_arb_graph.json",
+        "research/repricing_book/unified_exact_arb_graph.log"
+      ],
+      "dependencies": [
+        "pure_arb_exact_relation_discovery",
+        "exact_arb_exchange_universe"
+      ],
       "exact_sha_required": true,
       "config_identity_required": true,
       "launcher_log": "research/repricing_book/unified_exact_arb_graph.log",
@@ -943,13 +1015,78 @@
       "authority_overrides": {}
     },
     {
+      "id": "unified_exact_arb_warm_screen",
+      "executable": "scripts/v7_exact_arb_warm_scan.py",
+      "arguments": [
+        "--graph",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json",
+        "--status",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_warm_status.json",
+        "--hotset",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_hotset.json",
+        "--model-sha",
+        "${SHA}",
+        "--interval-seconds",
+        "2",
+        "--max-tokens-per-cycle",
+        "500",
+        "--hotset-relations",
+        "64"
+      ],
+      "profile": "observer",
+      "inputs": [
+        "process:unified_exact_arb_graph_compiler",
+        "research/repricing_book/unified_exact_arb_graph.json"
+      ],
+      "outputs": [
+        "research/repricing_book/unified_exact_arb_warm_status.json",
+        "research/repricing_book/unified_exact_arb_hotset.json",
+        "research/repricing_book/unified_exact_arb_warm_screen.log"
+      ],
+      "dependencies": [
+        "unified_exact_arb_graph_compiler"
+      ],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/unified_exact_arb_warm_screen.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
       "id": "unified_exact_arb_graph_shadow",
       "executable": "scripts/v7_unified_exact_arb_graph_shadow.py",
-      "arguments": ["--graph", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json", "--tape", "${RUN_ROOT}/research/repricing_book/pure_arb_deep_book_snapshots.jsonl", "--delta-tape", "${RUN_ROOT}/research/repricing_book/book_observations/current.jsonl", "--status", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_status.json", "--opportunities", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_opportunities.jsonl", "--capital-policy", "config/v7_pure_arb_capital_policy.json", "--model-sha", "${SHA}"],
+      "arguments": [
+        "--graph",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json",
+        "--tape",
+        "${RUN_ROOT}/research/repricing_book/pure_arb_deep_book_snapshots.jsonl",
+        "--delta-tape",
+        "${RUN_ROOT}/research/repricing_book/book_observations/current.jsonl",
+        "--status",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_status.json",
+        "--opportunities",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_opportunities.jsonl",
+        "--capital-policy",
+        "config/v7_pure_arb_capital_policy.json",
+        "--model-sha",
+        "${SHA}"
+      ],
       "profile": "observer",
-      "inputs": ["process:unified_exact_arb_graph_compiler", "research/repricing_book/pure_arb_deep_book_snapshots.jsonl", "research/repricing_book/book_observations/current.jsonl", "config/v7_pure_arb_capital_policy.json"],
-      "outputs": ["research/repricing_book/unified_exact_arb_graph_status.json", "research/repricing_book/unified_exact_arb_graph_opportunities.jsonl", "research/repricing_book/unified_exact_arb_graph_shadow.log"],
-      "dependencies": ["unified_exact_arb_graph_compiler"],
+      "inputs": [
+        "process:unified_exact_arb_graph_compiler",
+        "research/repricing_book/pure_arb_deep_book_snapshots.jsonl",
+        "research/repricing_book/book_observations/current.jsonl",
+        "config/v7_pure_arb_capital_policy.json"
+      ],
+      "outputs": [
+        "research/repricing_book/unified_exact_arb_graph_status.json",
+        "research/repricing_book/unified_exact_arb_graph_opportunities.jsonl",
+        "research/repricing_book/unified_exact_arb_graph_shadow.log"
+      ],
+      "dependencies": [
+        "unified_exact_arb_graph_compiler"
+      ],
       "exact_sha_required": true,
       "config_identity_required": true,
       "launcher_log": "research/repricing_book/unified_exact_arb_graph_shadow.log",
@@ -960,11 +1097,37 @@
     {
       "id": "unified_exact_arb_graph_execution_shadow",
       "executable": "scripts/v7_unified_exact_arb_graph_execution_shadow.py",
-      "arguments": ["--model-sha", "${SHA}", "--candidates", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_opportunities.jsonl", "--book-tape", "${RUN_ROOT}/research/repricing_book/pure_arb_deep_book_snapshots.jsonl", "--delta-tape", "${RUN_ROOT}/research/repricing_book/book_observations/current.jsonl", "--output", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_execution_cycles.jsonl", "--status", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_execution_status.json"],
+      "arguments": [
+        "--model-sha",
+        "${SHA}",
+        "--candidates",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_opportunities.jsonl",
+        "--book-tape",
+        "${RUN_ROOT}/research/repricing_book/pure_arb_deep_book_snapshots.jsonl",
+        "--delta-tape",
+        "${RUN_ROOT}/research/repricing_book/book_observations/current.jsonl",
+        "--output",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_execution_cycles.jsonl",
+        "--status",
+        "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph_execution_status.json"
+      ],
       "profile": "observer",
-      "inputs": ["process:unified_exact_arb_graph_shadow", "process:pm_book_observer", "research/repricing_book/unified_exact_arb_graph_opportunities.jsonl", "research/repricing_book/pure_arb_deep_book_snapshots.jsonl", "research/repricing_book/book_observations/current.jsonl"],
-      "outputs": ["research/repricing_book/unified_exact_arb_graph_execution_cycles.jsonl", "research/repricing_book/unified_exact_arb_graph_execution_status.json", "research/repricing_book/unified_exact_arb_graph_execution.log"],
-      "dependencies": ["unified_exact_arb_graph_shadow", "pm_book_observer"],
+      "inputs": [
+        "process:unified_exact_arb_graph_shadow",
+        "process:pm_book_observer",
+        "research/repricing_book/unified_exact_arb_graph_opportunities.jsonl",
+        "research/repricing_book/pure_arb_deep_book_snapshots.jsonl",
+        "research/repricing_book/book_observations/current.jsonl"
+      ],
+      "outputs": [
+        "research/repricing_book/unified_exact_arb_graph_execution_cycles.jsonl",
+        "research/repricing_book/unified_exact_arb_graph_execution_status.json",
+        "research/repricing_book/unified_exact_arb_graph_execution.log"
+      ],
+      "dependencies": [
+        "unified_exact_arb_graph_shadow",
+        "pm_book_observer"
+      ],
       "exact_sha_required": true,
       "config_identity_required": true,
       "launcher_log": "research/repricing_book/unified_exact_arb_graph_execution.log",
