@@ -112,6 +112,45 @@ jobs:
                 "pending_settlement_count","paper_only","authenticated_execution","real_order_submission")
           print(json.dumps({k:v.get(k) for k in keys},sort_keys=True))
           PYNATIVE
+          echo "=== PURE ARB EVIDENCE GROWTH ==="
+          python3 - "$ROOT" <<'PYEVID'
+          import json,sys,time
+          from pathlib import Path
+          root=Path(sys.argv[1]); base=root/"research/repricing_book"
+          rels=[
+            "book_observations/current.jsonl",
+            "pure_arb_deep_book_snapshots.jsonl",
+            "pure_arb_trades.jsonl",
+            "pure_arb_arrival_survival_cycles.jsonl",
+            "pure_arb_deep_sizing_cycles.jsonl",
+            "exchange_execution_cycles.jsonl",
+          ]
+          def sample():
+              out={}
+              for rel in rels:
+                  p=base/rel
+                  try:
+                      st=p.stat()
+                      out[rel]={"bytes":st.st_size,"mtime_ns":st.st_mtime_ns}
+                  except OSError:
+                      out[rel]={"bytes":None,"mtime_ns":None}
+              return out
+          a=sample(); time.sleep(10); b=sample()
+          print(json.dumps({"t0":a,"t1":b,
+              "growth":{k:None if a[k]["bytes"] is None or b[k]["bytes"] is None
+                        else b[k]["bytes"]-a[k]["bytes"] for k in rels}},sort_keys=True))
+          for name in (
+              "pure_arb_status.json","pure_arb_arrival_survival_status.json",
+              "pure_arb_deep_sizing_status.json","exchange_execution_status.json",
+              "fillability_ws_status.json"):
+              p=base/name
+              try:v=json.loads(p.read_text(encoding="utf-8"))
+              except Exception:v={}
+              keep=("schema","model_sha","state","cycles","evaluated","candidates","scenarios",
+                    "status_window_size","observations","events","paper_only",
+                    "authenticated_execution","real_order_submission")
+              print(name+"="+json.dumps({k:v.get(k) for k in keep if k in v},sort_keys=True))
+          PYEVID
           echo "=== FATAL CHILD LOG TAILS ==="
           for rel in \
             public_https_proxy.log \
