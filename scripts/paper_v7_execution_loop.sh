@@ -531,6 +531,7 @@ v7_register_optional_child "$!"
 # Independent public clock attestation against CLOB server time.
 v7_exec_class CONTROL python3 scripts/v7_clock_guard.py \
   --model-sha "$SHA" --output "$RUN_ROOT/control/clock_guard.json" \
+  --https-proxy "$PUBLIC_PROXY" \
   --maximum-absolute-offset-ms 50 --interval-seconds 5 \
   --fail-after-consecutive-unsafe 3 \
   >> "$RUN_ROOT/clock_guard.log" 2>&1 &
