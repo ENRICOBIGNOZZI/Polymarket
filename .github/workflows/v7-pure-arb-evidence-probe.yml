@@ -1,0 +1,133 @@
+name: V7 PureArb evidence growth probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-pure-arb-evidence-probe-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: i-04042ca7da7a23215
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate request
+        run: |
+          python3 - deploy/v7-pure-arb-evidence-probe-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v=={"schema":"polymarket_v7_pure_arb_evidence_probe_v1","read_only":True}
+          PY
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-evidence-probe
+          aws-region: eu-west-2
+      - name: Verify runtime and evidence growth
+        run: |
+          set -euo pipefail
+          payload="$(cat <<'SH'
+          set -euo pipefail
+          ROOT=/mnt/polymarket-data/paper_v7_london
+          python3 - "$ROOT" <<'PY'
+          import json,os,sys,time
+          from pathlib import Path
+          root=Path(sys.argv[1]); control=root/"control"; base=root/"research/repricing_book"
+          def load(path):
+              try:return json.loads(path.read_text(encoding="utf-8"))
+              except Exception:return {}
+          runtime=load(control/"runtime_status.json")
+          supervisor=load(control/"supervisor_status.json")
+          native=load(control/"native_engine_manager_status.json")
+          clock=load(control/"clock_guard.json")
+          fencing=load(control/"fencing_supervisor_status.json")
+          service_active=os.system("systemctl is-active --quiet polymarket-v7-paper.service")==0
+          kill_exists=(control/"KILL").exists()
+          health={
+            "service_active":service_active,
+            "kill_exists":kill_exists,
+            "runtime_state":runtime.get("state"),
+            "runtime_readiness":runtime.get("readiness"),
+            "runtime_model_sha":runtime.get("model_sha"),
+            "supervisor_state":supervisor.get("state"),
+            "supervisor_readiness":supervisor.get("readiness"),
+            "clock_state":clock.get("state"),
+            "clock_safe":clock.get("safe"),
+            "clock_offset_ms":clock.get("offset_ms"),
+            "fencing_state":fencing.get("state"),
+            "fencing_safe":fencing.get("safe"),
+            "native_state":native.get("state"),
+            "active_worker_count":native.get("active_worker_count"),
+            "target_context_count":native.get("target_context_count"),
+            "hot_cpuset":native.get("hot_cpuset"),
+            "native_observations_written":native.get("native_observations_written"),
+            "native_observations_dropped":native.get("native_observations_dropped"),
+          }
+          rels=[
+            "book_observations/current.jsonl",
+            "pure_arb_deep_book_snapshots.jsonl",
+            "pure_arb_trades.jsonl",
+            "pure_arb_arrival_survival_cycles.jsonl",
+            "pure_arb_deep_sizing_cycles.jsonl",
+            "exchange_execution_cycles.jsonl",
+          ]
+          def sample():
+              out={}
+              for rel in rels:
+                  p=base/rel
+                  try:
+                      st=p.stat(); out[rel]={"bytes":st.st_size,"mtime_ns":st.st_mtime_ns}
+                  except OSError:
+                      out[rel]={"bytes":None,"mtime_ns":None}
+              return out
+          a=sample(); time.sleep(10); b=sample()
+          growth={k:None if a[k]["bytes"] is None or b[k]["bytes"] is None else b[k]["bytes"]-a[k]["bytes"] for k in rels}
+          statuses={}
+          for name in ("pure_arb_status.json","pure_arb_arrival_survival_status.json","pure_arb_deep_sizing_status.json","exchange_execution_status.json","fillability_ws_status.json"):
+              v=load(base/name)
+              statuses[name]=v
+          print("HEALTH="+json.dumps(health,sort_keys=True,separators=(",",":")))
+          print("EVIDENCE_T0="+json.dumps(a,sort_keys=True,separators=(",",":")))
+          print("EVIDENCE_T1="+json.dumps(b,sort_keys=True,separators=(",",":")))
+          print("EVIDENCE_GROWTH="+json.dumps(growth,sort_keys=True,separators=(",",":")))
+          for name,v in statuses.items():
+              keys=("schema","model_sha","state","cycles","evaluated","candidates","scenarios","status_window_size","observations","events","paper_only","authenticated_execution","real_order_submission")
+              print("STATUS_"+name+"="+json.dumps({k:v.get(k) for k in keys if k in v},sort_keys=True,separators=(",",":")))
+          assert service_active and not kill_exists
+          assert runtime.get("state")=="running"
+          assert clock.get("safe") is True
+          assert fencing.get("safe") is True
+          assert native.get("state")=="RUNNING"
+          assert int(native.get("active_worker_count") or 0)==int(native.get("target_context_count") or -1)==30
+          assert growth["book_observations/current.jsonl"] is not None and growth["book_observations/current.jsonl"]>0
+          PY
+          SH
+          )"
+          encoded="$(printf '%s' "$payload" | base64 -w0)"
+          wrapped="printf '%s' '$encoded' | base64 -d | bash"
+          params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["60"]},separators=(",",":")))' "$wrapped")"
+          cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$params" --comment "Polymarket V7 PureArb evidence read-only probe" --region "$AWS_REGION" --query 'Command.CommandId' --output text)"
+          for i in $(seq 1 45); do
+            status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query Status --output text 2>/dev/null || true)"
+            case "$status" in
+              Success)
+                aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardOutputContent --output text
+                exit 0;;
+              Failed|Cancelled|TimedOut)
+                aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardOutputContent --output text || true
+                aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardErrorContent --output text >&2 || true
+                exit 1;;
+            esac
+            sleep 2
+          done
+          exit 1
