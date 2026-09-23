@@ -56,6 +56,9 @@ jobs:
           done
           echo "=== RUN ROOT BOOTSTRAP MATERIAL ==="
           find "$ROOT" -maxdepth 3 \( -type f -o -type l \) -printf '%P\n' 2>/dev/null | sort | head -400 || true
+          echo "--- bootstrap_receipt ---"
+          cat "$ROOT/bootstrap_receipt.json" 2>/dev/null || true
+          echo
           echo "--- runtime_status ---"
           cat "$ROOT/control/runtime_status.json" 2>/dev/null || true
           echo "--- deployed_sha ---"
