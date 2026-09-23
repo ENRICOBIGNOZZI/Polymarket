@@ -40,3 +40,16 @@ def test_larger_host_keeps_four_high_cpus_hot():
     assert plan["latency_observer_cpus"] == [7]
     assert plan["latency_observer_isolated"] is True
     assert plan["spare_cpus"] == [4, 5, 6]
+
+
+def test_cpuset_parser_handles_ranges_and_sparse_values():
+    assert MODULE._parse_cpu_list("0-3,6,8-9\n") == [0,1,2,3,6,8,9]
+
+
+def test_cgroup_allowance_can_exceed_inherited_pid_affinity(monkeypatch):
+    monkeypatch.setattr(MODULE,"_cgroup_effective_cpus",lambda:list(range(8)))
+    monkeypatch.setattr(MODULE.os,"sched_getaffinity",lambda _:{0,1,2,3})
+    assert MODULE._cpus() == list(range(8))
+    plan=MODULE.resolve(config())
+    assert plan["outer_cpuset_contract_satisfied"] is True
+    assert plan["hot_path_cpus"] == [4,5,6,7]

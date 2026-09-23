@@ -5,7 +5,62 @@ import argparse,json,os
 from pathlib import Path
 
 
+def _parse_cpu_list(raw:str)->list[int]:
+    values:set[int]=set()
+    for part in raw.strip().split(","):
+        part=part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            left,right=part.split("-",1)
+            start,end=int(left),int(right)
+            if start<0 or end<start:
+                raise ValueError("invalid cpuset range")
+            values.update(range(start,end+1))
+        else:
+            value=int(part)
+            if value<0:
+                raise ValueError("invalid cpuset cpu")
+            values.add(value)
+    return sorted(values)
+
+
+def _cgroup_effective_cpus()->list[int]:
+    """Return the outer cgroup CPU allowance, not inherited task affinity.
+
+    London intentionally keeps PID1/general work off isolated HFT cores. A
+    child may still legally widen its affinity to those cores with taskset when
+    the cgroup permits them. Therefore sched_getaffinity(0) is too narrow for
+    resource planning on an isolated-core host.
+    """
+    root=Path("/sys/fs/cgroup")
+    try:
+        rows=Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
+        unified=next((row.split(":",2)[2] for row in rows
+                      if row.startswith("0::")),None)
+        if unified is None:
+            return []
+        current=root/unified.lstrip("/")
+        while True:
+            path=current/"cpuset.cpus.effective"
+            try:
+                cpus=_parse_cpu_list(path.read_text(encoding="utf-8"))
+            except (OSError,ValueError):
+                cpus=[]
+            if cpus:
+                return cpus
+            if current==root or root not in current.parents:
+                break
+            current=current.parent
+    except OSError:
+        pass
+    return []
+
+
 def _cpus() -> list[int]:
+    cgroup=_cgroup_effective_cpus()
+    if cgroup:
+        return cgroup
     try:
         return sorted(os.sched_getaffinity(0))
     except (AttributeError,OSError):
