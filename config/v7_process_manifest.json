@@ -314,7 +314,9 @@
         "--risk-policy",
         "${ROOT}/config/v7_native_risk_policy.json",
         "--engine",
-        "${PURE_ARB_MULTI_RUNTIME}"
+        "${PURE_ARB_MULTI_RUNTIME}",
+        "--settler",
+        "${ROOT}/scripts/v7_native_paper_settlement.py"
       ],
       "profile": "core",
       "inputs": [
