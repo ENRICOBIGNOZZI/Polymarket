@@ -1,4 +1,5 @@
 #include "pm/v7_exact_arb_graph_hotpath.hpp"
+#include "pm/v7_pure_arb_lane.hpp"
 
 #include <array>
 #include <cassert>
@@ -20,6 +21,10 @@ int main() {
     relation.legs[1].book_handle = 1; relation.legs[1].coefficient = {1, 1};
     const auto direct = evaluate_buy(relation, books);
     assert(direct.reject == HotReject::Accepted && direct.quantity_microunits == 5 * kShareMicrounits);
+    const auto champion = pm::v7::pure_arb::sweep(books[0], books[1], 0.0, 1.0, 0.0, true);
+    assert(champion.shares_microunits == direct.quantity_microunits);
+    assert(static_cast<std::int64_t>(std::llround(champion.gross_locked_pnl * kShareMicrounits))
+           == direct.gross_pnl_microunits);
     std::array<CompiledRelation, 1> relations{relation};
     std::array<TokenDependency, 1> dependencies{TokenDependency{42, 0, 1}};
     std::array<std::uint32_t, 1> handles{0}; int callbacks = 0;
