@@ -324,9 +324,32 @@ def prepare(
 
     if not runtime and not deployed_sha:
         lineage = read_json(run_root / "control/cutover_lineage.json")
-        material = any(path.is_file() or path.is_symlink() for path in run_root.rglob("*"))
-        if not material:
+        material_paths = sorted(
+            path.relative_to(run_root).as_posix()
+            for path in run_root.rglob("*")
+            if path.is_file() or path.is_symlink()
+        )
+        if not material_paths:
             return {"state": "NEW_RUN_ROOT", "target_sha": target_sha, "archived": False}
+        if material_paths == ["bootstrap_receipt.json"]:
+            bootstrap = read_json(run_root / "bootstrap_receipt.json")
+            bootstrap_sha = str(bootstrap.get("code_sha") or "")
+            if (
+                bootstrap.get("schema") == "polymarket_v7_london_bootstrap_receipt_v1"
+                and bootstrap.get("paper_only") is True
+                and bootstrap.get("authenticated_execution") is False
+                and bootstrap.get("real_order_submission") is False
+                and bootstrap.get("systemd_installed_but_disabled") is True
+                and SHA40.fullmatch(bootstrap_sha)
+                and ancestor_check(repository_root, bootstrap_sha, target_sha)
+            ):
+                return {
+                    "state": "BOOTSTRAP_RUN_ROOT",
+                    "target_sha": target_sha,
+                    "bootstrap_sha": bootstrap_sha,
+                    "archived": False,
+                }
+            raise CutoverArchiveError("bootstrap_receipt_invalid")
         if (
             lineage.get("schema") == "polymarket_v7_cutover_lineage_v1"
             and lineage.get("target_sha") == target_sha
