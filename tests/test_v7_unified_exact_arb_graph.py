@@ -5,6 +5,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from v7_unified_exact_arb_graph import SAFETY, GraphError, compile_graph, evaluate
 from v7_unified_exact_arb_graph_shadow import Shadow, native_binary_candidate
+from v7_exact_relation_discovery import build as discover_relations
 
 
 def _universe(model: str = "a" * 40, semantic: str = "b" * 64) -> dict:
@@ -59,6 +60,21 @@ def test_machine_attested_binary_partition_is_auto_compiled() -> None:
     registry={**SAFETY,"schema":"polymarket_v7_exact_arb_relation_registry_v1","version":1,"relations":[]}
     graph=compile_graph([registry],universe,model)
     assert graph["relations"][0]["relation_family"]=="SAME_MARKET_BINARY_COMPLETE_SET"
+
+
+def test_discovered_payoff_identical_duplicates_flow_into_the_canonical_graph() -> None:
+    model, semantic="d"*40,"e"*64
+    markets=[]
+    for mid in ("a","b"):
+        markets.append({"market_id":mid,"event_id":"e"+mid,"condition_id":"c"+mid,"active":True,"closed":False,
+          "asset":"BTC","horizon":"M5","contract_family":"binary","settlement_semantic_hash":semantic,
+          "window_start_unix":1,"close_timestamp_unix":2,"fee_schedule":{"rate":0},
+          "clob_token_ids":[mid+"y",mid+"n"],"outcomes":["YES","NO"]})
+    universe={**SAFETY,"model_sha":model,"markets":markets}
+    discovered=discover_relations(universe,model)
+    graph=compile_graph([discovered],universe,model)
+    assert len(discovered["relations"])==2
+    assert {relation["relation_family"] for relation in graph["relations"]}=={"AUTOMATIC_PAYOFF_IDENTICAL_DUPLICATE"}
 
 
 def test_machine_attested_n_way_partition_is_a_single_hyperedge() -> None:
