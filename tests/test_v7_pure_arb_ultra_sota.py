@@ -287,6 +287,28 @@ def test_native_latency_trace_is_stage_complete_without_hot_path_io():
     assert "filesystem" not in lane_body
 
 
+def test_pure_arb_candidate_deep_tape_has_per_opportunity_stage_latency():
+    observer=(ROOT/"src/v7_maker_fillability_observer.cpp").read_text()
+    for token in (
+        "trigger_receive_monotonic_ns",
+        "trigger_decode_complete_monotonic_ns",
+        "trigger_hot_enqueue_monotonic_ns",
+        "deep_enqueue_monotonic_ns",
+        '"receive_to_decode_ns"',
+        '"decode_to_hot_enqueue_ns"',
+        '"hot_enqueue_to_deep_enqueue_ns"',
+        '"deep_queue_wait_ns"',
+    ):
+        assert token in observer
+    hot_stamp=observer.index("row.enqueue_monotonic_ns = monotonic_ns();")
+    hot_push=observer.index("queue_->try_push(row)",hot_stamp)
+    deep_capture=observer.index("maybe_queue_pure_arb_deep(",hot_push)
+    assert hot_stamp < hot_push < deep_capture
+    deep_stamp=observer.index("deep.deep_enqueue_monotonic_ns = monotonic_ns();")
+    deep_push=observer.index("pure_arb_deep_queue_->try_push(deep)",deep_stamp)
+    assert deep_stamp < deep_push
+
+
 if __name__=="__main__":
     tests=[value for name,value in sorted(globals().items())
            if name.startswith("test_") and callable(value)]
