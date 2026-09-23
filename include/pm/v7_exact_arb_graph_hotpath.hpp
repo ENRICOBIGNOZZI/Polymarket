@@ -26,6 +26,8 @@ enum class HotReject : std::uint8_t {
     InvalidRelation,
     MissingBook,
     IncompleteDepth,
+    StaleBook,
+    LegSkew,
     InsufficientDepth,
     MinimumOrder,
     NoPositiveEdge,
@@ -77,6 +79,14 @@ struct HotDecision {
     std::uint16_t levels_used = 0;
 };
 
+struct HotTimingContext {
+    // Zero disables the corresponding check for deterministic/offline unit
+    // tests. Production callers supply the causal receive clock explicitly.
+    std::int64_t now_receive_monotonic_ns = 0;
+    std::int64_t maximum_book_age_ns = 0;
+    std::int64_t maximum_leg_skew_ns = 0;
+};
+
 [[nodiscard]] inline double level_price(const PriceLevelE4& level) noexcept {
     return static_cast<double>(level.price_e4) / 10'000.0;
 }
@@ -97,7 +107,8 @@ struct HotDecision {
 // Full-depth N-leg buy sizing.  Every loop advances at least one level, so it
 // is bounded by the sum of preallocated book depths, not graph cardinality.
 [[nodiscard]] inline HotDecision evaluate_buy(
-    const CompiledRelation& relation, std::span<const BookDeepSnapshot> books) noexcept {
+    const CompiledRelation& relation, std::span<const BookDeepSnapshot> books,
+    HotTimingContext timing = {}) noexcept {
     HotDecision out{};
     out.relation_handle = relation.relation_handle;
     if (relation.enabled == 0 || relation.leg_count == 0 || relation.leg_count > kMaxLegs
@@ -106,11 +117,24 @@ struct HotDecision {
     std::array<std::size_t, kMaxLegs> level{};
     std::array<std::int64_t, kMaxLegs> remaining{};
     std::int64_t minimum = 0, quantity_quantum = 1;
+    std::int64_t earliest_receive_ns = std::numeric_limits<std::int64_t>::max();
+    std::int64_t latest_receive_ns = 0;
     for (std::size_t i = 0; i < relation.leg_count; ++i) {
         const auto& leg = relation.legs[i];
         if (!leg.coefficient.valid() || leg.book_handle >= books.size() || !valid_book(books[leg.book_handle])) {
             out.reject = leg.book_handle >= books.size() ? HotReject::MissingBook : HotReject::IncompleteDepth;
             return out;
+        }
+        const auto receive_ns = books[leg.book_handle].receive_monotonic_ns;
+        if (timing.now_receive_monotonic_ns > 0 && timing.maximum_book_age_ns > 0
+            && (receive_ns <= 0 || receive_ns > timing.now_receive_monotonic_ns
+                || timing.now_receive_monotonic_ns - receive_ns > timing.maximum_book_age_ns)) {
+            out.reject = HotReject::StaleBook;
+            return out;
+        }
+        if (receive_ns > 0) {
+            earliest_receive_ns = std::min(earliest_receive_ns, receive_ns);
+            latest_receive_ns = std::max(latest_receive_ns, receive_ns);
         }
         // ceil(minimum leg shares / coefficient) in relation units.
         const auto scaled = static_cast<long double>(std::max<std::int64_t>(0, leg.minimum_order_microunits))
@@ -120,6 +144,12 @@ struct HotDecision {
         const auto gcd = std::gcd(quantity_quantum, divisor);
         if (quantity_quantum > std::numeric_limits<std::int64_t>::max() / (divisor / gcd)) return out;
         quantity_quantum *= divisor / gcd;
+    }
+    if (timing.maximum_leg_skew_ns > 0 && latest_receive_ns > 0
+        && earliest_receive_ns != std::numeric_limits<std::int64_t>::max()
+        && latest_receive_ns - earliest_receive_ns > timing.maximum_leg_skew_ns) {
+        out.reject = HotReject::LegSkew;
+        return out;
     }
     minimum = ((minimum + quantity_quantum - 1) / quantity_quantum) * quantity_quantum;
 
@@ -183,6 +213,7 @@ inline void evaluate_token_update(std::uint32_t token_handle,
                                   std::span<const std::uint32_t> relation_handles,
                                   std::span<const CompiledRelation> relations,
                                   std::span<const BookDeepSnapshot> books,
+                                  HotTimingContext timing,
                                   Callback&& callback) noexcept {
     const auto it = std::lower_bound(dependencies.begin(), dependencies.end(), token_handle,
         [](const TokenDependency& entry, std::uint32_t handle) { return entry.token_handle < handle; });
@@ -191,7 +222,7 @@ inline void evaluate_token_update(std::uint32_t token_handle,
     if (end > relation_handles.size()) return;
     for (std::size_t i = it->first_relation; i < end; ++i) {
         const auto handle = relation_handles[i];
-        if (handle < relations.size()) callback(evaluate_buy(relations[handle], books));
+        if (handle < relations.size()) callback(evaluate_buy(relations[handle], books, timing));
     }
 }
 

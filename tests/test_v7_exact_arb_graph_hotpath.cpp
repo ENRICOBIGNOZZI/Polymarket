@@ -36,13 +36,20 @@ int main() {
     no_edge[0].ask_levels[0].price_e4 = 6000;
     no_edge[1].ask_levels[0].price_e4 = 6000;
     assert(evaluate_buy(relation, no_edge).reject == HotReject::NoPositiveEdge);
+    auto timed = books;
+    timed[0].receive_monotonic_ns = 100;
+    timed[1].receive_monotonic_ns = 100;
+    assert(evaluate_buy(relation, timed, {200, 50, 0}).reject == HotReject::StaleBook);
+    timed[0].receive_monotonic_ns = 190;
+    timed[1].receive_monotonic_ns = 150;
+    assert(evaluate_buy(relation, timed, {200, 100, 20}).reject == HotReject::LegSkew);
     std::array<CompiledRelation, 1> relations{relation};
     std::array<TokenDependency, 1> dependencies{TokenDependency{42, 0, 1}};
     std::array<std::uint32_t, 1> handles{0}; int callbacks = 0;
-    evaluate_token_update(42, dependencies, handles, relations, books, [&](const HotDecision& result) {
+    evaluate_token_update(42, dependencies, handles, relations, books, {}, [&](const HotDecision& result) {
         ++callbacks; assert(result.relation_handle == 7 && result.reject == HotReject::Accepted);
     });
-    evaluate_token_update(43, dependencies, handles, relations, books, [&](const HotDecision&) { ++callbacks; });
+    evaluate_token_update(43, dependencies, handles, relations, books, {}, [&](const HotDecision&) { ++callbacks; });
     assert(callbacks == 1);
 
     // Relation units need not equal leg shares: the hot path preserves the
