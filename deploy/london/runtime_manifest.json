@@ -38,6 +38,7 @@
     "scripts/v7_crypto_universe.py",
     "scripts/v7_exact_arb_causal.py",
     "scripts/v7_exact_arb_exchange_universe.py",
+    "scripts/v7_exact_arb_hotset_selection.py",
     "scripts/v7_exact_arb_native_compile.py",
     "scripts/v7_exact_arb_relation_yield.py",
     "scripts/v7_exact_arb_replay_report.py",
