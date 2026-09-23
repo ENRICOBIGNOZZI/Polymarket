@@ -84,7 +84,7 @@ class Shadow:
     stages=("books_ready","lineage_ready","fee_ready","freshness_ready","leg_skew_ready")
     failed={"lineage_or_book_missing":0,"truncated_depth":0,"fee_or_timestamp_missing":2,
             "fee_or_depth_invalid":2,"fee_rounding_invalid":2,"stale_book":3,"leg_skew":4,
-            "depth_insufficient":5,"minimum_order":5,"capital_limit":5,"inventory_unavailable":5,
+            "depth_insufficient":5,"minimum_order":5,"capital_limit":5,"inventory_unavailable":5,"transformation_capacity":5,
             "empty_relation":0,"disabled_relation":0}.get(reason,5)
     if not r.get("accepted"):
      for stage in stages[:failed]:self.funnel[stage]+=1;self.funnel_by_family[family][stage]+=1

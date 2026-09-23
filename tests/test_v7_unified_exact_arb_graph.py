@@ -165,6 +165,21 @@ def test_capital_time_economics_are_explicit_when_attested() -> None:
     assert out["capital_required"]=="1" and out["net_locked_pnl_per_capital_time"]=="1/1000"
 
 
+def test_verified_transform_capacity_and_lock_are_enforced() -> None:
+    relation={"id":"merge","enabled":True,"guaranteed_payout":"1","legs":[
+      {"selector":{"market_id":"a"},"outcome":"YES","minimum_order":"1","payout_vector":[1,0]},
+      {"selector":{"market_id":"a"},"outcome":"NO","minimum_order":"1","payout_vector":[0,1]}],"states":["y","n"],
+      "transformation":{"kind":"MERGE","verification":"EXPLICIT_VERIFIED","capacity":"1","latency_ms":2,
+                        "capital_lock_time_ms":100,"proof_hash":"f"*64}}
+    graph=compile_graph([_registry([relation])],_universe(),"a"*40)
+    books={token:{"timestamp_ms":1,"lineage_continuous":True,"depth_truncated":False,"fee_rate":"0",
+                  "asks":[["2/5","2"]]} for token in ("ay","an")}
+    out=evaluate(graph["relations"][0],books,1)
+    assert out["accepted"] is True and out["quantity"]=="1" and out["capital_lock_time_ms"]==100
+    relation["transformation"]["capacity"]="1/2"
+    assert evaluate(compile_graph([_registry([relation])],_universe(),"a"*40)["relations"][0],books,1)["reason"]=="transformation_capacity"
+
+
 def test_invalid_inequality_and_unverified_components_remain_non_actionable() -> None:
     invalid={"id":"bad","enabled":True,"relation_type":"PAYOFF_LOWER_BOUND","states":["a","b"],"guaranteed_payout":1,
              "legs":[{"selector":{"market_id":"a"},"outcome":"YES","payout_vector":[1,0]}]}

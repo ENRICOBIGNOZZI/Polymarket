@@ -148,6 +148,26 @@ def directions(raw: dict[str, Any]) -> list[str]:
     return normalized
 
 
+def transformation(raw: dict[str, Any]) -> dict[str, Any] | None:
+    value = raw.get("transformation")
+    if value is None: return None
+    if not isinstance(value, dict): raise GraphError("transformation_shape")
+    kind, verification = str(value.get("kind") or ""), str(value.get("verification") or "")
+    if kind not in {"MERGE", "SPLIT", "NEGRISK_CONVERSION", "COMBO_COLLATERAL_RETURN"}:
+        raise GraphError("transformation_kind")
+    if verification not in {"AUTO_VERIFIED", "EXPLICIT_VERIFIED"}:
+        raise GraphError("transformation_verification")
+    try:
+        capacity = frac(value["capacity"]); latency = int(value["latency_ms"]); lock = int(value["capital_lock_time_ms"])
+    except (KeyError, TypeError, ValueError, GraphError): raise GraphError("transformation_terms") from None
+    if capacity <= 0 or latency < 0 or lock <= 0: raise GraphError("transformation_terms")
+    proof_hash=str(value.get("proof_hash") or "")
+    if len(proof_hash) != 64: raise GraphError("transformation_proof")
+    return {"id":str(value.get("id") or sha(value)), "kind":kind,"verification":verification,
+            "capacity":fstr(capacity),"latency_ms":latency,"capital_lock_time_ms":lock,
+            "proof_hash":proof_hash}
+
+
 def prove(raw: dict[str, Any]) -> dict[str, Any]:
     """Equality is actionable; proven inequalities are retained but disabled."""
     kind=str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY")
@@ -217,7 +237,7 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
                 "capital_transformation_semantics": raw.get("capital_transformation_semantics", "SETTLEMENT_LOCKED"),
                 "capital_lock_time_ms": int(raw["capital_lock_time_ms"]) if raw.get("capital_lock_time_ms") is not None else None,
                 "collateral_denomination": raw.get("collateral_denomination") or next((item.get("collateral_denomination") for item in nodes if item.get("collateral_denomination")), None),
-                "transformation": raw.get("transformation") if isinstance(raw.get("transformation"), dict) else None,
+                "transformation": transformation(raw),
                 "reserve_per_unit": fstr(frac(raw.get("reserve_per_unit", 0))),
                 "relation_type": str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY"),
                 "directions": directions(raw),
@@ -477,7 +497,11 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
                "distance_to_after_fee_arbitrage":fstr(fee_touch-guarantee),
                "distance_to_after_reserve_arbitrage":fstr(fee_touch+reserve-guarantee)}
     permitted = set(relation.get("directions") or ["BUY_BASKET"])
-    saw_order, saw_depth, saw_capital, inventory_unavailable = False, False, False, False
+    saw_order, saw_depth, saw_capital, inventory_unavailable, transformation_limited = False, False, False, False, False
+    transform = relation.get("transformation") if isinstance(relation.get("transformation"), dict) else None
+    try: transformation_capacity = frac(transform["capacity"]) if transform is not None else None
+    except (KeyError, GraphError): return {"accepted": False, "reason": "transformation_invalid", **distances}
+    if transformation_capacity is not None: candidates.add(transformation_capacity)
     for direction in ("BUY", "SELL"):
         required = "BUY_COMPLETE_SET" if direction == "BUY" else "SELL_COMPLETE_SET"
         alias = "BUY_BASKET" if direction == "BUY" else "SELL_INVENTORY_BASKET"
@@ -495,6 +519,8 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
         for quantity in sorted(local_candidates):
             if quantity <= 0 or quantity < minimum: continue
             if direction == "SELL" and quantity > frac(inventory_limit): continue
+            if transformation_capacity is not None and quantity > transformation_capacity:
+                transformation_limited = True; continue
             saw_order = True
             total = Fraction(0)
             for leg, asks, bids, fee, exponent, coefficient in prepared:
@@ -514,12 +540,13 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
                        else total - quantity * guarantee - quantity * reserve)
                 if best is None or pnl > best[3]: best = (direction, quantity, total, pnl, capital)
     if best is None:
-        reason = ("capital_limit" if saw_capital else "depth_insufficient" if saw_depth
+        reason = ("capital_limit" if saw_capital else "transformation_capacity" if transformation_limited else "depth_insufficient" if saw_depth
                   else "inventory_unavailable" if inventory_unavailable else "minimum_order")
         return {"accepted": False, "reason": reason, **distances}
     if best[2] <= 0: return {"accepted": False, "reason": "edge_after_costs_nonpositive",**distances}
     direction, quantity, cost, pnl, capital = best
     lock = relation.get("capital_lock_time_ms")
+    if lock is None and transform is not None: lock = transform.get("capital_lock_time_ms")
     try: lock_value = int(lock) if lock is not None else None
     except (TypeError, ValueError): return {"accepted": False, "reason": "capital_lock_invalid", **distances}
     if lock_value is not None and lock_value <= 0: return {"accepted": False, "reason": "capital_lock_invalid", **distances}
