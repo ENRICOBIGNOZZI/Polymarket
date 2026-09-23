@@ -5,17 +5,18 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def test_hot_path_has_no_database_dataframe_or_python_execution_owner():
-    native=(ROOT/'src/v7_crypto_settlement_engine.cpp').read_text()
-    manager=(ROOT/'scripts/v7_native_crypto_engine_manager.py').read_text()
+    native=(ROOT/'src/v7_pure_arb_multi_runtime.cpp').read_text()
+    manager=(ROOT/'scripts/v7_pure_arb_multi_manager.py').read_text()
     forbidden=('sqlite3','sqlalchemy','psycopg','pandas','DataFrame')
     for token in forbidden:
         assert token not in native, token
-    assert 'NativeCryptoDecisionLane' in native
+    assert 'MultiMarketEngine engine' in native
     assert 'NativeSettlementAuthority authority' in native
-    assert 'NativePaperExecutionAdapter' in native
+    assert 'NativePaperExecutionAdapter paper' in native
     assert 'subprocess.Popen(' in manager
-    assert 'launch = list(command)' in manager
-    assert '[taskset, "-c", hot_cpuset] + launch' in manager
+    assert 'self.child = subprocess.Popen' in manager
+    assert '"partitioned_native_workers": False' in manager
+    assert 'launch_worker' not in manager
 
 
 def test_hot_process_is_single_native_owner_and_cpu_classed():
@@ -23,17 +24,20 @@ def test_hot_process_is_single_native_owner_and_cpu_classed():
     hot=[p for p in manifest['processes'] if p.get('runtime_class')=='HOT_PATH']
     assert [p['id'] for p in hot]==['crypto_settlement_engine']
     engine=hot[0]
-    assert engine['executable'].endswith('CRYPTO_SETTLEMENT_ENGINE}')
+    assert engine['executable'].endswith('PURE_ARB_MULTI_RUNTIME}')
     assert engine['dependencies']==[]
     for owner in ('capital_allocator','global_portfolio_coordinator','inventory','oms','risk_engine'):
         assert engine['authority_overrides'][owner] is True
     launcher=(ROOT/'scripts/paper_v7_execution_loop.sh').read_text()
     assert 'v7_exec_class HOT_PATH python3' not in launcher
-    assert 'scripts/v7_native_crypto_engine_manager.py' in launcher
-    manager=(ROOT/'scripts/v7_native_crypto_engine_manager.py').read_text()
+    assert 'scripts/v7_pure_arb_multi_manager.py' in launcher
+    assert 'scripts/v7_native_crypto_engine_manager.py' not in launcher
+    assert 'polymarket_v7_crypto_settlement_engine' not in launcher
+    manager=(ROOT/'scripts/v7_pure_arb_multi_manager.py').read_text()
     assert 'PM_V7_HOT_CPUSET' in manager
     assert 'taskset' in manager
     assert 'shell=True' not in manager
+    assert 'worker_process_count' in manager
     runtime=(ROOT/'scripts/v7_process_runtime.sh').read_text()
     assert 'PM_V7_HOT_CPUSET' in runtime
 
@@ -48,42 +52,52 @@ def test_event_driven_features_are_incremental_not_dataframe_recomputed():
 
 
 def test_native_manager_launcher_invocation_satisfies_current_cli(tmp_path):
-    """Catch full-stack startup regressions: inspect the real launch command."""
+    """The launcher must start one cold manager for one multi-market process."""
     import re, shlex, sys
     sys.path.insert(0,str(ROOT/'scripts'))
     from unittest.mock import patch
-    from v7_native_crypto_engine_manager import parse_args
+    from v7_pure_arb_multi_manager import parse_args
     launcher=(ROOT/'scripts/paper_v7_execution_loop.sh').read_text()
-    match=re.search(r'python3 scripts/v7_native_crypto_engine_manager.py\s+\\\n(.*?)\s+>>',launcher,re.S)
-    assert match, 'missing native manager invocation'
+    match=re.search(r'python3 scripts/v7_pure_arb_multi_manager.py\s+\\\n(.*?)\s+>>',launcher,re.S)
+    assert match, 'missing PureArb multi manager invocation'
     command=match.group(1).replace('\\\n',' ')
-    environment={'ROOT':str(ROOT),'RUN_ROOT':str(tmp_path),'SHA':'a'*40,
+    environment={
+        'ROOT':str(ROOT),'RUN_ROOT':str(tmp_path),'SHA':'a'*40,
         'RUN_ID':'test-run','SERVER_ID':'test-server',
-        'CRYPTO_SETTLEMENT_ENGINE':str(ROOT/'build/polymarket_v7_crypto_settlement_engine'),
-        'CRYPTO_SIGNAL_POLICY':str(ROOT/'config/v7_crypto_signal_policy.json'),
-        'ALLOC':str(tmp_path/'control/allocations')}
+        'PURE_ARB_MULTI_RUNTIME':str(tmp_path/'polymarket_v7_pure_arb_multi_runtime'),
+        'ALLOC':str(tmp_path/'control/allocations'),
+    }
     for key,value in environment.items():command=command.replace('$'+key,value)
-    # The optional shell array expands to zero argv elements when no private
-    # probability artifact is configured. The static launcher test must model
-    # shell expansion rather than pass its literal syntax to argparse.
-    command=command.replace('"${PROBABILITY_MODEL_ARGS[@]}"','')
-    command=command.replace('"${PROBABILITY_EVALUATION_ARGS[@]}"','')
     argv=shlex.split(command.rstrip().rstrip(chr(92)))
-    with patch.object(sys,'argv',['native-manager',*argv]):args=parse_args()
-    assert args.signal_policy==ROOT/'config/v7_crypto_signal_policy.json'
-    assert args.probability_model is None
-    assert args.allocation==tmp_path/'control/allocations/crypto_settlement_engine.json'
-    assert args.market_registry==ROOT/'config/v7_crypto_settlement_markets.json'
+    with patch.object(sys,'argv',['multi-manager',*argv]), \
+         patch('pathlib.Path.is_file',return_value=True):
+        args=parse_args()
+    assert args.selection==tmp_path/'universe/book_selection.json'
+    assert args.allocation==tmp_path/'control/allocations/manifest.json'
+    assert args.risk_policy==ROOT/'config/v7_native_risk_policy.json'
+    assert args.engine==tmp_path/'polymarket_v7_pure_arb_multi_runtime'
     declared=next(p for p in json.loads((ROOT/'config/v7_process_manifest.json').read_text())['processes'] if p['id']=='native_engine_manager')['arguments']
     assert {arg for arg in argv if arg.startswith('--')}=={arg for arg in declared if arg.startswith('--')}
-    assert args.asynchronous_settlement
-    assert not args.capture_native_observations
-    assert args.capture_native_decisions
-    assert args.target_quantity_microunits == 5_000_000
-    assert args.maximum_entry_price_e4 == 7_500
-    assert args.minimum_tte_ns == 105_000_000_000
-    assert args.maximum_tte_ns == 120_000_000_000
-    assert args.maker_share_cap_microunits==1_000_000
+    assert '--universe' not in argv
+    assert args.settler==ROOT/'scripts/v7_native_paper_settlement.py'
+    assert '--settler' in argv
+    assert '--observation-only' not in argv
+
+
+def test_single_process_pure_arb_runtime_replaces_context_fanout():
+    launcher=(ROOT/'scripts/paper_v7_execution_loop.sh').read_text()
+    manager=(ROOT/'scripts/v7_pure_arb_multi_manager.py').read_text()
+    runtime=(ROOT/'src/v7_pure_arb_multi_runtime.cpp').read_text()
+    manifest=json.loads((ROOT/'deploy/london/runtime_manifest.json').read_text())
+    assert launcher.count('scripts/v7_pure_arb_multi_manager.py')==1
+    assert 'scripts/v7_native_crypto_engine_manager.py' not in launcher
+    assert 'polymarket_v7_pure_arb_multi_runtime' in manifest['binaries']
+    assert 'polymarket_v7_crypto_settlement_engine' not in manifest['binaries']
+    assert 'scripts/v7_pure_arb_multi_manager.py' in manifest['python_entrypoints']
+    assert 'scripts/v7_native_crypto_engine_manager.py' not in manifest['python_entrypoints']
+    assert '"single_process",true' in runtime
+    assert '"direct_decision_queue_depth",0' in runtime
+    assert '"worker_process_count": 1 if alive else 0' in manager
 
 
 def test_observation_only_defaults_to_decision_capture_not_full_firehose() -> None:
