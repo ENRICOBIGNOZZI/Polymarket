@@ -1,8 +1,8 @@
 {
   "schema": "polymarket_v7_pure_arb_exact_deploy_request_v1",
   "version": 1,
-  "request_id": "pure-arb-champion-paper-378e20b-euw2az1-final",
-  "target_sha": "378e20bcc8b2a4d3cb9bb357df857d4ce935664d",
+  "request_id": "pure-arb-champion-paper-6e98335-euw2az1-clockfix",
+  "target_sha": "6e98335a462152650cbc617ac07afe7a85e313bb",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
