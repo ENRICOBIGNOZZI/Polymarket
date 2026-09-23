@@ -525,8 +525,16 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
              _metric("exact_arb_graph_relations", status.get("relations_compiled")),
              _metric("exact_arb_relations_evaluated_total", status.get("relations_evaluated")),
              _metric("exact_arb_candidates_total", funnel.get("candidate_emitted", 0))]
-    for key in ("relations_considered", "candidate_emitted"):
+    for key, value in sorted(funnel.items()):
+        if key.startswith("survival_"):
+            continue
         lines.append(_metric("exact_arb_graph_funnel_total", funnel.get(key, 0), {"stage": key}))
+    for family, stages in sorted((status.get("funnel_by_family") or {}).items()):
+        if not isinstance(stages, dict):
+            continue
+        for stage, value in sorted(stages.items()):
+            lines.append(_metric("exact_arb_graph_family_funnel_total", value,
+                                 {"family": family, "stage": stage}))
     for arm in (1, 5, 10, 25, 50):
         checked = funnel.get(f"survival_{arm}ms_checked", 0)
         survived = funnel.get(f"survival_{arm}ms", 0)
@@ -534,6 +542,12 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
         lines.append(_metric("exact_arb_survival_checked_total", checked, {"delay_ms": arm}))
     for reason, count in sorted((status.get("rejection_reasons") or {}).items()):
         lines.append(_metric("exact_arb_graph_rejections_total", count, {"reason": reason}))
+    for family, reasons in sorted((status.get("rejection_reasons_by_family") or {}).items()):
+        if not isinstance(reasons, dict):
+            continue
+        for reason, count in sorted(reasons.items()):
+            lines.append(_metric("exact_arb_graph_family_rejections_total", count,
+                                 {"family": family, "reason": reason}))
     for key, values in sorted((status.get("near_arbitrage") or {}).items()):
         if not isinstance(values, dict): continue
         family, _, stage = str(key).partition(":")
@@ -541,6 +555,13 @@ def _render_unified_exact_arb_graph_metrics(status: dict[str, Any]) -> list[str]
             lines.append(_metric("exact_arb_distance_to_arbitrage", value,
                                  {"family": family or "UNKNOWN", "stage": stage or "UNKNOWN",
                                   "percentile": percentile}))
+    for percentile, value in sorted((status.get("evaluation_latency_us") or {}).items()):
+        lines.append(_metric("exact_arb_graph_evaluation_latency_microseconds", value,
+                             {"percentile": percentile}))
+    timestamp = status.get("timestamp_ms")
+    if isinstance(timestamp, (int, float)) and timestamp > 0:
+        lines.append(_metric("exact_arb_graph_generation_age_seconds",
+                             max(0.0, time.time() - float(timestamp) / 1000.0)))
     return lines
 
 

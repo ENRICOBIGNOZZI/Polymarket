@@ -500,6 +500,10 @@ v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph.py \
   --universe "$RUN_ROOT/universe/current.json" \
   --registry "$ROOT/config/v7_exact_arb_relations.json" \
   --registry "$PURE_ARB_DIR/exact_arb_relations.generated.json" \
+  --component-status "$PURE_ARB_DIR/cross_market_exact_arb_status.json" \
+  --component-status "$PURE_ARB_DIR/complete_set_merge_status.json" \
+  --component-status "$PURE_ARB_DIR/combo_rfq_shadow_status.json" \
+  --component-status "$PURE_ARB_DIR/combo_collateral_return_status.json" \
   --model-sha "$SHA" --output "$PURE_ARB_DIR/unified_exact_arb_graph.json" \
   >> "$PURE_ARB_DIR/unified_exact_arb_graph.log" 2>&1 &
 v7_register_optional_child "$!"

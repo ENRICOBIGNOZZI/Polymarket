@@ -930,9 +930,9 @@
     {
       "id": "unified_exact_arb_graph_compiler",
       "executable": "scripts/v7_unified_exact_arb_graph.py",
-      "arguments": ["--universe", "${RUN_ROOT}/universe/current.json", "--registry", "config/v7_exact_arb_relations.json", "--registry", "${RUN_ROOT}/research/repricing_book/exact_arb_relations.generated.json", "--model-sha", "${SHA}", "--output", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json"],
+      "arguments": ["--universe", "${RUN_ROOT}/universe/current.json", "--registry", "config/v7_exact_arb_relations.json", "--registry", "${RUN_ROOT}/research/repricing_book/exact_arb_relations.generated.json", "--component-status", "${RUN_ROOT}/research/repricing_book/cross_market_exact_arb_status.json", "--component-status", "${RUN_ROOT}/research/repricing_book/complete_set_merge_status.json", "--component-status", "${RUN_ROOT}/research/repricing_book/combo_rfq_shadow_status.json", "--component-status", "${RUN_ROOT}/research/repricing_book/combo_collateral_return_status.json", "--model-sha", "${SHA}", "--output", "${RUN_ROOT}/research/repricing_book/unified_exact_arb_graph.json"],
       "profile": "observer",
-      "inputs": ["universe/current.json", "research/repricing_book/exact_arb_relations.generated.json", "config/v7_exact_arb_relations.json"],
+      "inputs": ["universe/current.json", "research/repricing_book/exact_arb_relations.generated.json", "config/v7_exact_arb_relations.json", "research/repricing_book/cross_market_exact_arb_status.json", "research/repricing_book/complete_set_merge_status.json", "research/repricing_book/combo_rfq_shadow_status.json", "research/repricing_book/combo_collateral_return_status.json"],
       "outputs": ["research/repricing_book/unified_exact_arb_graph.json", "research/repricing_book/unified_exact_arb_graph.log"],
       "dependencies": ["pure_arb_exact_relation_discovery"],
       "exact_sha_required": true,
