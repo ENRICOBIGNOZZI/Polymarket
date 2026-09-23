@@ -92,7 +92,7 @@ jobs:
           systemctl --no-pager --full status polymarket-v7-paper.service || true
           echo "=== SUPERVISOR CONTROL ==="
           ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
-          for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json runtime_artifact_receipt.json runtime_resource_plan.json; do
+          for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json runtime_artifact_receipt.json runtime_resource_plan.json fencing_supervisor_status.json native_engine_manager_status.json clock_guard.json; do
             echo "--- $name ---"
             cat "$ROOT/control/$name" 2>/dev/null || true
             echo
