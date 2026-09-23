@@ -4,7 +4,7 @@ import sys
 from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from v7_unified_exact_arb_graph import SAFETY, GraphError, compile_graph, evaluate
-from v7_unified_exact_arb_graph_shadow import Shadow
+from v7_unified_exact_arb_graph_shadow import Shadow, native_binary_candidate
 
 
 def _universe(model: str = "a" * 40, semantic: str = "b" * 64) -> dict:
@@ -180,3 +180,5 @@ def test_incremental_shadow_deduplicates_changed_leg_paths_and_records_funnel(tm
     assert shadow.funnel["unique_economic_opportunity_count"]==1
     assert shadow.funnel["deduplicated_path_count"]==1
     assert shadow.funnel_by_family["EXPLICIT_EXACT"]["books_ready"]==2
+    candidate=native_binary_candidate(graph["relations"][0], {"direction":"BUY","quantity":"3"}, 10)
+    assert candidate is not None and candidate["kind"]=="BUY_COMPLETE_SET" and candidate["market_id"]=="a"

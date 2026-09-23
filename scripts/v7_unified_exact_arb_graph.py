@@ -181,6 +181,7 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
         compiled_legs.append({"node_id": claim["node_id"], "token_id": claim["token_id"],
                               "market_id": claim.get("market_id"), "condition_id": claim.get("condition_id"),
                               "settlement_semantic_hash": claim.get("settlement_semantic_hash"),
+                              "outcome": outcome,
                               "coefficient": fstr(coefficient), "payout_vector": vector,
                               "fee_semantics": leg.get("fee_semantics", "MARKET_VERIFIED_REQUIRED"),
                               "fee_rate": fee_rate(market),

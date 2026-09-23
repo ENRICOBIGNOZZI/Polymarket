@@ -13,7 +13,7 @@ def main() -> None:
     assert 'sleep 60' in window
     assert ') & v7_register_child "$!"' in window
     assert 'lightweight operational reconciliation' in launcher
-    assert 'v7_assert_registered_child_count 30' in launcher
+    assert 'v7_assert_registered_child_count 33' in launcher
     research=(ROOT/'research/run_offline_analytics.sh').read_text()
     assert 'v7_generate_economic_artifacts.py' in research
     assert 'v7_profit_attribution.py' in research

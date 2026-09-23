@@ -41,7 +41,7 @@ def test_repricing_book_observer_covers_all_runtime_contexts_outside_hot_path():
     assert rows['pm_book_observer']['runtime_class'] == 'LATENCY_OBSERVER'
     assert rows['crypto_settlement_engine']['runtime_class'] == 'HOT_PATH'
     assert rows['crypto_settlement_engine']['dependencies'] == []
-    assert 'v7_assert_registered_child_count 32' in loop
+    assert 'v7_assert_registered_child_count 33' in loop
     assert 'v7_register_optional_child "$!"' in loop
     assert 'for pid in "${fatal_pids[@]}"' in loop
 

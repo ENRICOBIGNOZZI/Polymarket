@@ -7,8 +7,8 @@
   "real_capital_at_risk": false,
   "authority_registry": "config/v7_authority_registry.json",
   "launcher": "scripts/paper_v7_execution_loop.sh",
-  "expected_process_count": 33,
-  "expected_launcher_child_count": 32,
+  "expected_process_count": 34,
+  "expected_launcher_child_count": 33,
   "profiles": {
     "core": {
       "archival_behavior": "EXACT_SHA_ATOMIC_ARCHIVE",
@@ -953,6 +953,21 @@
       "exact_sha_required": true,
       "config_identity_required": true,
       "launcher_log": "research/repricing_book/unified_exact_arb_graph_shadow.log",
+      "london_deployed": true,
+      "runtime_class": "COLLECTOR",
+      "authority_overrides": {}
+    },
+    {
+      "id": "unified_exact_arb_graph_execution_shadow",
+      "executable": "scripts/v7_unified_exact_arb_graph_execution_shadow.py",
+      "arguments": ["--model-sha", "${SHA}"],
+      "profile": "observer",
+      "inputs": ["process:unified_exact_arb_graph_shadow", "process:pm_book_observer", "process:pure_arb_venue_mode", "research/repricing_book/unified_exact_arb_graph_opportunities.jsonl"],
+      "outputs": ["research/repricing_book/unified_exact_arb_graph_execution_cycles.jsonl", "research/repricing_book/unified_exact_arb_graph_execution_status.json", "research/repricing_book/unified_exact_arb_graph_execution.log"],
+      "dependencies": ["unified_exact_arb_graph_shadow", "pm_book_observer", "pure_arb_venue_mode"],
+      "exact_sha_required": true,
+      "config_identity_required": true,
+      "launcher_log": "research/repricing_book/unified_exact_arb_graph_execution.log",
       "london_deployed": true,
       "runtime_class": "COLLECTOR",
       "authority_overrides": {}

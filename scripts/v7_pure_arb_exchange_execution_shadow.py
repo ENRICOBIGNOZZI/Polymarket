@@ -39,6 +39,7 @@ CYCLE_SCHEMAS={
     "polymarket_v7_pure_arb_paper_cycle_v2",
     "polymarket_v7_pure_arb_paper_cycle_v3",
 }
+GRAPH_OPPORTUNITY_SCHEMA="polymarket_v7_unified_exact_arb_graph_opportunity_v1"
 ROW_SCHEMA="polymarket_v7_pure_arb_exchange_execution_cycle_v1"
 STATUS_SCHEMA="polymarket_v7_pure_arb_exchange_execution_status_v1"
 VENUE_SCHEMA="polymarket_v7_pure_arb_venue_mode_v1"
@@ -228,11 +229,13 @@ class Tail:
                     self.handle.seek(pos);break
                 try:r=json.loads(raw)
                 except (ValueError,UnicodeDecodeError):continue
-                if (isinstance(r,dict) and r.get("schema") in CYCLE_SCHEMAS
-                    and r.get("model_sha")==self.sha and r.get("paper_only") is True
+                graph_candidate=(r.get("execution_candidate") if isinstance(r,dict)
+                                 and r.get("schema")==GRAPH_OPPORTUNITY_SCHEMA else None)
+                if (isinstance(r,dict) and r.get("model_sha")==self.sha and r.get("paper_only") is True
                     and r.get("authenticated_execution") is False
                     and r.get("real_order_submission") is False):
-                    out.append(r)
+                    if r.get("schema") in CYCLE_SCHEMAS:out.append(r)
+                    elif isinstance(graph_candidate,dict) and graph_candidate.get("schema")=="polymarket_v7_unified_exact_arb_graph_execution_candidate_v1":out.append(graph_candidate)
             try:
                 old,cur=os.fstat(self.handle.fileno()),self.path.stat()
                 if (old.st_dev,old.st_ino)==(cur.st_dev,cur.st_ino):

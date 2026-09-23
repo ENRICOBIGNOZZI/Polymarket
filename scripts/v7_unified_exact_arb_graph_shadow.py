@@ -18,6 +18,21 @@ def atomic(path:Path,value:dict[str,Any])->None:
     path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(path.suffix+".tmp")
     tmp.write_text(json.dumps(value,sort_keys=True)+"\n");os.replace(tmp,path)
 
+def native_binary_candidate(relation:dict[str,Any], result:dict[str,Any], now:int)->dict[str,Any]|None:
+ """Narrow adapter into the proven two-leg execution shadow, never an order."""
+ legs=relation.get("legs")
+ if not isinstance(legs,list) or len(legs)!=2:return None
+ markets={str(x.get("market_id") or "") for x in legs}
+ outcomes={str(x.get("outcome") or "").upper() for x in legs}
+ if len(markets)!=1 or not next(iter(markets)) or outcomes!={"YES","NO"}:return None
+ direction=str(result.get("direction") or "")
+ if direction not in {"BUY","SELL"}:return None
+ return {"schema":"polymarket_v7_unified_exact_arb_graph_execution_candidate_v1",**SAFETY,
+         "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","graph_relation_id":relation.get("relation_id"),
+         "market_id":next(iter(markets)),"kind":"BUY_COMPLETE_SET" if direction=="BUY" else "SELL_COMPLETE_SET",
+         "receive_wall_ms":now,"executable_shares_local_deep":result.get("quantity"),
+         "minimum_order_shares":"0","source":"UNIFIED_EXACT_ARB_GRAPH_BINARY_ADAPTER"}
+
 class Shadow:
  def __init__(self,a:argparse.Namespace):
   self.a=a;self.offset=0;self.books={};self.generation="";self.relations=[];self.index={};self.funnel=Counter();self.funnel_by_family=defaultdict(Counter);self.rejects=Counter();self.rejects_by_family=defaultdict(Counter);self.dist=defaultdict(list);self.seen=set();self.pending=[];self.claims={};self.latency_us=[];self.capital_limit="0"
@@ -93,7 +108,7 @@ class Shadow:
       conflict=any((now,claim) in self.claims for claim in claims)
       if conflict:self.funnel["capital_conflicts"]+=1;self.funnel_by_family[family]["capital_conflicts"]+=1
       for claim in claims:self.claims[(now,claim)]=key
-      evidence={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1",**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","graph_generation":self.generation,"relation_id":relation.get("relation_id"),"trigger_token":token,"timestamp_ms":now,"counterfactual_modes":["SEQUENTIAL","PARALLEL","BATCH"],"capital_conflict":conflict,"result":r}
+      evidence={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1",**SAFETY,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","graph_generation":self.generation,"relation_id":relation.get("relation_id"),"trigger_token":token,"timestamp_ms":now,"counterfactual_modes":["SEQUENTIAL","PARALLEL","BATCH"],"capital_conflict":conflict,"execution_candidate":native_binary_candidate(relation,r,now),"result":r}
       with self.a.opportunities.open("a") as f:f.write(json.dumps(evidence,sort_keys=True)+"\n")
       for arm in (1,5,10,25,50):self.pending.append((now+arm,h,arm))
      else:
