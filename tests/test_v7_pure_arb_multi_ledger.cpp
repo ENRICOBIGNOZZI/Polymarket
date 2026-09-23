@@ -85,7 +85,11 @@ int main() {
         assert(metadata.at("paired_complete_set").as_bool());
         const auto& receipt = metadata.at("native_settlement_receipt").as_object();
         assert(receipt.at("owner").as_string() == "V7_NATIVE_CRYPTO_SETTLEMENT_ENGINE");
-        assert(receipt.at("client_order_id").as_uint64() == 101);
+        const auto& client_id = receipt.at("client_order_id");
+        const auto client_id_value = client_id.is_uint64()
+            ? client_id.as_uint64()
+            : static_cast<std::uint64_t>(client_id.as_int64());
+        assert(client_id_value == 101);
     }
     assert(files == 1);
     fs::remove_all(root);
