@@ -45,8 +45,11 @@ class LondonMonitoringBundleTests(unittest.TestCase):
             self.assertNotIn('GF_AUTH', override)
             self.assertNotIn('PASSWORD', override)
             prom_override = (out / 'prometheus-systemd-override.conf').read_text()
+            self.assertIn('ExecStart=\\n', prom_override)
+            self.assertIn('ExecStart=/usr/bin/prometheus ', prom_override)
             self.assertIn('--config.file=', prom_override)
             self.assertIn(str(final / 'prometheus-v7.yml'), prom_override)
+            self.assertNotIn('Environment="ARGS=', prom_override)
             for path in out.rglob('*.yml'):
                 self.assertNotIn('__POLYMARKET_', path.read_text())
 
