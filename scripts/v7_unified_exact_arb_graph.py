@@ -101,6 +101,20 @@ def node(market: dict[str, Any], token: str, outcome: str) -> dict[str, Any]:
     return {"node_id": sha(identity), **identity}
 
 
+def fee_rate(market: dict[str, Any]) -> str | None:
+    """Carry only explicitly verified fees; unknown fees remain non-executable."""
+    fee = market.get("fee_schedule")
+    try:
+        rate = frac(fee["rate"]) if isinstance(fee, dict) else None
+    except (GraphError, KeyError, TypeError):
+        return None
+    if rate is not None and 0 <= rate <= 1:
+        return fstr(rate)
+    if market.get("fees_enabled_explicit") is True and market.get("fees_enabled") is False:
+        return "0"
+    return None
+
+
 def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     proof = prove_relation(raw)  # Fraction-based statewise equality proof.
     states, legs = raw["states"], raw["legs"]
@@ -118,6 +132,7 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tup
         compiled_legs.append({"node_id": claim["node_id"], "token_id": claim["token_id"],
                               "coefficient": fstr(coefficient), "payout_vector": vector,
                               "fee_semantics": leg.get("fee_semantics", "MARKET_VERIFIED_REQUIRED"),
+                              "fee_rate": fee_rate(market),
                               "minimum_order": fstr(frac(leg.get("minimum_order", 0)))})
         nodes.append(claim)
     terminal = {str(state): fstr(sum((frac(leg["coefficient"]) * frac(leg["payout_vector"][i]) for leg in compiled_legs), Fraction(0)))
@@ -211,7 +226,9 @@ def evaluate(relation: dict[str, Any], books: dict[str, dict[str, Any]], now_ms:
         book = books.get(str(leg.get("token_id")))
         if not isinstance(book, dict) or book.get("lineage_continuous") is not True: return {"accepted": False, "reason": "lineage_or_book_missing"}
         if book.get("depth_truncated") is True: return {"accepted": False, "reason": "truncated_depth"}
-        try: stamp, fee, coefficient = int(book["timestamp_ms"]), frac(book["fee_rate"]), frac(leg["coefficient"])
+        try:
+            raw_fee = book.get("fee_rate") if book.get("fee_rate") is not None else leg.get("fee_rate")
+            stamp, fee, coefficient = int(book["timestamp_ms"]), frac(raw_fee), frac(leg["coefficient"])
         except (KeyError, TypeError, ValueError, GraphError): return {"accepted": False, "reason": "fee_or_timestamp_missing"}
         depth = levels(book.get("asks"))
         if fee < 0 or not depth: return {"accepted": False, "reason": "fee_or_depth_invalid"}
