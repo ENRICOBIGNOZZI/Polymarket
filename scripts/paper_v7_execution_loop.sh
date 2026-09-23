@@ -533,10 +533,34 @@ v7_exec_class COLLECTOR python3 scripts/v7_exact_arb_warm_scan.py \
   >> "$PURE_ARB_DIR/unified_exact_arb_warm_screen.log" 2>&1 &
 v7_register_optional_child "$!"
 
+# Convert warm rankings into a bounded causal subscription. The adapter carries
+# no prices forward: only verified market/token identities may enter the WS set.
+v7_exec_class COLLECTOR python3 scripts/v7_exact_arb_hotset_selection.py \
+  --graph "$PURE_ARB_DIR/unified_exact_arb_graph.json" \
+  --universe "$PURE_ARB_DIR/exact_arb_exchange_universe.json" \
+  --hotset "$PURE_ARB_DIR/unified_exact_arb_hotset.json" \
+  --output "$PURE_ARB_DIR/unified_exact_arb_hotset_selection.json" \
+  --status "$PURE_ARB_DIR/unified_exact_arb_hotset_selection_status.json" \
+  --model-sha "$SHA" --max-markets 64 --interval-seconds 1 \
+  >> "$PURE_ARB_DIR/unified_exact_arb_hotset_selection.log" 2>&1 &
+v7_register_optional_child "$!"
+
+# Dedicated causal WS observer for graph relations. It reuses the proven C++
+# book/lineage implementation but does NOT enable PureArb PAPER economics.
+GRAPH_HOTSET_DIR="$PURE_ARB_DIR/graph_hotset"
+mkdir -p "$GRAPH_HOTSET_DIR"
+v7_exec_class LATENCY_OBSERVER "$FILLABILITY_OBSERVER" \
+  --config "$CONFIG" \
+  --selection "$PURE_ARB_DIR/unified_exact_arb_hotset_selection.json" --selection-only \
+  --run-root "$RUN_ROOT" --output-dir "$GRAPH_HOTSET_DIR" \
+  --model-sha "$SHA" --graph-deep-evidence \
+  >> "$PURE_ARB_DIR/unified_exact_arb_hotset_observer.log" 2>&1 &
+v7_register_optional_child "$!"
+
 v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph_shadow.py \
   --graph "$PURE_ARB_DIR/unified_exact_arb_graph.json" \
-  --tape "$PURE_ARB_DIR/pure_arb_deep_book_snapshots.jsonl" \
-  --delta-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --tape "$GRAPH_HOTSET_DIR/pure_arb_deep_book_snapshots.jsonl" \
+  --delta-tape "$GRAPH_HOTSET_DIR/book_observations/current.jsonl" \
   --status "$PURE_ARB_DIR/unified_exact_arb_graph_status.json" \
   --opportunities "$PURE_ARB_DIR/unified_exact_arb_graph_opportunities.jsonl" \
   --capital-policy "$ROOT/config/v7_pure_arb_capital_policy.json" \
@@ -709,8 +733,8 @@ v7_register_optional_child "$!"
 # Generic N-leg causal counterfactual using complete local depth observations.
 v7_exec_class COLLECTOR python3 scripts/v7_unified_exact_arb_graph_execution_shadow.py \
   --candidates "$PURE_ARB_DIR/unified_exact_arb_graph_opportunities.jsonl" \
-  --book-tape "$PURE_ARB_DIR/pure_arb_deep_book_snapshots.jsonl" \
-  --delta-tape "$PURE_ARB_DIR/book_observations/current.jsonl" \
+  --book-tape "$GRAPH_HOTSET_DIR/pure_arb_deep_book_snapshots.jsonl" \
+  --delta-tape "$GRAPH_HOTSET_DIR/book_observations/current.jsonl" \
   --model-sha "$SHA" \
   --output "$PURE_ARB_DIR/unified_exact_arb_graph_execution_cycles.jsonl" \
   --status "$PURE_ARB_DIR/unified_exact_arb_graph_execution_status.json" \
@@ -869,7 +893,7 @@ v7_register_child "$!"
   done
 ) & v7_register_child "$!"
 
-v7_assert_registered_child_count 35
+v7_assert_registered_child_count 37
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
