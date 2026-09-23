@@ -157,6 +157,19 @@ def test_multipath_outputs_are_service_user_owned_and_latency_evidence_survives_
     assert shootout < multipath_call
 
 
+def test_london_summary_keeps_serial_vs_parallel_signing_evidence():
+    lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
+    assert '"signing_pair_mode"' in lab
+    assert '"serial_pair_completion"' in lab
+    assert '"parallel_pair_completion"' in lab
+    assert '"serial_leg_completion_skew"' in lab
+    assert '"parallel_leg_completion_skew"' in lab
+    assert '"parallel_p99_improvement_pct"' in lab
+    assert '"parallel_p999_improvement_pct"' in lab
+    assert '"parallel_promotion_candidate"' in lab
+    assert "candidate(parallel,serial)" in lab
+
+
 def test_latency_lab_requires_measured_10pct_tail_gate():
     lab = (ROOT / "ops/v7_london_latency_lab.sh").read_text()
     assert 'test["p99"] <= base["p99"]*.90' in lab
