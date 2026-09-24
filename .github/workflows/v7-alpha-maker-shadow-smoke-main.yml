@@ -170,6 +170,37 @@ jobs:
           if ! test -s "$BOOK_STATUS"; then echo "PRECHECK_FAIL=BOOK_STATUS_MISSING"; exit 35; fi
           echo "PRECHECK_BOOK_TAPE=$BOOK_TAPE"
           echo "PRECHECK_OK=1"
+          PYTHONPATH="$SOURCE/scripts:$SOURCE:$APP/scripts:$APP" python3 - "$ROOT" "$BOOK_STATUS" "$BOOK_TAPE" <<'PYDIAG'
+          import json,sys,time
+          from pathlib import Path
+          from v7_maker_opportunity_bridge import build_maker_opportunities
+          root=Path(sys.argv[1]); status_path=Path(sys.argv[2]); tape=Path(sys.argv[3])
+          opportunities,diag=build_maker_opportunities(root,now_ns=time.time_ns(),repository_root=Path.cwd())
+          print("BRIDGE_DIAGNOSTIC="+json.dumps(diag,sort_keys=True,separators=(",",":")))
+          print("BRIDGE_OPPORTUNITIES="+json.dumps([
+              {"market_id":x.get("market_id"),"side":x.get("side"),
+               "ev":x.get("conservative_expected_wealth_change"),
+               "replay_key":x.get("deterministic_replay_key")}
+              for x in opportunities[:10]],sort_keys=True,separators=(",",":")))
+          def load(rel):
+              try:return json.loads((root/rel).read_text())
+              except Exception as exc:return {"_load_error":f"{type(exc).__name__}:{exc}"}
+          for rel in ("micro_maker/reward_selection.json","micro_maker/execution_model.json","external_fair/status.json"):
+              value=load(rel)
+              print("STATE_"+rel.replace("/","_")+"="+json.dumps(value,sort_keys=True,separators=(",",":"))[:30000])
+          try: book=json.loads(status_path.read_text())
+          except Exception as exc: book={"_load_error":f"{type(exc).__name__}:{exc}"}
+          now_ms=time.time_ns()//1_000_000
+          compact={k:book.get(k) for k in (
+              "schema","model_sha","state","evidence_complete","observer_session_id","connection_epoch",
+              "timestamp_ms","book_watermark_receive_wall_ms","book_watermark_receive_monotonic_ns",
+              "book_events_written","native_observations_written","native_observations_dropped")}
+          compact["status_age_ms"]=now_ms-int(book.get("timestamp_ms") or 0)
+          compact["watermark_age_ms"]=now_ms-int(book.get("book_watermark_receive_wall_ms") or 0)
+          compact["tape_bytes"]=tape.stat().st_size if tape.exists() else None
+          compact["tape_mtime_age_ms"]=(time.time_ns()-tape.stat().st_mtime_ns)/1e6 if tape.exists() else None
+          print("BOOK_DIAGNOSTIC="+json.dumps(compact,sort_keys=True,separators=(",",":")))
+          PYDIAG
           printf '%s' {shlex.quote(payload)} | base64 -d > "$OUT/v7_alpha_driven_maker_shadow.py"
           printf '%s\n' {shlex.quote(source_sha)} > "$OUT/research_sha.txt"
           cd "$APP"
