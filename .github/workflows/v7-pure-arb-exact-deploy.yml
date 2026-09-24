@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - deploy/v7-pure-arb-exact-deploy-request.json
+      - .github/workflows/v7-pure-arb-exact-deploy.yml
 
 permissions:
   contents: read
