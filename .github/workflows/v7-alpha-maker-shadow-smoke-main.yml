@@ -170,12 +170,12 @@ jobs:
           if ! test -s "$BOOK_STATUS"; then echo "PRECHECK_FAIL=BOOK_STATUS_MISSING"; exit 35; fi
           echo "PRECHECK_BOOK_TAPE=$BOOK_TAPE"
           echo "PRECHECK_OK=1"
-          PYTHONPATH="$SOURCE/scripts:$SOURCE:$APP/scripts:$APP" python3 - "$ROOT" "$BOOK_STATUS" "$BOOK_TAPE" <<'PYDIAG'
+          PYTHONPATH="$SOURCE/scripts:$SOURCE:$APP/scripts:$APP" python3 - "$ROOT" "$BOOK_STATUS" "$BOOK_TAPE" "$SOURCE" <<'PYDIAG'
           import json,sys,time
           from pathlib import Path
           from v7_maker_opportunity_bridge import build_maker_opportunities
-          root=Path(sys.argv[1]); status_path=Path(sys.argv[2]); tape=Path(sys.argv[3])
-          opportunities,diag=build_maker_opportunities(root,now_ns=time.time_ns(),repository_root=Path.cwd())
+          root=Path(sys.argv[1]); status_path=Path(sys.argv[2]); tape=Path(sys.argv[3]); repo=Path(sys.argv[4])
+          opportunities,diag=build_maker_opportunities(root,now_ns=time.time_ns(),repository_root=repo)
           print("BRIDGE_DIAGNOSTIC="+json.dumps(diag,sort_keys=True,separators=(",",":")))
           print("BRIDGE_OPPORTUNITIES="+json.dumps([
               {{"market_id":x.get("market_id"),"side":x.get("side"),
