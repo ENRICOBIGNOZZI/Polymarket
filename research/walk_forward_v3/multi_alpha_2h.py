@@ -68,6 +68,9 @@ FAMILY_ORDER = (
     "cross_asset",
     "options",
     "settlement",
+    "maker_queue",
+    "maker_inventory",
+    "maker_toxicity",
 )
 FAMILY_LABEL = {
     "baseline": "Current lead-lag",
@@ -82,6 +85,9 @@ FAMILY_LABEL = {
     "options": "Deribit/options",
     "settlement": "Settlement",
     "pm_response": "PM response",
+    "maker_queue": "Maker queue/fillability",
+    "maker_inventory": "Maker inventory/exposure",
+    "maker_toxicity": "Maker toxicity/predicted markout",
 }
 NESTED = {
     "F0": frozenset(),
@@ -96,8 +102,14 @@ NESTED = {
     "F9": frozenset(("baseline", "cross_venue", "flow", "ofi", "perp", "oi_funding", "liquidations", "volatility", "cross_asset")),
     "F10": frozenset(("baseline", "cross_venue", "flow", "ofi", "perp", "oi_funding", "liquidations", "volatility", "cross_asset", "options")),
     "F11": frozenset(("baseline", "cross_venue", "flow", "ofi", "perp", "oi_funding", "liquidations", "volatility", "cross_asset", "options", "settlement")),
+    "F12": frozenset(("baseline", "cross_venue", "flow", "ofi", "perp", "oi_funding", "liquidations", "volatility", "cross_asset", "options", "settlement", "maker_queue")),
+    "F13": frozenset(("baseline", "cross_venue", "flow", "ofi", "perp", "oi_funding", "liquidations", "volatility", "cross_asset", "options", "settlement", "maker_queue", "maker_inventory")),
+    "F14": frozenset(("baseline", "cross_venue", "flow", "ofi", "perp", "oi_funding", "liquidations", "volatility", "cross_asset", "options", "settlement", "maker_queue", "maker_inventory", "maker_toxicity")),
 }
-TIER1 = ("cross_venue", "flow", "pm_response", "volatility", "cross_asset", "perp")
+TIER1 = (
+    "cross_venue", "flow", "pm_response", "volatility", "cross_asset", "perp",
+    "maker_queue", "maker_inventory", "maker_toxicity",
+)
 
 SAFETY_PLUS = {
     **SAFETY,
@@ -615,7 +627,36 @@ def execute_side_cell(
 
 def classify_source_feature(name: str) -> str | None:
     n = name.lower()
-    if n.startswith("tape.pm_") or any(k in n for k in ("pm_yes_mid", "pm_no_mid", "pm_complete_set", "pm_yes_spread", "pm_yes_imbalance")):
+    # Explicitly exclude realized/post-outcome labels from every information set.
+    # Causal model predictions may be used; realized future outcomes may not.
+    if any(k in n for k in (
+        "realized_", "future_", "label_", "outcome_", "post_fill",
+        "actual_markout", "realized_markout", "realized_pnl",
+    )):
+        return None
+    if any(k in n for k in (
+        "queue_ahead", "queue_confidence", "fill_probability", "fillability",
+        "projected_fill", "quote_lifetime", "distance_from_touch",
+        "queue_depletion", "queue_position",
+    )):
+        return "maker_queue"
+    if any(k in n for k in (
+        "inventory_fraction", "inventory_age", "inventory_skew",
+        "position_size", "gross_exposure", "net_exposure", "inventory_",
+    )):
+        return "maker_inventory"
+    if any(k in n for k in (
+        "toxic_fill_probability", "toxicity_score", "predicted_markout",
+        "adverse_selection_score", "expected_adverse_markout",
+        "cancel_intensity", "cancel_rate",
+    )):
+        return "maker_toxicity"
+    if n.startswith("tape.pm_") or any(k in n for k in (
+        "pm_yes_mid", "pm_no_mid", "pm_complete_set", "pm_yes_spread",
+        "pm_yes_imbalance", "depth_imbalance", "spread_ticks",
+        "short_return_ticks", "aggressive_buy_prints_per_second",
+        "aggressive_sell_prints_per_second", "ew_vol_ticks",
+    )):
         return "pm_response"
     if any(k in n for k in ("settlement", "oracle", "reference_price", "distance_to_reference", "spot_minus_oracle")):
         return "settlement"
@@ -702,8 +743,9 @@ class InformationModel(da.DirectActionValueModel):
             family = classify_source_feature(name)
             if family == "pm_response" or family in self.information_families:
                 selected.append(name)
-        # 2H screen stays deliberately small.
-        return tuple(selected[:96])
+        # Keep the screen regularized but broad enough to include every
+        # observed causal family in the full-feature maker pass.
+        return tuple(selected[:192])
 
     def _configure_levels(self, rows):
         super()._configure_levels(rows)
