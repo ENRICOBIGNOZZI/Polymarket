@@ -174,21 +174,29 @@ def select_names(rows: list[dict[str,Any]], predicate, *, maximum=MAX_FEATURES) 
     return [name for _,__,name in scored[:maximum]]
 
 
-def base_context(row: dict[str,Any]) -> dict[str,float]:
-    out={
-        "ctx.pm_yes":float(((row.get("pair") or {}).get("pm_yes") or 0.5)),
-        "ctx.tte_s":float(row.get("tte_ns") or 0)/1e9,
-        "ctx.signal_age_ms":float(row.get("signal_age_ns") or 0)/1e6,
-    }
+def base_context(
+    row: dict[str,Any], *, include_pm: bool, include_signal_age: bool,
+) -> dict[str,float]:
+    out={"ctx.tte_s":float(row.get("tte_ns") or 0)/1e9}
+    if include_pm:
+        pm_yes=(row.get("pair") or {}).get("pm_yes")
+        if finite(pm_yes):
+            out["ctx.pm_yes"]=float(pm_yes)
+    if include_signal_age:
+        out["ctx.signal_age_ms"]=float(row.get("signal_age_ns") or 0)/1e6
     out["asset::"+str(row.get("asset") or "UNKNOWN")]=1.0
     out["contract::"+str(row.get("horizon") or "UNKNOWN")]=1.0
     return out
 
 
-def feature_dict(row: dict[str,Any], names: list[str]) -> dict[str,float|None]:
+def feature_dict(
+    row: dict[str,Any], names: list[str], *,
+    include_pm: bool, include_signal_age: bool,
+) -> dict[str,float|None]:
     f=row.get("features") or {}
     out={name:(float(f[name]) if name in f and finite(f[name]) else None) for name in names}
-    out.update(base_context(row))
+    out.update(base_context(
+        row, include_pm=include_pm, include_signal_age=include_signal_age))
     return out
 
 
@@ -411,7 +419,7 @@ def train_external_fair(train_rows,session_cache,ext_names):
         if session is None:continue
         pair=current_pair(row,session)
         if pair is None:continue
-        records.append(feature_dict(row,ext_names))
+        records.append(feature_dict(row,ext_names,include_pm=False,include_signal_age=False))
         targets.append(float(pair["pm_yes"]))
     names=sorted(set(ext_names)|{k for r in records for k in r if k.startswith(("asset::","contract::","ctx."))})
     model=Ridge(names).fit([{k:r.get(k) for k in names} for r in records],targets)
@@ -451,7 +459,7 @@ def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,
             if session is None:continue
             y=future_delta(row,session,latency,horizon)
             if y is None:continue
-            rec=feature_dict(row,names0)
+            rec=feature_dict(row,names0,include_pm=(policy!="A1_EXTERNAL"),include_signal_age=(policy!="A2_PM"))
             if policy=="A5_FULL_EXECUTION":
                 pair=current_pair(row,session)
                 if pair is None:continue
@@ -495,14 +503,14 @@ def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,
 
 def predict_policy(policy,row,session,model,ext_names,pm_names,full_names,external_model,latency,horizon):
     if policy=="A0_BASELINE":return None
-    if policy=="A1_EXTERNAL":rec=feature_dict(row,ext_names)
-    elif policy=="A2_PM":rec=feature_dict(row,pm_names)
-    elif policy=="A3_EXTERNAL_PM":rec=feature_dict(row,sorted(set(ext_names)|set(pm_names)))
+    if policy=="A1_EXTERNAL":rec=feature_dict(row,ext_names,include_pm=False,include_signal_age=False)
+    elif policy=="A2_PM":rec=feature_dict(row,pm_names,include_pm=True,include_signal_age=False)
+    elif policy=="A3_EXTERNAL_PM":rec=feature_dict(row,sorted(set(ext_names)|set(pm_names)),include_pm=True,include_signal_age=True)
     elif policy=="A4_RESIDUAL":
         rec=residual_features(row,session,external_model,ext_names)
         if rec is None:return None
     elif policy=="A5_FULL_EXECUTION":
-        rec=feature_dict(row,full_names)
+        rec=feature_dict(row,full_names,include_pm=True,include_signal_age=True)
         pair=current_pair(row,session)
         if pair is None:return None
         yes=side_state(pair,"YES");no=side_state(pair,"NO")
