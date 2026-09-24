@@ -104,11 +104,19 @@ jobs:
           ROOT="$(printf '%s' "$ENVIRONMENT" | python3 -c 'import shlex,sys;v=shlex.split(sys.stdin.read());print(next(x.split("=",1)[1] for x in v if x.startswith("PM_V7_RUN_ROOT=")))')"
           APP="$(printf '%s' "$ENVIRONMENT" | python3 -c 'import shlex,sys;v=shlex.split(sys.stdin.read());print(next(x.split("=",1)[1] for x in v if x.startswith("POLYMARKET_APP_DIR=")))')"
           SHA="$(printf '%s' "$ENVIRONMENT" | python3 -c 'import shlex,sys;v=shlex.split(sys.stdin.read());print(next(x.split("=",1)[1] for x in v if x.startswith("POLYMARKET_EXPECTED_SHA=")))')"
-          test -d "$APP"
-          test -d "$ROOT"
-          test -x "$APP/build/polymarket_v7_maker_research_replay"
-          test -s "$ROOT/research/repricing_book/book_observations/current.jsonl"
-          test -s "$ROOT/research/repricing_book/fillability_ws_status.json"
+          echo "PRECHECK_ROOT=$ROOT"
+          echo "PRECHECK_APP=$APP"
+          echo "PRECHECK_SHA=$SHA"
+          test -d "$APP" || { echo "PRECHECK_FAIL=APP_DIR_MISSING"; exit 31; }
+          test -d "$ROOT" || { echo "PRECHECK_FAIL=RUN_ROOT_MISSING"; exit 32; }
+          if [[ ! -x "$APP/build/polymarket_v7_maker_research_replay" ]]; then
+            echo "PRECHECK_FAIL=MAKER_REPLAY_BINARY_MISSING"
+            find "$APP" -maxdepth 3 -type f -name '*maker*replay*' -o -name '*maker*paper*' 2>/dev/null | head -n 30 || true
+            exit 33
+          fi
+          test -s "$ROOT/research/repricing_book/book_observations/current.jsonl" || { echo "PRECHECK_FAIL=BOOK_TAPE_MISSING"; exit 34; }
+          test -s "$ROOT/research/repricing_book/fillability_ws_status.json" || { echo "PRECHECK_FAIL=BOOK_STATUS_MISSING"; exit 35; }
+          echo "PRECHECK_OK=1"
           OUT="/tmp/{request_id}"
           rm -rf "$OUT"
           mkdir -p "$OUT"
