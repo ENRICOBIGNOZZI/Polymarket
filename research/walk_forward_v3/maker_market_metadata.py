@@ -125,10 +125,12 @@ def identify_context(slug: str, registry: dict[str,Any], raw: dict[str,Any]):
     return ctx,start,close
 
 
-def manifest_markets(run_root: Path, minimum_wall_ns: int):
+def observed_markets(run_root: Path, minimum_wall_ns: int):
+    """Find market IDs from compact manifests or, when absent, the raw causal book."""
     roots=(run_root,run_root.parent)
     found={}
-    counts={"manifests":0,"status_rejected":0,"tokens":0}
+    counts={"manifests":0,"status_rejected":0,"manifest_tokens":0,
+            "raw_files":0,"raw_rows":0,"raw_accepted":0}
     for base in roots:
         if not base.exists():continue
         for path in base.rglob("*.manifest.json"):
@@ -154,7 +156,49 @@ def manifest_markets(run_root: Path, minimum_wall_ns: int):
                 if prior is not None and prior!=token:
                     raise ValueError("CONFLICTING_MANIFEST_TOKEN:"+market+":"+outcome)
                 state["tokens"][outcome]=token
-                counts["tokens"]+=1
+                counts["manifest_tokens"]+=1
+    if found:
+        counts["source"]="COMPACT_MANIFEST"
+        return found,counts
+
+    # Current London runtime does not enable compact-label output on the
+    # repricing observer. Raw causal book rows remain the authoritative source
+    # for observed market membership.
+    book_root=run_root/"research"/"repricing_book"/"book_observations"
+    if not book_root.is_dir():
+        return found,counts
+    for path in sorted(p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()):
+        counts["raw_files"]+=1
+        try:
+            handle=path.open("r",encoding="utf-8")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                if not line.endswith("\n"):continue
+                counts["raw_rows"]+=1
+                try:raw=json.loads(line)
+                except json.JSONDecodeError:continue
+                if not isinstance(raw,dict) or raw.get("schema")!="polymarket_v7_causal_book_observation_v1":continue
+                try:wall=int(raw.get("receive_wall_ms") or 0)
+                except (TypeError,ValueError,OverflowError):continue
+                if wall*1_000_000<minimum_wall_ns:continue
+                if (
+                    raw.get("paper_only") is not True
+                    or raw.get("authenticated_execution") is not False
+                    or raw.get("real_order_submission") is not False
+                    or raw.get("execution_authority")!="ZERO_AUTHORITY_RESEARCH_ONLY"
+                ):
+                    continue
+                market=str(raw.get("market_id") or "")
+                token=str(raw.get("token_id") or "")
+                if not market or not token:continue
+                state=found.setdefault(market,{"market_id":market,"tokens_seen":set(),"tokens":{}})
+                state["tokens_seen"].add(token)
+                counts["raw_accepted"]+=1
+    for state in found.values():
+        state["tokens_seen"]=sorted(state.get("tokens_seen") or ())
+    counts["source"]="RAW_CAUSAL_BOOK"
     return found,counts
 
 
@@ -203,8 +247,8 @@ def main():
     p.add_argument("--output",type=Path,required=True)
     a=p.parse_args()
     registry=load(a.registry)
-    manifests,diag=manifest_markets(a.run_root,a.minimum_wall_ns)
-    if not manifests:raise SystemExit("NO_PM_MANIFEST_MARKETS")
+    manifests,diag=observed_markets(a.run_root,a.minimum_wall_ns)
+    if not manifests:raise SystemExit("NO_OBSERVED_PM_MARKETS")
     rows=[];rejected={}
     for market_id in sorted(manifests):
         try:
