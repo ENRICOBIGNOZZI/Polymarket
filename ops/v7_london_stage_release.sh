@@ -74,6 +74,33 @@ else
   printf 'london_stage_verification=FULL_LOCAL_CI\n'
 fi
 
+# by-sha is immutable. A retry of the same exact SHA must never remove or
+# rewrite the release currently referenced by systemd/current.
+if [[ -e "$TARGET" || -L "$TARGET" ]]; then
+  [[ -d "$TARGET" && ! -L "$TARGET" ]] || { echo "existing exact-SHA runtime target is unsafe" >&2; exit 66; }
+  python3 - "$TARGET/runtime_bundle_receipt.json" "$TARGET/deploy/london/runtime_sha" "$EXPECTED_SHA" <<'PYREUSE'
+import json,sys
+receipt_path,sha_path,expected=sys.argv[1:]
+v=json.load(open(receipt_path,encoding='utf-8'))
+assert v.get('schema')=='polymarket_v7_london_runtime_bundle_receipt_v1'
+assert v.get('runtime_sha')==expected
+assert v.get('paper_only') is True
+assert v.get('authenticated_execution') is False
+assert v.get('real_order_submission') is False
+assert v.get('research_tree_present') is False
+assert v.get('source_tree_verified') is True
+assert open(sha_path,encoding='utf-8').read().strip()==expected
+PYREUSE
+  for rel in ops/v7_service_entrypoint.sh ops/v7_runtime_supervisor.py ops/systemd/polymarket-v7-paper.service.in; do
+    cmp -s "$TARGET/$rel" "$SOURCE_DIR/$rel" || {
+      echo "existing exact-SHA runtime target differs from immutable source: $rel" >&2
+      exit 66
+    }
+  done
+  printf 'stage_result=reused_immutable_exact_sha\nsha=%s\nruntime_dir=%s\n' "$EXPECTED_SHA" "$TARGET"
+  exit 0
+fi
+
 cmake -S "$SOURCE_DIR" -B "$SOURCE_DIR/build-runtime" -GNinja -DCMAKE_BUILD_TYPE=Release -DPM_LONDON_RUNTIME_ONLY=ON -DBUILD_TESTING=OFF
 runtime_build_log="$SOURCE_DIR/build-runtime/london-runtime-build.log"
 if ! cmake --build "$SOURCE_DIR/build-runtime" --parallel "${POLYMARKET_BUILD_JOBS:-2}" >"$runtime_build_log" 2>&1; then
@@ -86,5 +113,10 @@ python3 "$SOURCE_DIR/ops/build_london_runtime_bundle.py" --repository-root "$SOU
   --build-dir "$SOURCE_DIR/build-runtime" --expected-sha "$EXPECTED_SHA" --output "$tmp"
 [[ "$(cat "$tmp/deploy/london/runtime_sha")" == "$EXPECTED_SHA" ]]
 [[ ! -e "$tmp/research" && ! -e "$tmp/tests" ]]
-rm -rf "$TARGET"; mv "$tmp" "$TARGET"
+if [[ -e "$TARGET" || -L "$TARGET" ]]; then
+  echo "immutable exact-SHA runtime target appeared during staging" >&2
+  rm -rf "$tmp"
+  exit 66
+fi
+mv "$tmp" "$TARGET"
 printf 'stage_result=success\nsha=%s\nruntime_dir=%s\n' "$EXPECTED_SHA" "$TARGET"
