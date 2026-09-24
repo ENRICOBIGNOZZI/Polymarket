@@ -899,7 +899,7 @@ v7_assert_registered_child_count 37
 write_runtime_status running false
 
 while [[ ! -e "$KILL" ]]; do
-  if ! python3 scripts/v7_portfolio_guard.py --run-root "$RUN_ROOT" \
+  if ! python3 "$ROOT/scripts/v7_portfolio_guard.py" --run-root "$RUN_ROOT" \
       --allocation-manifest "$ALLOC/manifest.json" --max-drawdown 0.15 \
       > "$RUN_ROOT/portfolio_guard.log" 2>&1; then
     break
