@@ -75,9 +75,12 @@ jobs:
       - name: Test exact A0-A5 source
         run: |
           python3 -m pip install --disable-pip-version-check -q -r research/requirements-learning.txt
-          PYTHONPATH=. python3 -m pytest -q tests/test_v7_maker_a0_a5_2h.py
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_v7_maker_a0_a5_2h.py \
+            tests/test_v7_maker_market_metadata.py
           python3 -m py_compile \
             research/walk_forward_v3/maker_a0_a5_2h.py \
+            research/walk_forward_v3/maker_market_metadata.py \
             ops/v7_maker_a0_a5_ssm.py
           c++ -std=c++20 -O2 -Iinclude \
             research/tools/v7_external_event_export.cpp \
