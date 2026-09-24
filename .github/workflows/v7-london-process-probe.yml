@@ -122,6 +122,35 @@ jobs:
                 "pending_settlement_count","paper_only","authenticated_execution","real_order_submission")
           print(json.dumps({k:v.get(k) for k in keys},sort_keys=True))
           PYNATIVE
+          echo "=== PURE ARB COLLECTOR DIAGNOSTICS ==="
+          for pattern in \
+            v7_pure_arb_arrival_survival_shadow.py \
+            v7_pure_arb_deep_sizing_shadow.py \
+            v7_pure_arb_exchange_execution_shadow.py \
+            v7_two_sided_complete_set_shadow.py
+          do
+            echo "--- process:$pattern ---"
+            ps -eo pid=,ppid=,etime=,stat=,args= | grep -F "$pattern" | grep -v -F "grep -F" || true
+          done
+          PURE="$ROOT/research/repricing_book"
+          for name in \
+            pure_arb_trades.jsonl \
+            pure_arb_arrival_survival_status.json pure_arb_arrival_survival.log \
+            pure_arb_deep_sizing_status.json pure_arb_deep_sizing.log \
+            exchange_execution_status.json exchange_execution.log \
+            capital_allocator_status.json capital_allocator.log
+          do
+            p="$PURE/$name"
+            echo "--- file:$name ---"
+            stat -c 'bytes=%s mtime=%y mode=%a owner=%U group=%G' "$p" 2>/dev/null || echo MISSING
+            case "$name" in *.json) cat "$p" 2>/dev/null || true;; *.log) tail -30 "$p" 2>/dev/null || true;; esac
+          done
+          echo "=== RETENTION DIAGNOSTICS ==="
+          systemctl is-enabled polymarket-v7-retention.timer 2>/dev/null || true
+          systemctl is-active polymarket-v7-retention.timer 2>/dev/null || true
+          systemctl status polymarket-v7-retention.timer --no-pager -l 2>/dev/null || true
+          systemctl status polymarket-v7-retention.service --no-pager -l 2>/dev/null || true
+          cat "$ROOT/control/london_buffer_retention_status.json" 2>/dev/null || true
           echo "=== PURE ARB EVIDENCE GROWTH ==="
           python3 - "$ROOT" <<'PYEVID'
           import json,sys,time
