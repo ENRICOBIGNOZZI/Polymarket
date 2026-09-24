@@ -12,6 +12,14 @@ def test_stage_does_not_switch_or_start_runtime():
     assert 'systemctl enable' not in s
     assert 'systemctl stop' not in s
 
+def test_stage_exact_sha_generation_is_immutable_on_retry():
+    s=(ROOT/'ops/v7_london_stage_release.sh').read_text()
+    assert 'stage_result=reused_immutable_exact_sha' in s
+    assert 'existing exact-SHA runtime target differs from immutable source' in s
+    assert 'rm -rf "$TARGET"; mv "$tmp" "$TARGET"' not in s
+    assert 'immutable exact-SHA runtime target appeared during staging' in s
+
+
 def test_stage_reuses_full_exact_sha_ci_before_skipping_duplicate_suite():
     s=(ROOT/'ops/v7_london_stage_release.sh').read_text()
     fast=s.index('REUSED_EXACT_SHA_CI')
