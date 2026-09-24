@@ -7,6 +7,7 @@ sys.path.insert(0,str(ROOT))
 
 from research.walk_forward_v3.maker_a0_a5_2h import (
     Ridge, external_feature, pm_feature, full_execution_feature, feature_dict, split_60_40,
+    load_external_venue_csvs, external_venue_features,
     load_feature_anchor_rows, build_static_market_metadata, WINDOW_NS,
 )
 
