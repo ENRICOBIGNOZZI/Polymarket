@@ -217,7 +217,13 @@ def load_book_anchor_rows(
     market_meta: dict[str,dict[str,float]],
     context_meta: dict[tuple[str,str],dict[str,float]],
 ):
-    """Fixed-cadence alpha-neutral quote anchors from causal PM book events."""
+    """Exact 500ms alpha-neutral quote clock with causal PM-book as-of state.
+
+    Quote timestamps are fixed grid points. Book events only provide the latest
+    information available at or before each grid point; they never choose the
+    quote timestamp. This removes both old-alpha selection and within-slot
+    book-activity timing selection.
+    """
     book_root=root/"research"/"repricing_book"/"book_observations"
     if not book_root.is_dir():
         raise ValueError("PM_BOOK_OBSERVATION_DIR_MISSING")
@@ -225,7 +231,7 @@ def load_book_anchor_rows(
         (p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()),
         key=lambda p:(p.name=="current.jsonl",p.name),
     )
-    chosen={}
+    events=defaultdict(list)
     counts=Counter()
     model_shas=set()
     cadence_ns=ANCHOR_CADENCE_MS*1_000_000
@@ -247,10 +253,10 @@ def load_book_anchor_rows(
             sha=str(raw.get("model_sha") or "")
             if len(sha)==40:model_shas.add(sha)
             try:
-                decision=int(raw["receive_wall_ms"])*1_000_000
+                observed_ns=int(raw["receive_wall_ms"])*1_000_000
             except (KeyError,TypeError,ValueError,OverflowError):
                 counts["clock_rejected"]+=1;continue
-            if decision<minimum_wall_ns:
+            if observed_ns<minimum_wall_ns:
                 counts["before_minimum"]+=1;continue
             market=str(raw.get("market_id") or "")
             token=str(raw.get("token_id") or "")
@@ -259,7 +265,7 @@ def load_book_anchor_rows(
                 counts["metadata_unavailable"]+=1;continue
             start=int(meta["start_timestamp_ms"])*1_000_000
             end=int(meta["end_timestamp_ms"])*1_000_000
-            if not start<=decision<end:
+            if not start<=observed_ns<end:
                 counts["outside_contract_window"]+=1;continue
             yes=str(meta["yes_token"]);no=str(meta["no_token"])
             if token==yes:outcome="YES"
@@ -276,44 +282,75 @@ def load_book_anchor_rows(
             if not finite(minimum):minimum=static.get("minimum")
             if not all(finite(x) for x in (rate,exponent,minimum)):
                 counts["static_terms_unavailable"]+=1;continue
-            features=oriented_pm_anchor_features(raw,outcome=outcome)
-            features["execution.tte_seconds"]=(end-decision)/1e9
-            bucket=decision//cadence_ns
-            key=(market,bucket)
-            decision_id=canonical_hash([
-                "maker-book-anchor-v1",sha,market,bucket,
-                str(raw.get("observer_session_id") or ""),
-            ])
-            row={
-                "decision_id":decision_id,
-                "market_id":market,"asset":asset,"horizon":horizon,
-                "decision_ns":decision,"information_end_ns":decision,
-                "yes_token_id":yes,"no_token_id":no,"token_id":yes,
-                "tte_ns":end-decision,"signal_age_ns":0,"direction":0,
+            events[market].append({
+                "observed_ns":observed_ns,"raw":raw,"sha":sha,"outcome":outcome,
+                "asset":asset,"horizon":horizon,"yes":yes,"no":no,
+                "start_ns":start,"end_ns":end,
                 "fee_rate":float(rate),"fee_exponent":float(exponent),
-                "minimum":float(minimum),"epoch":int(raw.get("connection_epoch") or 0),
-                "pair":{},"features":features,
-                "anchor_outcome":outcome,
-                "anchor_observer_sequence":int(raw.get("observer_sequence") or 0),
-                "anchor_source":"CAUSAL_PM_BOOK_FIXED_SLOT",
-            }
-            prior=chosen.get(key)
-            if prior is None or decision<int(prior["decision_ns"]):
-                chosen[key]=row
+                "minimum":float(minimum),
+            })
             counts["eligible_events"]+=1
-    rows=sorted(chosen.values(),key=lambda r:(int(r["decision_ns"]),str(r["market_id"]),str(r["decision_id"])))
+
+    rows=[]
+    for market,seq in sorted(events.items()):
+        seq.sort(key=lambda e:(
+            int(e["observed_ns"]),
+            int(e["raw"].get("observer_sequence") or 0),
+            str(e["raw"].get("token_id") or ""),
+        ))
+        stamps=[int(e["observed_ns"]) for e in seq]
+        first=max(int(minimum_wall_ns),int(seq[0]["start_ns"]),stamps[0])
+        last=min(int(seq[-1]["end_ns"])-1,stamps[-1])
+        slot=((first+cadence_ns-1)//cadence_ns)*cadence_ns
+        stop=(last//cadence_ns)*cadence_ns
+        while slot<=stop:
+            pos=bisect_right(stamps,slot)-1
+            if pos<0:
+                slot+=cadence_ns;continue
+            event=seq[pos]
+            raw=event["raw"]
+            if not int(event["start_ns"])<=slot<int(event["end_ns"]):
+                slot+=cadence_ns;continue
+            age_ns=slot-int(event["observed_ns"])
+            if age_ns<0:
+                raise RuntimeError("PM_ANCHOR_ASOF_FUTURE_LEAK")
+            features=oriented_pm_anchor_features(raw,outcome=str(event["outcome"]))
+            features["execution.tte_seconds"]=(int(event["end_ns"])-slot)/1e9
+            features["pm.anchor_age_ms"]=age_ns/1e6
+            decision_id=canonical_hash([
+                "maker-book-anchor-v2",str(event["sha"]),market,slot,
+                str(raw.get("observer_session_id") or ""),
+                int(raw.get("observer_sequence") or 0),
+            ])
+            rows.append({
+                "decision_id":decision_id,
+                "market_id":market,"asset":event["asset"],"horizon":event["horizon"],
+                "decision_ns":slot,"information_end_ns":int(event["observed_ns"]),
+                "yes_token_id":event["yes"],"no_token_id":event["no"],"token_id":event["yes"],
+                "tte_ns":int(event["end_ns"])-slot,"signal_age_ns":age_ns,"direction":0,
+                "fee_rate":event["fee_rate"],"fee_exponent":event["fee_exponent"],
+                "minimum":event["minimum"],"epoch":int(raw.get("connection_epoch") or 0),
+                "pair":{},"features":features,
+                "anchor_outcome":event["outcome"],
+                "anchor_observer_sequence":int(raw.get("observer_sequence") or 0),
+                "anchor_source":"CAUSAL_PM_BOOK_EXACT_FIXED_CADENCE_ASOF",
+            })
+            counts["grid_slots"]+=1
+            slot+=cadence_ns
+
+    rows.sort(key=lambda r:(int(r["decision_ns"]),str(r["market_id"]),str(r["decision_id"])))
     counts["anchors"]=len(rows)
     if not rows:
         raise ValueError("NO_ALPHA_NEUTRAL_BOOK_ANCHORS")
     return rows,{
         "counts":dict(counts),"model_shas":sorted(model_shas),
         "anchor_cadence_ms":ANCHOR_CADENCE_MS,
-        "timing_selection":"FIRST_VALID_CAUSAL_PM_EVENT_PER_MARKET_PER_FIXED_SLOT_NO_ALPHA_NO_PNL",
-        "feature_semantics":"PM_EVENT_FEATURES_ORIENTED_TO_YES_PROBABILITY",
+        "timing_selection":"EXACT_500MS_GRID_PER_ACTIVE_MARKET;LATEST_VALID_PM_EVENT_ASOF_GRID;NO_ALPHA_NO_PNL_NO_WITHIN_SLOT_EVENT_TIMING",
+        "feature_semantics":"PM_EVENT_FEATURES_ORIENTED_TO_YES_PROBABILITY;FEATURE_AGE_EXPLICIT",
     }
 
 
-def load_feature_anchor_rows(
+def load_feature_anchor_rows(def load_feature_anchor_rows(
     paths: Iterable[Path], *, minimum_wall_ns: int,
     market_meta: dict[str,dict[str,float]],
     context_meta: dict[tuple[str,str],dict[str,float]],
@@ -688,9 +725,11 @@ def current_pair(row,session):
 
 
 def future_delta(row,session,latency_ms,horizon_ms):
+    """Directional target is p(t+h)-p(t); latency is an execution stress only."""
+    del latency_ms
     now=current_pair(row,session)
     if now is None:return None
-    target=int(row["decision_ns"])/1e6+int(latency_ms)+int(horizon_ms)
+    target=int(row["decision_ns"])/1e6+int(horizon_ms)
     future=pair_asof_session(session,row,target)
     if future is None:return None
     if int(now.get("connection_epoch") or 0)!=int(future.get("connection_epoch") or 0):
@@ -847,7 +886,9 @@ def recent_trade_flow(row: dict[str,Any], trades, window_ms: int=1000) -> dict[s
         buy=sell=buy_n=sell_n=0.0
         if idx is not None:
             left=bisect_left(idx["stamps"],decision_ms-window_ms)
-            right=bisect_right(idx["stamps"],decision_ms)
+            # Strictly before the decision. Same-millisecond receive records
+            # have unknown ordering relative to the anchor and are therefore excluded.
+            right=bisect_left(idx["stamps"],decision_ms)
             for wall,epoch,aggressor,price,size in idx["rows"][left:right]:
                 if aggressor=="BUY":
                     buy+=float(size);buy_n+=1.0
@@ -1157,11 +1198,16 @@ def run(
     window=select_two_hour_window(usable,session_cache)
     start_ns,end_ns=int(window["start_ns"]),int(window["end_ns"])
     rows=[r for r in usable if start_ns<=int(r["decision_ns"])<end_ns]
-    # Features are already backward-causal snapshots at each anchor. No second
-    # as-of join is allowed here.
-    join_diag={
-        "rows":len(rows),"joined_rows":len(rows),"join_rate":1.0,
-        "semantics":"QUOTE_ANCHOR_IS_FIRST_VALID_CAUSAL_PM_BOOK_EVENT_IN_FIXED_500MS_SLOT;NO_TAKER_SIGNAL_TIMING",
+    feature_paths=discover_feature_tapes(root)
+    if not feature_paths:
+        raise ValueError("NO_RICH_FEATURE_TAPE")
+    feature_index,rich_load_diag=load_feature_tape(
+        feature_paths,start_ns=start_ns,end_ns=end_ns)
+    rows,join_diag=attach_rich_state(rows,feature_index,delay_ms=0)
+    if not int(join_diag.get("joined_rows") or 0):
+        raise ValueError("NO_RICH_FEATURE_ROWS_AT_FIXED_ANCHORS")
+    join_diag={**join_diag,
+        "semantics":"EXACT_FIXED_500MS_QUOTE_CLOCK;RICH_STATE_BACKWARD_ASOF_AVAILABLE_AT_NS_LE_DECISION;NO_TAKER_SIGNAL_TIMING",
     }
     train,oos,cut=split_60_40(rows,start_ns)
     if not train or not oos:
@@ -1169,6 +1215,8 @@ def run(
     ext_names,pm_names,full_names=prediction_names(train)
     if not ext_names:raise ValueError("NO_EXTERNAL_FEATURES")
     if not pm_names:raise ValueError("NO_PM_FEATURES")
+    rich_a5_names=[name for name in full_names if str(name).startswith("tape.")]
+    if not rich_a5_names:raise ValueError("NO_RICH_A5_FEATURES")
     external_model,external_level_names=train_external_fair(train,session_cache,ext_names)
     trades,trade_diag=load_trades(root,rows,start_ns,end_ns)
     if not trades:raise ValueError("NO_CAUSAL_MAKER_TRADES")
@@ -1176,7 +1224,6 @@ def run(
     grid={p:{} for p in POLICIES};receipts={}
     for latency in LATENCIES:
         for horizon in EXITS:
-            if horizon<=latency:continue
             models,receipt=fit_cell_models(
                 train,session_cache,latency,horizon,ext_names,pm_names,full_names,external_model,trades)
             receipts[f"{latency}::{horizon}"]=receipt
@@ -1191,7 +1238,8 @@ def run(
         "code_sha":code_sha,"window_start_ns":start_ns,"window_end_ns":end_ns,
         "window_seconds":7200,"train_end_ns":cut,
         "split":{"TRAIN_60":len(train),"LOCKED_OOS_40":len(oos)},
-        "selection":window,"feature_join":join_diag,"anchor_source":feature_diag,
+        "selection":window,"feature_join":join_diag,"feature_tape_load":rich_load_diag,
+        "anchor_source":feature_diag,
         "external_venue_tape":{"load":external_venue_load_diag,"join":external_venue_join_diag},
         "trade_tape":trade_diag,"book_tape":tape_diag,
         "maker_mechanics":{
@@ -1206,6 +1254,9 @@ def run(
                         "A3_EXTERNAL_PM":sorted(set(ext_names)|set(pm_names)),
                         "A4_RESIDUAL":["pm_minus_external_fair_residual"],
                         "A5_FULL_EXECUTION":full_names},
+        "a5_rich_feature_names":rich_a5_names,
+        "directional_target_semantics":"PM_YES_AT_DECISION_PLUS_HORIZON_MINUS_PM_YES_AT_DECISION;LATENCY_DOES_NOT_SHIFT_LABEL",
+        "grid_cell_count":len(POLICIES)*len(LATENCIES)*len(EXITS),
         "external_fair_level_model_features":external_level_names,
         "model":"RIDGE_FUTURE_PM_REPRICING;SIGN_DRIVES_TOXIC_SIDE_VETO",
         "threshold":"ZERO_PREDICTED_PM_DELTA_FIXED_NO_OOS_TUNING",
