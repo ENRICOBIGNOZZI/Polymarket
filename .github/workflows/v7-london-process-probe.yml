@@ -70,7 +70,6 @@ jobs:
           systemctl is-active polymarket-v7-retention.timer 2>/dev/null || true
           systemctl show polymarket-v7-retention.timer -p ActiveState -p SubState -p NextElapseUSecRealtime -p LastTriggerUSec --no-pager 2>/dev/null || true
           systemctl show polymarket-v7-retention.service -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus --no-pager 2>/dev/null || true
-          journalctl -u polymarket-v7-retention.service -n 80 --no-pager 2>/dev/null | grep -v 'python3.*{"after_bytes"' || true
           if [[ -n "$ROOT_EARLY" ]]; then
             echo "--- retention compact ---"
             python3 - "$ROOT_EARLY/control/london_buffer_retention_status.json" <<'PYRET'
@@ -92,6 +91,10 @@ jobs:
           print("RETENTION_COMPACT="+json.dumps(out,sort_keys=True,separators=(",",":")))
           PYRET
           fi
+          echo "--- retention journal compact ---"
+          journalctl -u polymarket-v7-retention.service -n 100 --no-pager 2>/dev/null \
+            | grep -Ei 'systemd\[1\]|traceback|error|failed|permission denied|no such file|chdir|exec' \
+            | tail -50 || true
           echo "=== CPU VISIBILITY ==="
           echo "nproc=$(nproc 2>/dev/null || true) nproc_all=$(nproc --all 2>/dev/null || true)"
           lscpu -e=CPU,ONLINE,NODE,CORE,SOCKET 2>/dev/null || true
