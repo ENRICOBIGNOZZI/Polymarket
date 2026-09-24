@@ -174,6 +174,24 @@ jobs:
           out["workers"]=workers
           print(json.dumps(out,sort_keys=True,separators=(',',':')))
           PYHOT
+          echo "--- HOT:native_worker_logs.compact ---"
+          python3 - "$ROOT" <<'PYWORK'
+          import json,re,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          pat=re.compile(r'error|fatal|fail|invalid|not found|blocked|timeout|reject|exception|terminate|exit',re.I)
+          rows=[]
+          for p in sorted(root.glob('native_crypto_settlement_engine_*.log')):
+              try:
+                  lines=p.read_text(encoding='utf-8',errors='replace').splitlines()
+                  st=p.stat()
+              except OSError:
+                  continue
+              tail=lines[-120:]
+              bad=[x for x in tail if pat.search(x)]
+              rows.append({"file":p.name,"bytes":st.st_size,"bad":bad[-6:],"last":tail[-3:]})
+          print(json.dumps(rows,sort_keys=True,separators=(',',':')))
+          PYWORK
           for rel in native_engine_manager.log universe/collector.log external_fair/external_assets_supervisor.log research/repricing_book_observer.log portfolio_guard.log; do
             echo "--- HOT:$rel ---"
             tail -n 20 "$ROOT/$rel" 2>/dev/null || true
