@@ -7,7 +7,7 @@ sys.path.insert(0,str(ROOT))
 
 from research.walk_forward_v3.maker_a0_a5_2h import (
     Ridge, external_feature, pm_feature, full_execution_feature, feature_dict, split_60_40,
-    WINDOW_NS,
+    load_feature_anchor_rows, build_static_market_metadata, WINDOW_NS,
 )
 
 
@@ -46,6 +46,38 @@ class MakerA0A5Tests(unittest.TestCase):
         y=[2.0*float(i)+1.0 for i in range(100)]
         model=Ridge(["x"],ridge=1e-6).fit(rows,y)
         self.assertAlmostEqual(model.predict({"x":12.0}),25.0,places=3)
+
+    def test_feature_tape_drives_quote_timing_not_native_signal_rows(self):
+        import json,tempfile
+        native=[{
+            "market_id":"m1","asset":"BTC","horizon":"M5",
+            "fee_rate":0.07,"fee_exponent":1.0,"minimum":5.0,
+        }]
+        market_meta,context_meta=build_static_market_metadata(native)
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"feature_tape.jsonl"
+            rows=[]
+            for ns in (1_000_000_000,1_100_000_000,1_600_000_000):
+                record={
+                    "schema":"polymarket_v7_multi_crypto_feature_tape_v1",
+                    "decision_wall_ns":ns,"available_at_ns":ns-1,
+                    "model_sha":"a"*40,
+                    "asset":"BTC","horizon":"M5","market_id":"m1",
+                    "yes_token":"y","no_token":"n","active_now":True,
+                    "features":{"tte_seconds":100.0,"pm_book_valid":True,
+                                "external":{"return_100ms_bp":1.0}},
+                    "paper_only":True,"authenticated_execution":False,
+                    "real_order_submission":False,"execution_authority":False,
+                }
+                rows.append(record)
+            p.write_text("".join(json.dumps(r)+"\n" for r in rows),encoding="utf-8")
+            anchors,diag=load_feature_anchor_rows(
+                [p],minimum_wall_ns=0,market_meta=market_meta,context_meta=context_meta)
+        self.assertEqual(len(anchors),2)
+        self.assertEqual([r["decision_ns"] for r in anchors],[1_000_000_000,1_600_000_000])
+        self.assertEqual(anchors[0]["fee_rate"],0.07)
+        self.assertIn("tape.external.return_100ms_bp",anchors[0]["features"])
+        self.assertEqual(diag["anchor_cadence_ms"],500)
 
     def test_split_is_exact_time_60_40(self):
         start=1_000_000_000_000
