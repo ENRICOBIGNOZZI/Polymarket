@@ -163,6 +163,7 @@ jobs:
           grid=json.load(open(root/"01_grid.json"))
           mono=json.load(open(root/"03_monotonicity.json"))
           summary=json.load(open(root/"05_summary.json"))
+          paired=json.load(open(root/"06_paired_vs_a0.json"))
           assert manifest["code_sha"]==sha
           assert manifest["paper_only"] is True
           assert manifest["authenticated_execution"] is False
@@ -180,6 +181,13 @@ jobs:
           assert set(grid["policies"])==policies
           assert set(mono["policies"])==policies
           rows=list(csv.DictReader(open(root/"04_grid.csv",newline="")))
+          assert len(rows)==6*6*12
+          assert manifest["grid_cell_count"]==6*6*12
+          assert manifest["directional_target_semantics"]=="PM_YES_AT_DECISION_PLUS_HORIZON_MINUS_PM_YES_AT_DECISION;LATENCY_DOES_NOT_SHIFT_LABEL"
+          assert "EXACT_500MS_GRID" in manifest["anchor_source"]["timing_selection"]
+          assert int(manifest["feature_join"]["joined_rows"])>0
+          assert manifest["a5_rich_feature_names"]
+          assert set(paired["policies"])==policies-{"A0_BASELINE"}
           compact={
               "split":manifest["split"],
               "feature_counts":{k:len(v) for k,v in manifest["feature_sets"].items()},
@@ -222,6 +230,7 @@ jobs:
               ("00_manifest.json","manifest"),
               ("03_monotonicity.json","monotonicity"),
               ("05_summary.json","summary"),
+              ("06_paired_vs_a0.json","paired_vs_a0"),
           ):
               path=root/name
               if path.is_file():
