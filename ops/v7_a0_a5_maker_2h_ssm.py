@@ -80,12 +80,11 @@ assert m['latencies_ms']==[5,10,25,50,100,250]
 assert m['horizons_ms']==[100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000]
 rows=g['rows']
 policies=sorted(set(r['policy'] for r in rows))
+receipts=json.load(open(root/'02_training_receipts.json'))
 assert 'A0_BASELINE_NO_ADDED_ALPHA' in policies
-assert 'A1_EXTERNAL_MOMENTUM' in policies
-assert 'A2_PM_MICROSTRUCTURE' in policies
-assert 'A3_EXTERNAL_PLUS_PM' in policies
-assert 'A4_RESIDUAL_MEAN_REVERSION' in policies or json.load(open(root/'02_training_receipts.json'))['A4_residual']['state']=='INSUFFICIENT_DATA'
-assert 'A5_FULL_EXECUTION_ALPHA' in policies or json.load(open(root/'02_training_receipts.json'))['models']['A5_FULL_EXECUTION_ALPHA']['state']=='INSUFFICIENT_DATA'
+for name in ('A1_EXTERNAL_MOMENTUM','A2_PM_MICROSTRUCTURE','A3_EXTERNAL_PLUS_PM','A5_FULL_EXECUTION_ALPHA'):
+    assert name in policies or receipts['models'][name]['state']=='INSUFFICIENT_DATA'
+assert 'A4_RESIDUAL_MEAN_REVERSION' in policies or receipts['A4_residual']['state']=='INSUFFICIENT_DATA'
 table=list(csv.DictReader(open(root/'07_locked_oos_table.csv')))
 assert len(table)==len(rows)
 print('A0_A5_PACKAGE_OK')
