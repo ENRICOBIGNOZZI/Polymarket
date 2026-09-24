@@ -9,7 +9,7 @@ StartLimitBurst=3
 Type=simple
 User=@SERVICE_USER@
 Group=@SERVICE_GROUP@
-WorkingDirectory=@APP_DIR@
+WorkingDirectory=@RUN_ROOT@
 Environment=POLYMARKET_APP_DIR=@APP_DIR@
 Environment=PM_V7_RUN_ROOT=@RUN_ROOT@
 Environment=PM_V7_RUNTIME_ARTIFACT_ROOT=/home/@SERVICE_USER@/polymarket-artifacts/by-sha/@EXPECTED_SHA@
