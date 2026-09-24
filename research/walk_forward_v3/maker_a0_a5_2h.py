@@ -59,6 +59,7 @@ TARGET_SHARES=5.0
 RIDGE=8.0
 MIN_TRAIN_TARGETS=50
 MAX_FEATURES=64
+ANCHOR_CADENCE_MS=500
 
 SAFETY_PLUS={
     **SAFETY,
@@ -93,6 +94,140 @@ def robust_json_lines(path: Path):
                     yield value
     except (OSError,UnicodeDecodeError):
         return
+
+
+
+def _flatten(prefix: str, value: Any, out: dict[str,float]) -> None:
+    if isinstance(value,dict):
+        for key,child in value.items():
+            _flatten(prefix+"."+str(key) if prefix else str(key),child,out)
+    elif finite(value):
+        out[prefix]=float(value)
+
+
+def build_static_market_metadata(decisions: list[dict[str,Any]]):
+    """Use native decisions only for static venue terms, never for quote timing."""
+    by_market=defaultdict(list)
+    by_context=defaultdict(list)
+    for row in decisions:
+        try:
+            rate=float(row["fee_rate"]); exponent=float(row["fee_exponent"])
+            minimum=float(row["minimum"])
+        except (KeyError,TypeError,ValueError,OverflowError):
+            continue
+        if not all(math.isfinite(x) for x in (rate,exponent,minimum)):
+            continue
+        if rate<0 or exponent<0 or minimum<0:
+            continue
+        value=(round(rate,12),round(exponent,12),round(minimum,9))
+        market=str(row.get("market_id") or "")
+        context=(str(row.get("asset") or ""),str(row.get("horizon") or ""))
+        if market:by_market[market].append(value)
+        if all(context):by_context[context].append(value)
+
+    def summarize(values):
+        if not values:return None
+        fee_pairs={(x[0],x[1]) for x in values}
+        if len(fee_pairs)!=1:return None
+        rate,exponent=next(iter(fee_pairs))
+        # Maximum observed minimum is conservative and does not use PnL.
+        return {"fee_rate":rate,"fee_exponent":exponent,
+                "minimum":max(x[2] for x in values)}
+
+    return (
+        {k:v for k,values in by_market.items() if (v:=summarize(values)) is not None},
+        {k:v for k,values in by_context.items() if (v:=summarize(values)) is not None},
+    )
+
+
+def load_feature_anchor_rows(
+    paths: Iterable[Path], *, minimum_wall_ns: int,
+    market_meta: dict[str,dict[str,float]],
+    context_meta: dict[tuple[str,str],dict[str,float]],
+):
+    """Create alpha-neutral maker quote opportunities from the continuous feature tape."""
+    chosen={}
+    counts=Counter()
+    model_shas=set()
+    cadence_ns=ANCHOR_CADENCE_MS*1_000_000
+    for path in sorted({Path(p).resolve() for p in paths}):
+        counts["files"]+=1
+        for raw in robust_json_lines(path):
+            if raw.get("schema")!="polymarket_v7_multi_crypto_feature_tape_v1":
+                continue
+            counts["schema_rows"]+=1
+            if not (
+                raw.get("paper_only") is True
+                and raw.get("authenticated_execution") is False
+                and raw.get("real_order_submission") is False
+                and raw.get("execution_authority") is False
+            ):
+                counts["authority_rejected"]+=1;continue
+            sha=str(raw.get("model_sha") or "")
+            if len(sha)!=40 or any(ch not in "0123456789abcdef" for ch in sha):
+                counts["model_sha_rejected"]+=1;continue
+            model_shas.add(sha)
+            try:
+                decision=int(raw["decision_wall_ns"])
+                available=int(raw["available_at_ns"])
+            except (KeyError,TypeError,ValueError,OverflowError):
+                counts["clock_rejected"]+=1;continue
+            if decision<minimum_wall_ns:
+                counts["before_minimum"]+=1;continue
+            if available<=0 or available>decision:
+                counts["future_availability_rejected"]+=1;continue
+            if raw.get("active_now") is not True:
+                counts["inactive"]+=1;continue
+            market=str(raw.get("market_id") or "")
+            asset=str(raw.get("asset") or "").upper()
+            horizon=str(raw.get("horizon") or "").upper()
+            yes=str(raw.get("yes_token") or "")
+            no=str(raw.get("no_token") or "")
+            if not market or not asset or not horizon or not yes or not no or yes==no:
+                counts["identity_rejected"]+=1;continue
+            meta=market_meta.get(market) or context_meta.get((asset,horizon))
+            if meta is None:
+                counts["static_terms_unavailable"]+=1;continue
+            features={}
+            _flatten("tape",raw.get("features") or {},features)
+            tte=features.get("tape.tte_seconds")
+            if tte is None or tte<=0:
+                counts["tte_rejected"]+=1;continue
+            bucket=decision//cadence_ns
+            key=(market,bucket)
+            decision_id=canonical_hash([
+                "maker-feature-anchor-v1",sha,market,decision,bucket,
+                str(raw.get("source_identity_hash") or ""),
+            ])
+            row={
+                "decision_id":decision_id,
+                "market_id":market,"asset":asset,"horizon":horizon,
+                "decision_ns":decision,"information_end_ns":decision,
+                "yes_token_id":yes,"no_token_id":no,
+                "token_id":yes,"tte_ns":int(float(tte)*1e9),
+                "signal_age_ns":0,"direction":0,
+                "fee_rate":float(meta["fee_rate"]),
+                "fee_exponent":float(meta["fee_exponent"]),
+                "minimum":float(meta["minimum"]),
+                "epoch":0,"pair":{},
+                "features":features,
+                "feature_available_at_ns":available,
+                "feature_model_sha":sha,
+                "feature_source_identity_hash":raw.get("source_identity_hash"),
+            }
+            prior=chosen.get(key)
+            # First causal snapshot in each fixed 500ms quote slot wins. This is
+            # determined before outcomes and matches the frozen TTL.
+            if prior is None or decision<int(prior["decision_ns"]):
+                chosen[key]=row
+            counts["eligible_records"]+=1
+    if len(model_shas)>1:
+        raise ValueError("MULTIPLE_FEATURE_RUNTIME_SHAS")
+    rows=sorted(chosen.values(),key=lambda r:(int(r["decision_ns"]),str(r["market_id"]),str(r["decision_id"])))
+    counts["anchors"]=len(rows)
+    return rows,{"counts":dict(counts),"feature_runtime_shas":sorted(model_shas),
+                 "anchor_cadence_ms":ANCHOR_CADENCE_MS,
+                 "timing_selection":"FIRST_CAUSAL_FEATURE_SNAPSHOT_PER_MARKET_PER_FIXED_SLOT_NO_PNL"}
 
 
 def safe_feature_name(name: str) -> bool:
