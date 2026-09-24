@@ -178,6 +178,45 @@ class LondonLosslessRetentionTests(unittest.TestCase):
         self.assertLess(config['hft_ingest_budget_seconds'], 900)
 
 
+    def test_unhealthy_native_capture_is_safely_pinned_not_failed(self):
+        from unittest import mock
+        import gzip
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'paper_v7_live'
+            _runtime(root)
+            compressed = root / 'research/native_observations/run/capture.jsonl.gz'
+            compressed.parent.mkdir(parents=True)
+            with gzip.GzipFile(filename='', mode='wb', fileobj=compressed.open('wb'), mtime=0) as handle:
+                handle.write(b'{"schema":"polymarket_v7_native_observation_v1"}\n')
+            now = 100_000.0
+            old = now - 9 * 3600
+            os.utime(compressed, (old, old))
+            cfg = self.config()
+            cfg['account_all_run_files'] = False
+            cfg['require_hft_window_preservation'] = True
+            cfg['rolling_raw_detail_seconds'] = 7200
+
+            class FakeWindows:
+                def __init__(self, *args, **kwargs):
+                    pass
+                def ingest(self, **kwargs):
+                    return {'records': 0, 'decisions': 0, 'failures': []}
+                def preserve(self, path):
+                    raise ValueError('UNHEALTHY_NATIVE_CAPTURE_PINNED')
+                def close(self):
+                    pass
+
+            with mock.patch.object(retention, 'Windows', FakeWindows):
+                result = retention.run(root, cfg, now=now)
+            self.assertTrue(compressed.exists())
+            self.assertEqual(result['rolling_retirement']['failures'], [])
+            self.assertEqual(
+                result['rolling_retirement']['pinned'],
+                [{'source': str(compressed.relative_to(root)),
+                  'reason': 'UNHEALTHY_NATIVE_CAPTURE_PINNED'}],
+            )
+            self.assertNotEqual(result['state'], 'RETENTION_PARTIAL_FAILURE')
+
     def test_corrupt_old_gzip_is_preserved_and_surfaces_partial_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'paper_v7_live'
