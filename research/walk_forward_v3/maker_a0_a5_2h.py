@@ -230,6 +230,123 @@ def load_feature_anchor_rows(
                  "timing_selection":"FIRST_CAUSAL_FEATURE_SNAPSHOT_PER_MARKET_PER_FIXED_SLOT_NO_PNL"}
 
 
+VENUE_ID_TO_NAME={1:"binance",2:"coinbase",3:"bybit"}
+EXTERNAL_RETURN_WINDOWS_MS=(50,100,250,1000)
+MAX_EXTERNAL_ASOF_AGE_NS=1_000_000_000
+
+
+def load_external_venue_csvs(specs: Iterable[str]):
+    """Load normalized venue events using London local receive wall time only."""
+    series=defaultdict(list)
+    counts=Counter()
+    for spec in specs:
+        if "=" not in str(spec):
+            raise ValueError("EXTERNAL_VENUE_CSV_SPEC_INVALID")
+        asset,raw_path=str(spec).split("=",1)
+        asset=asset.strip().upper()
+        path=Path(raw_path)
+        if not asset or not path.is_file():
+            raise ValueError("EXTERNAL_VENUE_CSV_MISSING:"+str(spec))
+        counts["files"]+=1
+        with path.open("r",encoding="utf-8") as handle:
+            for line in handle:
+                parts=line.strip().split(",")
+                if len(parts)!=5:
+                    counts["invalid_rows"]+=1;continue
+                try:
+                    wall=int(parts[0]);venue_id=int(parts[1]);event_type=int(parts[2])
+                    epoch=int(parts[3]);price=float(parts[4])
+                except (TypeError,ValueError,OverflowError):
+                    counts["invalid_rows"]+=1;continue
+                venue=VENUE_ID_TO_NAME.get(venue_id)
+                if venue is None or wall<=0 or epoch<=0 or event_type not in (1,2) or not math.isfinite(price) or price<=0:
+                    counts["invalid_rows"]+=1;continue
+                series[(asset,venue)].append((wall,epoch,price))
+                counts["accepted"]+=1
+    indexed={}
+    for key,seq in series.items():
+        seq.sort(key=lambda x:(x[0],x[1],x[2]))
+        indexed[key]={"rows":seq,"stamps":[x[0] for x in seq]}
+    counts["asset_venue_series"]=len(indexed)
+    return indexed,dict(counts)
+
+
+def _venue_asof(index, asset: str, venue: str, target_ns: int):
+    item=index.get((asset,venue))
+    if item is None:return None
+    pos=bisect_right(item["stamps"],int(target_ns))-1
+    if pos<0:return None
+    wall,epoch,price=item["rows"][pos]
+    if target_ns-wall<0 or target_ns-wall>MAX_EXTERNAL_ASOF_AGE_NS:
+        return None
+    return wall,epoch,price
+
+
+def external_venue_features(index, asset: str, decision_ns: int) -> dict[str,float]:
+    out={}
+    current_prices=[]
+    ret100=[]
+    for venue in ("binance","coinbase","bybit"):
+        current=_venue_asof(index,asset,venue,decision_ns)
+        if current is None:
+            continue
+        current_wall,current_epoch,current_price=current
+        out[f"external.{venue}_age_ms"]=(decision_ns-current_wall)/1e6
+        current_prices.append((venue,current_price))
+        for window in EXTERNAL_RETURN_WINDOWS_MS:
+            target=decision_ns-window*1_000_000
+            prior=_venue_asof(index,asset,venue,target)
+            if prior is None or prior[1]!=current_epoch or prior[2]<=0:
+                continue
+            value=10_000.0*math.log(current_price/prior[2])
+            suffix="1s" if window==1000 else f"{window}ms"
+            out[f"external.{venue}_return_{suffix}_bp"]=value
+            if window==100:
+                ret100.append(value)
+    if current_prices:
+        prices=sorted(price for _,price in current_prices)
+        median=prices[len(prices)//2] if len(prices)%2 else 0.5*(prices[len(prices)//2-1]+prices[len(prices)//2])
+        mean=statistics.fmean(prices)
+        out["external.fresh_venue_count_receive_time"]=float(len(prices))
+        if mean>0:
+            out["external.cross_venue_dispersion_bps_receive_time"]=10_000.0*(
+                math.sqrt(statistics.fmean((p-mean)*(p-mean) for p in prices))/mean)
+        if median>0:
+            for venue,price in current_prices:
+                out[f"external.{venue}_basis_to_median_bps"]=10_000.0*(price/median-1.0)
+    if ret100:
+        signs=[1 if x>1e-15 else -1 if x<-1e-15 else 0 for x in ret100]
+        out["external.cross_venue_consensus_sign_100ms"]=statistics.fmean(signs)
+        out["external.cross_venue_agreement_100ms"]=abs(sum(signs))/len(signs)
+        leader=max(ret100,key=abs)
+        out["external.cross_venue_leader_return_100ms_bp"]=float(leader)
+    return out
+
+
+def attach_external_venue_features(rows: list[dict[str,Any]], index):
+    counts=Counter()
+    by_asset=defaultdict(Counter)
+    output=[]
+    for original in rows:
+        row=dict(original)
+        row["features"]=dict(original.get("features") or {})
+        asset=str(row.get("asset") or "").upper()
+        added=external_venue_features(index,asset,int(row["decision_ns"]))
+        row["features"].update(added)
+        output.append(row)
+        if added:
+            counts["joined"]+=1
+        else:
+            counts["missing"]+=1
+        for venue in ("binance","coinbase","bybit"):
+            key=f"external.{venue}_return_100ms_bp"
+            by_asset[asset][venue+"_100ms_ready"]+=int(key in added)
+        by_asset[asset]["rows"]+=1
+    counts["rows"]=len(rows)
+    return output,{"counts":dict(counts),"by_asset":{a:dict(v) for a,v in sorted(by_asset.items())},
+                   "semantics":"BACKWARD_ASOF_LOCAL_RECEIVE_WALL_NS_ONLY;NO_EXCHANGE_TIME_SUBSTITUTION"}
+
+
 def safe_feature_name(name: str) -> bool:
     n=name.lower()
     return not any(x in n for x in (
@@ -243,7 +360,7 @@ def external_feature(name: str) -> bool:
     if not safe_feature_name(n):
         return False
     return any(x in n for x in (
-        "signal_return","signal_age","parent_shock",
+        "signal_return","signal_age","parent_shock","shock",
         "binance_return","coinbase_return","bybit_return",
         "external.return_","tape.external.return_",
         "dispersion","fresh_venue","agreement","venue_leader","venue_laggard",
@@ -806,7 +923,10 @@ def monotonicity(grid):
     return out
 
 
-def run(root: Path, output: Path, code_sha: str, minimum_wall_ns: int):
+def run(
+    root: Path, output: Path, code_sha: str, minimum_wall_ns: int,
+    external_venue_csv_specs: Iterable[str]=(),
+):
     # Native lead-lag decisions are used only as an authoritative source for
     # static fee/minimum terms. Quote timing comes exclusively from the
     # continuous alpha-neutral feature tape below.
@@ -821,6 +941,11 @@ def run(root: Path, output: Path, code_sha: str, minimum_wall_ns: int):
         market_meta=market_meta,context_meta=context_meta)
     if not source:
         raise ValueError("NO_ALPHA_NEUTRAL_FEATURE_ANCHORS")
+
+    external_venue_index,external_venue_load_diag=load_external_venue_csvs(external_venue_csv_specs)
+    if not external_venue_index:
+        raise ValueError("NO_RECEIVE_TIME_EXTERNAL_VENUE_TAPE")
+    source,external_venue_join_diag=attach_external_venue_features(source,external_venue_index)
 
     sessions,tape_diag=stream_sessions(root.resolve().parent,source)
     if not sessions:
@@ -886,6 +1011,7 @@ def run(root: Path, output: Path, code_sha: str, minimum_wall_ns: int):
         "window_seconds":7200,"train_end_ns":cut,
         "split":{"TRAIN_60":len(train),"LOCKED_OOS_40":len(oos)},
         "selection":window,"feature_join":join_diag,"feature_tape":feature_diag,
+        "external_venue_tape":{"load":external_venue_load_diag,"join":external_venue_join_diag},
         "trade_tape":trade_diag,"book_tape":tape_diag,
         "maker_mechanics":{
             "placement":"JOIN","target_shares":TARGET_SHARES,"quote_ttl_ms":QUOTE_TTL_MS,
@@ -952,8 +1078,11 @@ def main(argv=None):
     p.add_argument("--output-dir",type=Path,required=True)
     p.add_argument("--code-sha",required=True)
     p.add_argument("--minimum-wall-ns",type=int,required=True)
+    p.add_argument("--external-venue-csv",action="append",default=[])
     a=p.parse_args(argv)
-    try:result=run(a.root,a.output_dir,a.code_sha,a.minimum_wall_ns)
+    try:result=run(
+        a.root,a.output_dir,a.code_sha,a.minimum_wall_ns,
+        external_venue_csv_specs=a.external_venue_csv)
     except (OSError,ValueError,RuntimeError,np.linalg.LinAlgError) as exc:
         p.exit(2,type(exc).__name__+":"+str(exc)+"\n")
     print(json.dumps(result,sort_keys=True))
