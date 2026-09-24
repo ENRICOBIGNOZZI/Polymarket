@@ -32,7 +32,7 @@ from scripts.v7_multi_crypto_compact_pm_tape import (
 
 SCHEMA="polymarket_v7_btc_compact_timing_equity_v1"
 LATENCIES=(5,10,25,50,100,250)
-EXITS=(500,750,1000,1500,2000,3000,4000,5000,7500,10000)
+EXITS=(100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000)
 SIZE=5.0
 
 
