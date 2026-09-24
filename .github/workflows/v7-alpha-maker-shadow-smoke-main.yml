@@ -118,6 +118,10 @@ jobs:
           if [[ ! -x "$BINARY" ]]; then
             echo "PRECHECK_NOTE=BUILDING_EPHEMERAL_MAKER_REPLAY"
             if ! test -d "$SOURCE_REPO/.git"; then echo "PRECHECK_FAIL=SOURCE_REPO_MISSING"; exit 38; fi
+            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^commit" 2>/dev/null; then
+              echo "PRECHECK_NOTE=FETCHING_ALL_SOURCE_HEADS"
+              sudo -u ubuntu -H git -C "$SOURCE_REPO" fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+            fi
             sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^commit"
             sudo -u ubuntu -H git -C "$SOURCE_REPO" worktree remove --force "$SOURCE" >/dev/null 2>&1 || true
             rm -rf "$SOURCE"
