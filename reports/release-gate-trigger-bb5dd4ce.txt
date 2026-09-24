@@ -1,0 +1,1 @@
+Exact-SHA release-gate trigger only. No runtime, strategy, risk, or execution semantics change.
