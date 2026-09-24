@@ -64,6 +64,17 @@ jobs:
           curl -sS -w '\nHTTP_HEALTH=%{http_code}\n' http://127.0.0.1:3000/api/health || true
           curl -sS -w '\nHTTP_SEARCH=%{http_code}\n' 'http://127.0.0.1:3000/api/search?query=Pure%20Arbitrage' || true
           curl -sS -w '\nHTTP_UID=%{http_code}\n' 'http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7-pure-arb' || true
+          echo "=== RETENTION EARLY ==="
+          ROOT_EARLY="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next((v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")), ""))')"
+          systemctl is-enabled polymarket-v7-retention.timer 2>/dev/null || true
+          systemctl is-active polymarket-v7-retention.timer 2>/dev/null || true
+          systemctl show polymarket-v7-retention.timer -p ActiveState -p SubState -p NextElapseUSecRealtime -p LastTriggerUSec --no-pager 2>/dev/null || true
+          systemctl show polymarket-v7-retention.service -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus --no-pager 2>/dev/null || true
+          journalctl -u polymarket-v7-retention.service -n 40 --no-pager 2>/dev/null || true
+          if [[ -n "$ROOT_EARLY" ]]; then
+            echo "--- retention status json ---"
+            cat "$ROOT_EARLY/control/london_buffer_retention_status.json" 2>/dev/null || true
+          fi
           echo "=== CPU VISIBILITY ==="
           echo "nproc=$(nproc 2>/dev/null || true) nproc_all=$(nproc --all 2>/dev/null || true)"
           lscpu -e=CPU,ONLINE,NODE,CORE,SOCKET 2>/dev/null || true
