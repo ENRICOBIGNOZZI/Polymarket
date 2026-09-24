@@ -40,7 +40,7 @@
   "retention_before_bytes": 55053556809,
   "retention_managed_files": 73598,
   "retention_state": "RETENTION_PARTIAL_FAILURE",
-  "retention_status_age_seconds": 409.7717795372009,
+  "retention_status_age_seconds": 600.1341667175293,
   "retention_status_present": true,
   "retention_timestamp": 1790278002,
   "retention_verified_offload_receipt": false,
