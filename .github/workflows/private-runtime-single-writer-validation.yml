@@ -10,7 +10,7 @@ on:
   # parent SHA. Do not rerun the same single-writer proof for the control-plane
   # request wrapper.
   push:
-    branches: [main]
+    branches: [main, "codex/v7-*"]
     paths-ignore:
       - deploy/v7-paper-deploy-aws-oidc-request.json
   pull_request:
