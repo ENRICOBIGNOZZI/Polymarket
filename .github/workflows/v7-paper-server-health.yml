@@ -30,9 +30,7 @@ jobs:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
       ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
-      SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
-      LONDON_INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
-      SOURCE_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || github.event.workflow_run.head_sha || github.sha }}
+      EXPECTED_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || '' }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -40,79 +38,18 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Resolve deployed runtime SHA
-        id: target
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          git fetch --no-tags origin main
-          git cat-file -e "$SOURCE_SHA^{commit}"
-
-          target="$SOURCE_SHA"
-          request_path=deploy/v7-paper-deploy-aws-oidc-request.json
-          fast_request_path=deploy/v7-paper-fast-restart-existing-request.json
-          changed="$(git diff-tree --no-commit-id --name-only -r "$SOURCE_SHA")"
-          if [[ "$changed" == "$request_path" ]]; then
-            parent="$(git rev-parse "$SOURCE_SHA^")"
-            git show "$SOURCE_SHA:$request_path" > "$RUNNER_TEMP/deploy-request.json"
-            parsed="$(python3 - "$RUNNER_TEMP/deploy-request.json" "$parent" <<'PY'
-          import json,sys
-          v=json.load(open(sys.argv[1],encoding='utf-8'))
-          assert v.get('schema')=='polymarket_v7_aws_oidc_paper_deploy_request_v1'
-          assert v.get('expected_parent_sha')==sys.argv[2]
-          assert v.get('paper_only') is True
-          assert v.get('authenticated_execution') is False
-          assert v.get('real_order_submission') is False
-          assert v.get('cutover_approved') is True
-          print(v['expected_parent_sha'])
-          PY
-          )"
-            target="$parsed"
-          elif [[ "$changed" == "$fast_request_path" ]]; then
-            git show "$SOURCE_SHA:$fast_request_path" > "$RUNNER_TEMP/fast-request.json"
-            parsed="$(python3 - "$RUNNER_TEMP/fast-request.json" <<'PY'
-          import json,sys
-          v=json.load(open(sys.argv[1],encoding='utf-8'))
-          assert v.get('schema')=='polymarket_v7_paper_fast_restart_existing_request_v1'
-          assert v.get('paper_only') is True
-          assert v.get('authenticated_execution') is False
-          assert v.get('real_order_submission') is False
-          assert v.get('restart_approved') is True
-          assert v.get('trigger')=='GITHUB_AWS_OIDC_SSM_FAST_RESTART_EXISTING'
-          print(v['expected_sha'])
-          PY
-          )"
-            target="$parsed"
-          elif [[ "$GITHUB_EVENT_NAME" == "schedule" || ( "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -z "${{ github.event.inputs.expected_sha }}" ) ]]; then
-            git show "origin/main:$request_path" > "$RUNNER_TEMP/current-deploy-request.json"
-            parsed="$(python3 - "$RUNNER_TEMP/current-deploy-request.json" <<'PY'
-          import json,sys
-          v=json.load(open(sys.argv[1],encoding='utf-8'))
-          assert v.get('schema')=='polymarket_v7_aws_oidc_paper_deploy_request_v1'
-          assert v.get('paper_only') is True
-          assert v.get('authenticated_execution') is False
-          assert v.get('real_order_submission') is False
-          assert v.get('cutover_approved') is True
-          print(v['expected_parent_sha'])
-          PY
-          )"
-            target="$parsed"
-          fi
-          git checkout --detach "$target"
-
-          [[ "$target" =~ ^[0-9a-f]{40}$ ]]
-          git checkout --detach "$target"
-          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$target" >/dev/null
-          echo "sha=$target" >> "$GITHUB_OUTPUT"
-          echo "health_target_sha=$target" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Configure AWS credentials through GitHub OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           role-session-name: polymarket-v7-paper-health
           aws-region: eu-west-2
+
+      - name: Resolve canonical observed runtime identity
+        id: target
+        run: |
+          python3 ops/v7_runtime_identity.py --expected-sha "$EXPECTED_SHA" \
+            --output runtime-identity.json --github-output "$GITHUB_OUTPUT"
 
       - name: Verify London PAPER runtime through read-only SSM
         env:
@@ -122,8 +59,7 @@ jobs:
           aws sts get-caller-identity --region eu-west-2 --output json >/dev/null
           python3 ops/v7_london_ssm_health.py \
             --expected-sha "$TARGET_SHA" \
-            --expected-tailscale-ip "$SERVER_HOST" \
-            --expected-instance-id "$LONDON_INSTANCE_ID" \
+            --runtime-identity runtime-identity.json \
             --region eu-west-2 \
             --output v7-ssm-health-receipt.json | tee health-evidence.txt
           python3 - "$TARGET_SHA" <<'PY'
@@ -187,6 +123,7 @@ jobs:
           name: v7-paper-server-health-${{ github.run_id }}
           path: |
             health-evidence.txt
+            runtime-identity.json
             v7-ssm-health-receipt.json
           if-no-files-found: warn
           retention-days: 14

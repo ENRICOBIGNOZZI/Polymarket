@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 from v7_unified_exact_arb_graph import SAFETY, GraphError, load, safe, validate_graph
+from v7_exact_arb_source_health import universe_lease, graph_lease, lease, HOTSET_MAX_AGE_MS
 
 SCHEMA = "polymarket_v7_exact_arb_hotset_selection_v1"
 STATUS_SCHEMA = "polymarket_v7_exact_arb_hotset_selection_status_v1"
@@ -51,6 +52,7 @@ def compile_selection(
     hotset: dict[str, Any],
     model_sha: str,
     max_markets: int,
+    *, as_of_ms: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     validate_graph(graph, model_sha)
     if (
@@ -72,6 +74,10 @@ def compile_selection(
         raise GraphError("hotset_generation")
     if graph.get("source_universe_membership_sha256") != universe.get("membership_sha256"):
         raise GraphError("hotset_universe_generation")
+    expiry = None
+    if as_of_ms is not None:
+        expiry = min(universe_lease(universe, as_of_ms), graph_lease(graph, as_of_ms),
+                     lease(hotset.get("timestamp_ms"), as_of_ms, HOTSET_MAX_AGE_MS, "hotset"))
 
     relation_by_id = {str(row.get("relation_id")): row for row in graph.get("relations") or []}
     market_by_id = {str(row.get("market_id")): row for row in universe.get("markets") or []}
@@ -152,6 +158,9 @@ def compile_selection(
     ).hexdigest()
     selection = {
         "schema": SCHEMA,
+        "source_valid": expiry is not None,
+        "timestamp_ms": as_of_ms,
+        "valid_until_ms": expiry,
         "version": 1,
         **SAFETY,
         "execution_authority": False,
@@ -204,6 +213,7 @@ def main() -> int:
             selection, status = compile_selection(
                 load(args.graph), load(args.universe), load(args.hotset),
                 args.model_sha, args.max_markets,
+                as_of_ms=time.time_ns() // 1_000_000,
             )
             atomic(args.output, selection)
             atomic(args.status, status)
@@ -220,6 +230,8 @@ def main() -> int:
                 "error": type(exc).__name__,
                 "timestamp_ms": time.time_ns() // 1_000_000,
             }
+            atomic(args.output, {**failure, "schema": SCHEMA, "source_valid": False,
+                                "selection_only": True, "markets": [], "valid_until_ms": 0})
             atomic(args.status, failure)
             print(json.dumps(failure, sort_keys=True), flush=True)
             if args.once:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from v7_unified_exact_arb_graph import SAFETY,GraphError,evaluate,frac,sha,validate_graph,safe
 from v7_exact_arb_causal import CausalBooks,ResourceLedger,ReconstructedDepth,JsonlCursor,decode_snapshot,quantiles
+from v7_exact_arb_source_health import graph_lease
 
 SCHEMA="polymarket_v7_unified_exact_arb_graph_shadow_status_v1"
 
@@ -70,11 +71,15 @@ class Shadow:
    return str(limit) if limit>0 else "0"
   except (KeyError,TypeError,ValueError):return "0"
 
- def graph(self):
+ def graph(self,as_of_ms=None):
   try:
    stat=self.a.graph.stat(); signature=(stat.st_ino,stat.st_mtime_ns,stat.st_size)
-   if signature==self.last_file_signature:return
+   if signature==self.last_file_signature:
+    if as_of_ms is not None:graph_lease(self.graph_metadata,as_of_ms)
+    self.graph_state="COLLECTING"
+    return
    g=load(self.a.graph); validate_graph(g,self.a.model_sha)
+   if as_of_ms is not None:graph_lease(g,as_of_ms)
    if not self.generation and self.recovered_generations and self.recovered_generations!={g["graph_generation"]}:
     raise GraphError("recovery_generation_mismatch")
   except (OSError,GraphError,KeyError,TypeError,ValueError):
@@ -219,7 +224,7 @@ class Shadow:
     self.a.opportunities.parent.mkdir(parents=True,exist_ok=True)
     with self.a.opportunities.open("a") as f:f.write(json.dumps(evidence,sort_keys=True)+"\n")
     self.emitted.add(opportunity_id)
-   for arm in (1,5,10,25,50):self.pending.append((now+arm,relation,r["direction"],r["quantity"],arm,self.generation))
+   for arm in (1,2,5,10,25,50,100):self.pending.append((now+arm,relation,r["direction"],r["quantity"],arm,self.generation))
 
  def status(self):
   now=time.time_ns()//1000000
@@ -227,7 +232,7 @@ class Shadow:
   for key,value in self.distance_min.items():near[key]["min"]=float(value)
   for key,values in self.dist.items():
    if key.endswith("_ticks") and values:
-    for threshold in (.25,.5,1,2):
+    for threshold in (.25,.5,1,2,5):
      near[key]["fraction_within_"+str(threshold)+"_tick"]=sum(0<=v<=threshold for v in values)/len(values)
   return {"schema":SCHEMA,"model_sha":self.a.model_sha,**SAFETY,
     "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY","state":self.graph_state,"graph_generation":self.generation,
@@ -257,7 +262,7 @@ class Shadow:
   anchors=JsonlCursor(self.a.tape)
   deltas=JsonlCursor(self.a.delta_tape,segmented=True) if getattr(self.a,"delta_tape",None) else None
   while True:
-   self.graph()
+   self.graph(as_of_ms=time.time_ns()//1_000_000)
    if self.graph_state=="COLLECTING":
     try:
      for row in anchors.poll():

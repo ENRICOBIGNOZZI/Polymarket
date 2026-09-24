@@ -121,6 +121,21 @@ def test_binary_hotset_compiles_to_exact_causal_observer_selection() -> None:
     assert status["state"] == "READY" and status["selected_tokens"] == 2
 
 
+def test_live_selection_requires_fresh_sources_and_carries_bounded_lease() -> None:
+    import pytest
+    universe = build_snapshot([_event([_raw_market("1")])], MODEL, generated_at_ms=100)
+    graph = compile_graph([_registry()], universe, MODEL)
+    hotset = {**_hotset(graph, [graph["relations"][0]["relation_id"]]), "timestamp_ms": 101}
+    selection, _ = compile_selection(graph, universe, hotset, MODEL, 64, as_of_ms=102)
+    assert selection["source_valid"] is True
+    assert selection["valid_until_ms"] == 120101
+    with pytest.raises(ValueError, match="hotset_expired"):
+        compile_selection(graph, universe, hotset, MODEL, 64, as_of_ms=120102)
+    universe["source_valid"] = False
+    with pytest.raises(ValueError, match="universe_source_invalid"):
+        compile_selection(graph, universe, hotset, MODEL, 64, as_of_ms=102)
+
+
 def test_verified_n_leg_relation_selects_every_binary_member_pair_for_causal_observation() -> None:
     universe = build_snapshot(
         [_event([_raw_market(str(i)) for i in (1, 2, 3)])],

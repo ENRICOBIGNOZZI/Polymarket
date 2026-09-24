@@ -18,7 +18,6 @@ jobs:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
       ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
-      INSTANCE_ID: i-04042ca7da7a23215
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Validate request
@@ -35,7 +34,12 @@ jobs:
           role-to-assume: ${{ env.ROLE_ARN }}
           role-session-name: polymarket-v7-evidence-probe
           aws-region: eu-west-2
+      - name: Resolve canonical observed runtime identity
+        id: target
+        run: python3 ops/v7_runtime_identity.py --output runtime-identity.json --github-output "$GITHUB_OUTPUT"
       - name: Verify runtime and evidence growth
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
         run: |
           set -euo pipefail
           window_seconds="$(python3 - deploy/v7-pure-arb-evidence-probe-request.json <<'PYWIN'
@@ -46,7 +50,8 @@ jobs:
           )"
           payload="$(cat <<'SH'
           set -euo pipefail
-          ROOT=/mnt/polymarket-data/paper_v7_london
+          ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(x.split("=",1)[1] for x in shlex.split(sys.stdin.read()) if x.startswith("PM_V7_RUN_ROOT=")))')"
+          test -d "$ROOT"
           WINDOW_SECONDS=__WINDOW_SECONDS__
           export WINDOW_SECONDS
           echo "COLLECTOR_PROCESSES_BEGIN"
@@ -68,8 +73,9 @@ jobs:
           done
           echo "COLLECTOR_LOG_TAILS_END"
           python3 - "$ROOT" <<'PY'
-          import json,os,sys,time
+          import base64,json,os,sys,time
           from pathlib import Path
+          exec(base64.b64decode('__TAPE_HEALTH_SOURCE__'),globals())
           root=Path(sys.argv[1]); control=root/"control"; base=root/"research/repricing_book"
           def load(path):
               try:return json.loads(path.read_text(encoding="utf-8"))
@@ -110,26 +116,16 @@ jobs:
             "exchange_execution_cycles.jsonl",
           ]
           def sample():
-              out={}
-              for rel in rels:
-                  p=base/rel
-                  try:
-                      st=p.stat(); out[rel]={"bytes":st.st_size,"mtime_ns":st.st_mtime_ns}
-                  except OSError:
-                      out[rel]={"bytes":None,"mtime_ns":None}
-              return out
-          def lines(path):
-              try:
-                  with path.open("rb") as h:
-                      return sum(1 for _ in h)
-              except OSError:
-                  return None
-          counts0={k:lines(base/k) for k in rels}
+              book=load(base/"fillability_ws_status.json")
+              return {rel:sample_tape(base/rel,
+                  generation=book.get("observer_session_id"),
+                  rows_written=book.get("book_events_written") if rel=="book_observations/current.jsonl" else None)
+                  for rel in rels}
           window=int(os.environ.get("WINDOW_SECONDS","10"))
           a=sample(); time.sleep(window); b=sample()
-          counts1={k:lines(base/k) for k in rels}
-          growth={k:None if a[k]["bytes"] is None or b[k]["bytes"] is None else b[k]["bytes"]-a[k]["bytes"] for k in rels}
-          row_growth={k:None if counts0[k] is None or counts1[k] is None else counts1[k]-counts0[k] for k in rels}
+          rotation={k:tape_growth(a[k],b[k]) for k in rels}
+          growth={k:v["bytes_added_lower_bound"] for k,v in rotation.items()}
+          row_growth={k:v["rows_added"] for k,v in rotation.items()}
           statuses={}
           for name in ("pure_arb_status.json","pure_arb_arrival_survival_status.json","pure_arb_deep_sizing_status.json","exchange_execution_status.json","fillability_ws_status.json"):
               v=load(base/name)
@@ -139,6 +135,7 @@ jobs:
           print("EVIDENCE_T1="+json.dumps(b,sort_keys=True,separators=(",",":")))
           print("WINDOW_SECONDS="+str(window))
           print("EVIDENCE_GROWTH="+json.dumps(growth,sort_keys=True,separators=(",",":")))
+          print("ROTATION_HEALTH="+json.dumps(rotation,sort_keys=True,separators=(",",":")))
           print("ROW_GROWTH="+json.dumps(row_growth,sort_keys=True,separators=(",",":")))
           for name,v in statuses.items():
               keys=("schema","model_sha","state","cycles","evaluated","candidates","scenarios","status_window_size","observations","events","paper_only","authenticated_execution","real_order_submission")
@@ -149,11 +146,13 @@ jobs:
           assert fencing.get("safe") is True
           assert native.get("state")=="RUNNING"
           assert int(native.get("active_worker_count") or 0)==int(native.get("target_context_count") or -1)==30
-          assert growth["book_observations/current.jsonl"] is not None and growth["book_observations/current.jsonl"]>0
+          assert rotation["book_observations/current.jsonl"]["live"] is True
           PY
           SH
           )"
           payload="${payload/__WINDOW_SECONDS__/$window_seconds}"
+          tape_source="$(base64 -w0 scripts/v7_tape_health.py)"
+          payload="${payload/__TAPE_HEALTH_SOURCE__/$tape_source}"
           encoded="$(printf '%s' "$payload" | base64 -w0)"
           wrapped="printf '%s' '$encoded' | base64 -d | bash"
           params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["390"]},separators=(",",":")))' "$wrapped")"

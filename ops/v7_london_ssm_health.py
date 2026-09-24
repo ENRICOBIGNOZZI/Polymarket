@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 import re
@@ -16,7 +17,7 @@ from v7_london_ssm_deploy import (
 SCHEMA = "polymarket_v7_ssm_health_receipt_v1"
 
 
-def health_command(expected_sha: str) -> str:
+def health_command(expected_sha: str, runtime_identity=None) -> str:
     if not exact_sha(expected_sha):
         raise SsmDeployError("invalid health SHA")
     template = r"""set -euo pipefail
@@ -228,21 +229,32 @@ print('V7_SSM_HEALTH='+json.dumps({
 },sort_keys=True,separators=(',',':')))
 PY
 """
-    return template.replace("__EXPECTED_SHA__", expected_sha)
+    command=template.replace("__EXPECTED_SHA__", expected_sha)
+    if runtime_identity is not None:
+        source=base64.b64encode(Path(__file__).with_name("v7_runtime_health.py").read_bytes()).decode()
+        identity=base64.b64encode(json.dumps(runtime_identity).encode()).decode()
+        command += "\npython3 - \"$ROOT\" <<'V7_CANONICAL_PY'\nimport base64,json,sys\nfrom pathlib import Path\n"
+        command += "namespace={'__name__':'health_receipt'}\nexec(base64.b64decode('"+source+"'),namespace)\n"
+        command += "identity=json.loads(base64.b64decode('"+identity+"'))\n"
+        command += "root=Path(sys.argv[1])\nv=namespace['collect'](root,identity,service_active=True,kill_exists=(root/'control/KILL').exists(),prometheus_ready=True,grafana_ready=True)\n"
+        command += "print('V7_CANONICAL_HEALTH='+json.dumps(v,sort_keys=True))\nV7_CANONICAL_PY\n"
+    return command
 
 
 def health(region: str, stack_name: str, expected_sha: str,
-           expected_tailscale_ip: str, expected_instance_id: str) -> dict[str, Any]:
+           expected_tailscale_ip: str, expected_instance_id: str, runtime_identity=None) -> dict[str, Any]:
     if region != REGION or not exact_sha(expected_sha):
         raise SsmDeployError("eu-west-2 and exact SHA required")
     identity = aws_json(region, ["sts", "get-caller-identity"])
     candidates = candidate_instances(region, stack_name)
     probes = probe(region, candidates)
     selected = select_target(probes, expected_tailscale_ip, expected_instance_id)
-    stdout, stderr = run(region, selected["instance_id"], health_command(expected_sha), 180)
+    stdout, stderr = run(region, selected["instance_id"], health_command(expected_sha,runtime_identity), 180)
     runtime = parse_marker(stdout, "V7_SSM_HEALTH=")
     capture = parse_marker(stdout, "V7_SSM_CAPTURE=")
     runtime["bilateral_capture"] = capture
+    if runtime_identity is not None:
+        runtime["canonical_health"]=parse_marker(stdout,"V7_CANONICAL_HEALTH=")
     if runtime.get("sha") != expected_sha or runtime.get("core_runtime_healthy") is not True:
         raise SsmDeployError("London health receipt mismatch")
     return {
@@ -261,23 +273,32 @@ def health(region: str, stack_name: str, expected_sha: str,
 
 def main() -> int:
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--expected-sha",required=True)
+    p.add_argument("--expected-sha",default="")
+    p.add_argument("--runtime-identity",type=Path)
     p.add_argument("--expected-tailscale-ip",default="")
     p.add_argument("--expected-instance-id",default="")
     p.add_argument("--region",default=REGION)
     p.add_argument("--stack-name",default=STACK)
     p.add_argument("--output",type=Path,required=True)
     a=p.parse_args()
+    observed=None
     try:
-        receipt=health(a.region,a.stack_name,a.expected_sha,a.expected_tailscale_ip,a.expected_instance_id)
+        if a.runtime_identity:
+            from v7_runtime_identity import read_receipt
+            observed=read_receipt(a.runtime_identity)
+            if a.expected_sha and a.expected_sha!=observed["runtime_model_sha"]:raise ValueError("explicit_sha_conflict")
+            if a.expected_instance_id and a.expected_instance_id!=observed["runtime_instance_id"]:raise ValueError("explicit_instance_conflict")
+            a.expected_sha=observed["runtime_model_sha"];a.expected_instance_id=observed["runtime_instance_id"]
+        receipt=health(a.region,a.stack_name,a.expected_sha,a.expected_tailscale_ip,a.expected_instance_id,observed)
     except (OSError,ValueError,SsmDeployError) as exc:
         p.exit(2,f"v7_london_ssm_health: {exc}\n")
     a.output.parent.mkdir(parents=True,exist_ok=True)
     a.output.write_text(json.dumps(receipt,sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    print("ssm_health_result=success")
+    healthy=observed is None or receipt["runtime"]["canonical_health"]["engineering_health"]=="HEALTHY"
+    print("ssm_health_result="+("success" if healthy else "incomplete_or_unsafe"))
     print("healthy_sha="+receipt["expected_sha"])
     print("full_data_health_ok="+str(receipt["runtime"]["full_data_health_ok"]).lower())
-    return 0
+    return 0 if healthy else 2
 
 
 if __name__=="__main__":

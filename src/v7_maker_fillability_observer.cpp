@@ -319,6 +319,16 @@ load_selected_pairs(const fs::path& path, bool require_selection_only = false,
                 || boolean(find_value(object, "source_actionable"), true))) {
             throw std::runtime_error("exact-arb hotset selection contract invalid");
         }
+        if (schema == "polymarket_v7_exact_arb_hotset_selection_v1") {
+            const auto stamp = integer64(find_value(object, "timestamp_ms"));
+            const auto expiry = integer64(find_value(object, "valid_until_ms"));
+            const auto now = wall_ms();
+            if (!boolean(find_value(object, "source_valid"), false)
+                || stamp <= 0 || stamp > now || expiry < now
+                || expiry - stamp > 900000) {
+                throw std::runtime_error("exact-arb hotset source lease invalid");
+            }
+        }
     }
     const auto* raw = find_value(object, "markets");
     if (raw == nullptr || !raw->is_array()) throw std::runtime_error("maker selection missing markets");

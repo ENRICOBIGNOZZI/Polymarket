@@ -37,6 +37,7 @@
     "scripts/v7_crypto_settlement_engine_contract.py",
     "scripts/v7_crypto_universe.py",
     "scripts/v7_exact_arb_causal.py",
+    "scripts/v7_exact_arb_source_health.py",
     "scripts/v7_exact_arb_exchange_universe.py",
     "scripts/v7_exact_arb_hotset_selection.py",
     "scripts/v7_exact_arb_native_compile.py",
@@ -85,6 +86,8 @@
   "real_order_submission": false,
   "schema": "polymarket_v7_london_runtime_bundle_v1",
   "support_files": [
+    "deploy/london/runtime_identity.json",
+    "ops/v7_runtime_health.py",
     "config/operator_directives.json",
     "config/paper_v7.json",
     "config/runtime/paper.json",

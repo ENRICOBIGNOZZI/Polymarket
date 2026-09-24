@@ -20,6 +20,7 @@ import time
 from typing import Any
 
 from v7_clob_public_batch import fetch_books, full_book
+from v7_exact_arb_source_health import graph_lease
 from v7_unified_exact_arb_graph import (
     SAFETY, GraphError, fee_per_share, frac, fstr, load, round_fee, validate_graph,
 )
@@ -268,6 +269,7 @@ def select_relations(relations: list[dict[str, Any]], cursor: int, max_tokens: i
 def scan_once(args: argparse.Namespace, cursor: int) -> tuple[dict[str, Any], dict[str, Any], int]:
     graph = load(args.graph)
     validate_graph(graph, args.model_sha)
+    graph_lease(graph, time.time_ns() // 1_000_000)
     relations = graph.get("relations") or []
     selected, tokens = select_relations(relations, cursor, args.max_tokens_per_cycle)
     started = time.monotonic_ns()
@@ -415,6 +417,8 @@ def main() -> int:
                 "actionable_candidates": 0,
             }
             atomic(args.status, failure)
+            atomic(args.hotset, {**failure, "schema": HOTSET_SCHEMA, "actionable": False,
+                                "relations": [], "source_valid": False})
             print(json.dumps(failure, sort_keys=True), flush=True)
             if args.once:
                 return 2

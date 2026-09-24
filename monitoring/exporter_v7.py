@@ -10,6 +10,10 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+if str(HERE.parent / "ops") not in sys.path:
+    sys.path.insert(0, str(HERE.parent / "ops"))
+
+from v7_runtime_health import collect as collect_runtime_health, local_facts
 
 from v7_operator_truth import append_operator_metrics, prometheus_number
 from v7_external_fair import summarize_external_fair
@@ -878,6 +882,9 @@ def collect_snapshot(run_root: Path, repository_root: Path | None = None, *, now
         run_root / "research/repricing_book/unified_exact_arb_graph_status.json")
     snapshot["unified_exact_arb_graph_execution"] = _json(
         run_root / "research/repricing_book/unified_exact_arb_graph_execution_status.json")
+    identity, facts = local_facts(repository_root)
+    snapshot["runtime_health"] = collect_runtime_health(run_root, identity,
+        kill_exists=(run_root / "control/KILL").exists(), now_ms=now * 1000, **facts)
     return snapshot
 
 
@@ -1260,6 +1267,13 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     lines.extend(_render_exact_arb_hotset_observer_metrics(snapshot.get("exact_arb_hotset_observer") or {}))
     lines.extend(_render_unified_exact_arb_graph_metrics(snapshot.get("unified_exact_arb_graph") or {}))
     lines.extend(_render_unified_exact_arb_graph_execution_metrics(snapshot.get("unified_exact_arb_graph_execution") or {}))
+    receipt=snapshot.get("runtime_health") or {}
+    lines.append(_metric("polymarket_v7_canonical_runtime_health_ok", receipt.get("engineering_health")=="HEALTHY"))
+    for name,value in (receipt.get("checks") or {}).items():
+        lines.append(_metric("polymarket_v7_canonical_runtime_check_ok",value,{"check":name}))
+    for name in ("native_observations_written","native_observations_dropped","native_queue_depth",
+                 "book_rows_written_total","candidate_rows_written_total","graph_events_processed","graph_dropped_events"):
+        lines.append(_metric("polymarket_v7_canonical_"+name,receipt.get(name)))
     retention=operations.get('retention') or {}
     storage=retention.get('hft_storage') or {}
     population=retention.get('hft_opportunity_preservation') or {}
@@ -1349,6 +1363,8 @@ class ExporterHandler(BaseHTTPRequestHandler):
         elif self.path=="/multi-crypto-performance.json": payload=cached["multi_crypto_performance"]; self.send_response(200); content="application/json"
         elif self.path=="/multi-crypto-shadow.json": payload=cached["multi_crypto_shadow"]; self.send_response(200); content="application/json"
         elif self.path=="/pure-arb.json": payload=cached["pure_arb"]; self.send_response(200); content="application/json"
+        elif self.path=="/runtime-health.json":
+            payload=(json.dumps(cached["snapshot"].get("runtime_health") or {},sort_keys=True)+"\n").encode(); self.send_response(200); content="application/json"
         elif self.path=="/runtime-artifacts.json":
             value=_json(self.run_root / "control/runtime_artifact_receipt.json")
             payload=(json.dumps(value,sort_keys=True)+"\n").encode(); self.send_response(200); content="application/json"

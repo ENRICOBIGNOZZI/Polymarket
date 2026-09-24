@@ -28,7 +28,6 @@ jobs:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
       ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
-      INSTANCE_ID: i-0fba2bac9fdc5cbeb
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -56,10 +55,13 @@ jobs:
           aws-region: eu-west-2
 
       - name: Verify collection liveness and real tape growth
+        env:
+          RUNTIME_IDENTITY: runtime-identity.json
         run: |
           set -u
           rc=0
-          python3 ops/v7_collection_plane_health.py --instance-id "$INSTANCE_ID" --output collection-health.json || rc=$?
+          python3 ops/v7_runtime_identity.py --output "$RUNTIME_IDENTITY" || exit $?
+          python3 ops/v7_collection_plane_health.py --runtime-identity "$RUNTIME_IDENTITY" --output collection-health.json || rc=$?
           test -s collection-health.json
           cat collection-health.json >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
@@ -69,5 +71,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: v7-collection-health-${{ github.run_id }}
-          path: collection-health.json
+          path: |
+            collection-health.json
+            runtime-identity.json
           retention-days: 14

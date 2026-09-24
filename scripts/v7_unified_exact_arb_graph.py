@@ -88,14 +88,15 @@ def market_lookup(universe: dict[str, Any]) -> dict[tuple[tuple[str, str], ...],
         if not isinstance(row, dict): continue
         for key in ("market_id",):
             if row.get(key): out[((key, str(row[key])),)].append(row)
-        # Every nonempty selector subset is expensive to index and unnecessary:
-        # resolve scans only the small live universe after a dependency compile.
+        # Exact market IDs cover automatic binary/partition legs. Other
+        # selectors remain off-path and must still resolve uniquely.
     return out
 
 
-def resolve_market(markets: list[dict[str, Any]], selector: dict[str, Any]) -> dict[str, Any] | None:
+def resolve_market(markets: list[dict[str, Any]], selector: dict[str, Any], lookup=None) -> dict[str, Any] | None:
     key = selector_key(selector); matches = []
-    for row in markets:
+    candidates = markets if lookup is None or "market_id" not in selector else lookup.get((("market_id", str(selector["market_id"])),), [])
+    for row in candidates:
         if all(str(row.get(name) or "") == wanted for name, wanted in key): matches.append(row)
     return matches[0] if len(matches) == 1 else None
 
@@ -204,13 +205,13 @@ def prove(raw: dict[str, Any]) -> dict[str, Any]:
     return {"proof_type":"FINITE_STATE_EXACT_RATIONAL_INEQUALITY","proof_sha256":sha(body),"state_totals":body["totals"]}
 
 
-def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]], lookup=None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     proof = prove(raw)  # Fraction-based statewise equality/inequality proof.
     states, legs = raw["states"], raw["legs"]
     compiled_legs, nodes = [], []
     for leg in legs:
         outcome = str(leg.get("outcome") or "").upper()
-        market = resolve_market(markets, leg.get("selector"))
+        market = resolve_market(markets, leg.get("selector"), lookup)
         mapping = outcome_map(market) if market is not None else None
         if mapping is not None and outcome in {"YES", "NO"}:
             mapping = token_map(market) or mapping
@@ -401,6 +402,7 @@ def component_sources(inputs: list[dict[str, Any]], model_sha: str) -> tuple[lis
 def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], model_sha: str,
                   component_inputs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     if not safe(universe, model_sha): raise GraphError("unsafe_universe")
+    if universe.get("source_valid") is False: raise GraphError("invalid_universe_source")
     sources: list[dict[str, Any]] = []
     for registry in registries:
         # Checked-in registries have no runtime SHA; generated registries must
@@ -419,16 +421,18 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
     component_rows, component_candidates, component_provenance = component_sources(component_inputs or [], model_sha)
     sources.extend(component_rows)
     relations, nodes, rejected = [], {}, []
+    lookup = market_lookup({"markets": markets})
     for source in sources:
         try:
-            relation, claims = _compile_relation(source, markets)
+            relation, claims = _compile_relation(source, markets, lookup)
         except (GraphError, ValueError, KeyError, TypeError) as exc:
             rejected.append({"relation_id": str(source.get("id") or source.get("relation_id") or ""),
                              "reason": str(exc) or type(exc).__name__})
             continue
-        if any(existing.get("node_id") == claim["node_id"] and existing != claim for existing in nodes.values() for claim in claims):
-            raise GraphError("claim_identity_collision")
-        for claim in claims: nodes[claim["node_id"]] = claim
+        for claim in claims:
+            existing = nodes.get(claim["node_id"])
+            if existing is not None and existing != claim: raise GraphError("claim_identity_collision")
+            nodes[claim["node_id"]] = claim
         relations.append(relation)
     if len({row["relation_id"] for row in relations}) != len(relations): raise GraphError("duplicate_relation_id")
     index: dict[str, list[int]] = defaultdict(list)
@@ -444,6 +448,7 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
                 "verification":"UNVERIFIED_CANDIDATE","market_id":market.get("market_id"),
                 "reason":"partition_attestation_missing","source_metadata":node(market,"",""),"proof_hash":None})
     graph = {"schema": SCHEMA, "version": 1, **SAFETY, "model_sha": model_sha,
+             "source_universe_valid": universe.get("source_valid"),
              "source_universe_timestamp_ms": universe.get("timestamp_ms"),
              "source_universe_membership_sha256": universe.get("membership_sha256"),
              "nodes": sorted(nodes.values(), key=lambda value: value["node_id"]), "relations": relations,
@@ -455,8 +460,10 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
                           "actionable_relations": sum(row["enabled"] for row in relations),
                           "compiled_at_ms": time.time_ns() // 1_000_000}}
     graph["transformation_registry"] = {r["transformation"]["id"]: r["transformation"] for r in relations if r.get("transformation")}
-    graph["settlement_dependency_index"] = {key: [i for i,r in enumerate(relations) if key in r["settlement_semantic_dependencies"]]
-        for key in sorted({s for r in relations for s in r["settlement_semantic_dependencies"]})}
+    settlement_index = defaultdict(list)
+    for i, relation in enumerate(relations):
+        for key in relation["settlement_semantic_dependencies"]: settlement_index[key].append(i)
+    graph["settlement_dependency_index"] = dict(sorted(settlement_index.items()))
     graph["resource_dependency_index"] = {"inventory:"+token: handles for token,handles in index.items()}
     graph["graph_generation"] = generation_hash(graph)
     return graph
@@ -680,13 +687,23 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     while True:
         try:
-            graph = compile_graph([load(path) for path in args.registry], load(args.universe), args.model_sha,
+            from v7_exact_arb_source_health import universe_lease
+            universe = load(args.universe)
+            universe_lease(universe, time.time_ns() // 1_000_000)
+            graph = compile_graph([load(path) for path in args.registry], universe, args.model_sha,
                                   [load(path) for path in args.component_status])
             tmp = args.output.with_suffix(args.output.suffix + ".tmp")
             tmp.write_text(json.dumps(graph, sort_keys=True, indent=2) + "\n", encoding="utf-8"); tmp.replace(args.output)
             print(json.dumps({"graph_generation": graph["graph_generation"], "nodes": len(graph["nodes"]), "relations": len(graph["relations"])}), flush=True)
             if args.once: return 0
-        except GraphError as exc:
+        except (GraphError, ValueError, OSError, TypeError) as exc:
+            # Atomically invalidate, rather than retaining a formerly valid graph.
+            invalid = {"schema": "polymarket_v7_invalid_exact_arb_graph_v1", **SAFETY,
+                       "model_sha": args.model_sha, "state": "BLOCKED_SOURCE_INVALID",
+                       "error": str(exc), "timestamp_ms": time.time_ns() // 1_000_000}
+            tmp = args.output.with_suffix(args.output.suffix + ".tmp")
+            tmp.write_text(json.dumps(invalid, sort_keys=True) + "\n", encoding="utf-8")
+            tmp.replace(args.output)
             print(f"unified exact arb graph: {exc}", flush=True)
             if args.once: return 2
         time.sleep(args.interval_seconds)

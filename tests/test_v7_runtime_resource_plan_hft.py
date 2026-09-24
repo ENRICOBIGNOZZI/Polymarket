@@ -48,7 +48,9 @@ def test_cpuset_parser_handles_ranges_and_sparse_values():
 
 def test_cgroup_allowance_can_exceed_inherited_pid_affinity(monkeypatch):
     monkeypatch.setattr(MODULE,"_cgroup_effective_cpus",lambda:list(range(8)))
-    monkeypatch.setattr(MODULE.os,"sched_getaffinity",lambda _:{0,1,2,3})
+    # Supply the Linux API in this fixture even on macOS; exercise the same
+    # cgroup-vs-inherited-affinity invariant on both platforms.
+    monkeypatch.setattr(MODULE.os,"sched_getaffinity",lambda _:{0,1,2,3},raising=False)
     assert MODULE._cpus() == list(range(8))
     plan=MODULE.resolve(config())
     assert plan["outer_cpuset_contract_satisfied"] is True

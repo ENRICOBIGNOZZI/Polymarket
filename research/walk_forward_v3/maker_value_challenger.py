@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from decimal import Decimal
 import json
 import math
 from pathlib import Path
@@ -199,7 +200,10 @@ def build_episodes(
 
         spread = max(
             0.0,
-            durable.number(order.get("ask")) - durable.number(order.get("bid")),
+            # Prices are decimal venue quantities. Subtract in decimal before
+            # converting this diagnostic feature, not in binary floating point.
+            float(Decimal(str(durable.number(order.get("ask"))))
+                  - Decimal(str(durable.number(order.get("bid"))))),
         )
         queue = max(0.0, durable.number(order.get("queue_ahead")))
         value_per_posted_share = (

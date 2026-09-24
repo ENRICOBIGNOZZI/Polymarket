@@ -207,7 +207,7 @@ class SourceContractTests(unittest.TestCase):
             args = SimpleNamespace(model_sha=MODEL, output=Path(directory)/"universe.json",
                                    status=Path(directory)/"status.json", gamma_url="https://example.invalid",
                                    timeout_seconds=1, page_size=100, max_pages=1)
-            source.run_once(args, lambda *_: [event()])
+            source.run_once(args, lambda *_: {"events": [event()], "next_cursor": None})
             self.assertEqual(len(json.loads(args.output.read_text())["markets"]), 2)
             status = source.run_once(args, lambda *_: {"error": "outage"})
             self.assertEqual(status["state"], "SOURCE_ERROR")

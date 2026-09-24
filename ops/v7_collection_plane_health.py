@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 import re
@@ -32,8 +33,9 @@ if ! systemctl is-active --quiet "$UNIT"; then
   exit 41
 fi
 python3 - "$ROOT" <<'PY'
-import json,re,sys,time
+import base64,json,re,sys,time
 from pathlib import Path
+exec(base64.b64decode('__TAPE_HEALTH_SOURCE__'),globals())
 root=Path(sys.argv[1])
 runtime=json.loads((root/'control/runtime_status.json').read_text())
 universe=json.loads((root/'universe/status.json').read_text())
@@ -41,17 +43,10 @@ external=json.loads((root/'external_fair/all_assets_status.json').read_text())
 book=json.loads((root/'research/repricing_book/fillability_ws_status.json').read_text())
 sha=str(runtime.get('collector_sha') or '')
 
-def bytes_now():
-    paths=[]
-    for pattern in (
-        'external_fair/raw/*',
-        'external_fair/assets/*/raw/*',
-        'external_fair/normalized_events/*',
-        'external_fair/assets/*/normalized_events/*',
-        'research/repricing_book/book_observations/*',
-    ):
-        paths.extend(root.glob(pattern))
-    return sum(p.stat().st_size for p in paths if p.is_file() and not p.is_symlink())
+def sample():
+    status=json.loads((root/'research/repricing_book/fillability_ws_status.json').read_text())
+    return sample_tape(root/'research/repricing_book/book_observations/current.jsonl',
+        generation=status.get('observer_session_id'),rows_written=status.get('book_events_written'))
 
 checks={}
 checks['sha_valid']=bool(re.fullmatch(r'[0-9a-f]{40}',sha))
@@ -75,11 +70,11 @@ checks['book_has_tokens']=int(book.get('observed_tokens') or 0)>0
 checks['book_no_drops']=int(book.get('dropped_events') or 0)==0
 checks['book_no_decoder_failures']=int(book.get('decoder_failures') or 0)==0
 
-before=bytes_now()
+before=sample()
 time.sleep(10)
-after=bytes_now()
-growth=after-before
-checks['tape_growth_positive']=growth>0
+after=sample()
+growth=tape_growth(before,after)
+checks['tape_growth_positive']=growth['live'] is True
 
 core_names=(
     'sha_valid','model_independent','live_model_not_required','zero_authority',
@@ -126,7 +121,8 @@ result={
   'external_assets':assets,
   'book_state':book.get('state'),
   'book_observed_tokens':int(book.get('observed_tokens') or 0),
-  'growth_bytes_10s':growth,
+  'growth_bytes_10s':growth['bytes_added_lower_bound'],
+  'tape_health':growth,
   'timestamp_ns':time.time_ns(),
 }
 print('V7_COLLECTION_HEALTH='+json.dumps(result,sort_keys=True,separators=(',',':')))
@@ -135,27 +131,39 @@ PY"""
 
 def main(argv=None) -> int:
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--instance-id",required=True)
+    parser.add_argument("--instance-id",default="")
+    parser.add_argument("--runtime-identity",type=Path)
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--region",default=REGION)
     args=parser.parse_args(argv)
+    if args.runtime_identity:
+        from v7_runtime_identity import read_receipt
+        identity=read_receipt(args.runtime_identity)
+        if args.instance_id and args.instance_id!=identity['runtime_instance_id']:parser.error('instance identity conflict')
+        args.instance_id=identity['runtime_instance_id']
     if args.region!=REGION:
         parser.error("collection health must remain eu-west-2")
     if not INSTANCE_RE.fullmatch(args.instance_id):
         parser.error("valid instance id required")
     try:
-        stdout,stderr=run(args.region,args.instance_id,REMOTE,120)
+        source=base64.b64encode((Path(__file__).resolve().parents[1]/'scripts/v7_tape_health.py').read_bytes()).decode()
+        stdout,stderr=run(args.region,args.instance_id,REMOTE.replace('__TAPE_HEALTH_SOURCE__',source),120)
         rows=[line for line in stdout.splitlines() if line.startswith("V7_COLLECTION_HEALTH=")]
         if len(rows)!=1:
             raise SsmDeployError("collection health marker missing")
         value=json.loads(rows[0].split("=",1)[1])
+        # Preserve negative evidence too; a failed probe is not a missing report.
+        value["stderr_tail"]=stderr[-1000:]
+        value["runtime_instance_id"]=args.instance_id
+        args.output.parent.mkdir(parents=True,exist_ok=True)
+        args.output.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n",encoding="utf-8")
         if (
             value.get("schema")!="polymarket_v7_collection_plane_health_v2"
             or value.get("model_independent") is not True
             or value.get("execution_authority")!="ZERO_AUTHORITY_DATA_COLLECTION"
             or value.get("core_collection_health_ok") is not True
             or value.get("full_data_health_ok") is not True
-            or int(value.get("growth_bytes_10s") or 0)<=0
+            or value.get("tape_health",{}).get("live") is not True
         ):
             raise SsmDeployError("collection health receipt invalid")
     except (OSError,ValueError,json.JSONDecodeError,SsmDeployError) as exc:

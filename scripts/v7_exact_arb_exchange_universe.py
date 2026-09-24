@@ -20,6 +20,7 @@ import re
 import time
 from typing import Any, Callable
 import urllib.parse
+import urllib.error
 import urllib.request
 
 SCHEMA = "polymarket_v7_exact_arb_exchange_universe_v1"
@@ -341,11 +342,57 @@ def discover_events(base_url: str, timeout: float, page_size: int, max_pages: in
         scan_duration_ms=(time.monotonic_ns()-started)/1_000_000.)
 
 
+def discover_keyset_events(base_url: str, timeout: float, page_size: int, max_pages: int,
+                          fetcher: Callable[[str, float], Any] = fetch_json) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Public Gamma /events/keyset; offset is capped at 2000 by the venue.
+
+    Follow after_cursor, not cursor (unknown parameters can be silently ignored).
+    A completed pagination is still not an atomic snapshot or settlement proof.
+    """
+    if not 1 <= page_size <= 100 or not 1 <= max_pages <= 500 or not 0 < timeout <= 30:
+        raise ValueError("invalid_discovery_bounds")
+    parts = urllib.parse.urlsplit(base_url)
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError("invalid_public_source_url")
+    events: dict[str, dict[str, Any]] = {}
+    cursors: set[str] = set()
+    cursor = None
+    exhaustive = False
+    started = time.monotonic_ns()
+    for page in range(max_pages):
+        params = dict(active="true", closed="false", limit=page_size, order="id", ascending="true")
+        if cursor is not None: params["after_cursor"] = cursor
+        value = fetcher(base_url.rstrip("/") + "/events/keyset?" + urllib.parse.urlencode(params), timeout)
+        if not isinstance(value, dict) or "next_cursor" not in value:
+            raise ValueError("invalid_gamma_keyset_page")
+        rows = value.get("events")
+        if not isinstance(rows, list) or len(rows) > page_size:
+            raise ValueError("invalid_gamma_keyset_page")
+        for row in rows:
+            if not isinstance(row, dict) or not str(row.get("id") or "").strip():
+                raise ValueError("malformed_gamma_event")
+            key = str(row["id"])
+            if key in events: raise ValueError("duplicate_event_or_pagination_drift")
+            events[key] = row
+        cursor = value["next_cursor"]
+        if cursor is None or cursor == "":
+            exhaustive = True
+            break
+        if not rows or not isinstance(cursor, str) or len(cursor) > 4096 or cursor in cursors:
+            raise ValueError("invalid_or_repeated_gamma_cursor")
+        cursors.add(cursor)
+    return list(events.values()), dict(requests=page+1, events=len(events),
+        discovery_exhaustive=exhaustive, pagination_loop_guard_hit=not exhaustive,
+        point_in_time_consistent=False, coverage_scope="BOUNDED_KEYSET_SCAN_NOT_ATOMIC_SNAPSHOT",
+        pagination="GAMMA_EVENTS_KEYSET_AFTER_CURSOR",
+        scan_duration_ms=(time.monotonic_ns()-started)/1_000_000.)
+
+
 def run_once(args: argparse.Namespace, fetcher: Callable[[str, float], Any] = fetch_json) -> dict[str, Any]:
     status = dict(schema=STATUS_SCHEMA, **SAFETY, execution_authority=False,
                   model_sha=args.model_sha, timestamp_ms=time.time_ns()//1_000_000)
     try:
-        events, diagnostics = discover_events(args.gamma_url, args.timeout_seconds, args.page_size, args.max_pages, fetcher)
+        events, diagnostics = discover_keyset_events(args.gamma_url, args.timeout_seconds, args.page_size, args.max_pages, fetcher)
         snapshot = build_snapshot(events, args.model_sha)
         snapshot["discovery"] = diagnostics
         status.update(state="READY" if diagnostics["discovery_exhaustive"] else "BOUNDED_PARTIAL",
@@ -358,6 +405,7 @@ def run_once(args: argparse.Namespace, fetcher: Callable[[str, float], Any] = fe
         snapshot = build_snapshot([], args.model_sha)
         snapshot.update(source_valid=False, source_error=type(exc).__name__)
         status.update(state="SOURCE_ERROR", error=type(exc).__name__, markets=0)
+        if isinstance(exc, urllib.error.HTTPError): status["http_status"] = exc.code
     _atomic(args.output, snapshot)
     if args.status:
         _atomic(args.status, status)

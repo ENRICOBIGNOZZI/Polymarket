@@ -22,7 +22,6 @@ jobs:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
       ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
-      INSTANCE_ID: i-04042ca7da7a23215
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -54,6 +53,8 @@ jobs:
           EXPECTED_SHA: ${{ steps.request.outputs.expected_sha }}
         run: |
           set -euo pipefail
+          python3 ops/v7_runtime_identity.py --expected-sha "$EXPECTED_SHA" --output runtime-identity.json
+          INSTANCE_ID="$(python3 -c 'import json; print(json.load(open("runtime-identity.json"))["runtime_instance_id"])')"
           python3 - "$INSTANCE_ID" "$EXPECTED_SHA" <<'PY' | tee pure-arb-probe.txt
           import json,sys
           sys.path.insert(0,'ops')

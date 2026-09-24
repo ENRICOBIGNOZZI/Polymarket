@@ -1,0 +1,15 @@
+{
+  "schema": "polymarket_v7_runtime_target_v1",
+  "region": "eu-west-2",
+  "instance_id": "i-04042ca7da7a23215",
+  "service": "polymarket-v7-paper.service",
+  "collection_root": "/mnt/polymarket-data/polymarket_v7_collection",
+  "tailscale_ip": null,
+  "source": "EXISTING_PURE_ARB_EXACT_DEPLOY_TARGET_NOT_A_LIVE_HEALTH_ATTESTATION",
+  "sha_policy": "OBSERVED_SERVICE_MODEL_MUST_MATCH_INSTALLED_RELEASE",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}

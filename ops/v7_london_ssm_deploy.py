@@ -318,6 +318,13 @@ if run_root and os.path.isabs(run_root):
         with open(path) as f: runtime=json.load(f)
     except Exception:
         runtime={}
+rc,working_directory,_=cmd(['systemctl','show',unit,'-p','WorkingDirectory','--value'])
+release_sha=None
+if rc==0 and os.path.isabs(working_directory):
+    try:
+        with open(os.path.join(working_directory,'deploy/london/runtime_sha')) as f:release_sha=f.read().strip()
+    except OSError:pass
+rc,started_at,_=cmd(['systemctl','show',unit,'-p','ActiveEnterTimestamp','--value'])
 print('V7_SSM_PROBE='+json.dumps({
   'hostname':socket.gethostname(),
   'unit_active':unit_active,
@@ -330,6 +337,8 @@ print('V7_SSM_PROBE='+json.dumps({
   'run_root':run_root or None,
   'runtime_state':runtime.get('state'),
   'runtime_sha':runtime.get('model_sha'),
+  'release_sha':release_sha,
+  'service_started_at':started_at if rc==0 else None,
   'paper_only':runtime.get('paper_only'),
   'authenticated_execution':runtime.get('authenticated_execution'),
   'real_order_submission':runtime.get('real_order_submission'),

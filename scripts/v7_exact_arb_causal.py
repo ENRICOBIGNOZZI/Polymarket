@@ -163,7 +163,7 @@ class ReconstructedDepth:
 def quantiles(values):
     values = sorted(float(frac(v)) for v in values)
     if not values: return {}
-    return {str(p):values[int((len(values)-1)*p/100)] for p in (.1,1,5,10,25,50,75,90,99)} | {"min":values[0]}
+    return {str(p):values[int((len(values)-1)*p/100)] for p in (.01,.1,1,5,10,25,50,75,90,95,99)} | {"min":values[0]}
 
 
 class JsonlCursor:

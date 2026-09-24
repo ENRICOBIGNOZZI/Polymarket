@@ -1,6 +1,11 @@
 groups:
   - name: polymarket-v7-crypto-hard-safety
     rules:
+      - alert: PolymarketV7CanonicalRuntimeHealthIncomplete
+        expr: polymarket_v7_canonical_runtime_health_ok < 1
+        for: 30s
+        labels: {severity: critical}
+        annotations: {summary: "Canonical runtime identity, safety or telemetry receipt is unhealthy or incomplete"}
       - alert: PolymarketV7ExporterDown
         expr: up{job="polymarket-v7"} == 0
         for: 30s

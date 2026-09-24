@@ -4,6 +4,18 @@ import sys
 from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from v7_unified_exact_arb_graph import SAFETY, GraphError, compile_graph, evaluate
+
+
+def test_indexed_market_resolution_preserves_ambiguity_without_full_scan():
+    from v7_unified_exact_arb_graph import market_lookup, resolve_market
+    markets=[{"market_id":str(i),"asset":"x"} for i in range(1000)]
+    lookup=market_lookup({"markets":markets})
+    class NoScan(list):
+        def __iter__(self):raise AssertionError("indexed lookup scanned the full universe")
+    assert resolve_market(NoScan(markets),{"market_id":"800","asset":"x"},lookup)==markets[800]
+    assert resolve_market(NoScan(markets),{"market_id":"800","asset":"y"},lookup) is None
+    lookup[(("market_id","800"),)].append(dict(markets[800]))
+    assert resolve_market(NoScan(markets),{"market_id":"800"},lookup) is None
 from v7_unified_exact_arb_graph_shadow import Shadow, native_binary_candidate
 from v7_exact_relation_discovery import build as discover_relations
 

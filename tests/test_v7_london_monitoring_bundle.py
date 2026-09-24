@@ -45,7 +45,11 @@ class LondonMonitoringBundleTests(unittest.TestCase):
             self.assertNotIn('GF_AUTH', override)
             self.assertNotIn('PASSWORD', override)
             prom_override = (out / 'prometheus-systemd-override.conf').read_text()
-            self.assertIn('ExecStart=\\n', prom_override)
+            # systemd requires an empty directive on its own physical line.
+            # A literal backslash+n is not a reset and would break the unit.
+            self.assertIn('ExecStart=', prom_override.splitlines())
+            self.assertEqual(sum(line == 'ExecStart=' for line in prom_override.splitlines()), 1)
+            self.assertNotIn('ExecStart=\\n', prom_override)
             self.assertIn('ExecStart=/usr/bin/prometheus ', prom_override)
             self.assertIn('--config.file=', prom_override)
             self.assertIn(str(final / 'prometheus-v7.yml'), prom_override)

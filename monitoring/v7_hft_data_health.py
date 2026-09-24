@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -29,7 +30,16 @@ def category(relative):
 def snapshot(root):
     files = {}; totals = defaultdict(int); compressed = raw = allocated = 0
     seen = set()
-    for path in root.rglob('*'):
+    if not root.is_dir():raise FileNotFoundError(root)
+    vanished_directories = []
+    def onerror(error):
+        # Sealed segments/directories can disappear between scandir calls.
+        # Permissions and other I/O failures are not an empty healthy sample.
+        if isinstance(error, FileNotFoundError):vanished_directories.append(error.filename)
+        else:raise error
+    paths = (Path(directory)/name for directory, _, names in os.walk(root, onerror=onerror, followlinks=False)
+             for name in names)
+    for path in paths:
         if path.is_symlink() or not path.is_file():
             continue
         try:
@@ -50,6 +60,7 @@ def snapshot(root):
         if zipped: compressed += info.st_size
         else: raw += info.st_size
     return dict(at_ns=time.time_ns(), files=files, category_bytes=dict(totals),
+                vanished_directory_count=len(vanished_directories), snapshot_atomic=False,
                 total_bytes=sum(totals.values()), allocated_bytes=allocated,
                 raw_bytes=raw, compressed_bytes=compressed,
                 filesystem_free_bytes=shutil.disk_usage(root).free,
