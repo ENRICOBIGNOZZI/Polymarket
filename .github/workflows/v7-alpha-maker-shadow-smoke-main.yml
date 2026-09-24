@@ -115,8 +115,16 @@ jobs:
           BINARY="$APP/build/polymarket_v7_maker_research_replay"
           if [[ ! -x "$BINARY" ]]; then
             echo "PRECHECK_NOTE=BUILDING_EPHEMERAL_MAKER_REPLAY"
-            cmake -S "$APP" -B "$OUT/build" -DCMAKE_BUILD_TYPE=Release >"$OUT/cmake-configure.log" 2>&1
-            cmake --build "$OUT/build" --target polymarket_v7_maker_research_replay -j2 >"$OUT/cmake-build.log" 2>&1
+            if ! cmake -S "$APP" -B "$OUT/build" -DCMAKE_BUILD_TYPE=Release >"$OUT/cmake-configure.log" 2>&1; then
+              echo "PRECHECK_FAIL=CMAKE_CONFIGURE"
+              tail -n 120 "$OUT/cmake-configure.log" || true
+              exit 36
+            fi
+            if ! cmake --build "$OUT/build" --target polymarket_v7_maker_research_replay -j2 >"$OUT/cmake-build.log" 2>&1; then
+              echo "PRECHECK_FAIL=CMAKE_BUILD"
+              tail -n 160 "$OUT/cmake-build.log" || true
+              exit 37
+            fi
             BINARY="$OUT/build/polymarket_v7_maker_research_replay"
           fi
           if ! test -x "$BINARY"; then echo "PRECHECK_FAIL=MAKER_REPLAY_BUILD_MISSING"; tail -n 100 "$OUT/cmake-build.log" 2>/dev/null || true; exit 33; fi
