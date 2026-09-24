@@ -361,6 +361,7 @@ def pair_asof_session(session, row, target_ms):
             "no_best_bid":no["bid"],"no_best_ask":no["ask"],
             "yes_bid_depth_l1":yes["bid_depth"],"yes_ask_depth_l1":yes["ask_depth"],
             "no_bid_depth_l1":no["bid_depth"],"no_ask_depth_l1":no["ask_depth"],
+            "yes_tick_size":yes["tick"],"no_tick_size":no["tick"],
             "connection_epoch":session["epoch"],
             "state_available_wall_ms":max(yes["time_ms"],no["time_ms"])}
 
