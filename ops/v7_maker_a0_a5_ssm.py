@@ -17,6 +17,7 @@ INSTANCE=re.compile(r"^i-[0-9a-f]+$")
 PATHS=(
     "research/walk_forward_v3/__init__.py",
     "research/walk_forward_v3/maker_a0_a5_2h.py",
+    "research/walk_forward_v3/maker_market_metadata.py",
     "research/walk_forward_v3/multi_alpha_2h.py",
     "research/walk_forward_v3/btc_compact_equity.py",
     "research/walk_forward_v3/direct_action.py",
@@ -28,7 +29,9 @@ PATHS=(
     "include/pm/v7_external_tape.hpp",
     "include/pm/v7_external_fair.hpp",
     "include/pm/v7_spsc.hpp",
+    "include/pm/v7_intent.hpp",
     "scripts/v7_multi_crypto_compact_pm_tape.py",
+    "config/v7_crypto_settlement_markets.json",
     "research/requirements-learning.txt",
 )
 REQUIRED=(
@@ -66,6 +69,11 @@ mkdir -p {remote}/src {remote}/output
 tar -xzf {remote}/source.tgz -C {remote}/src
 python3 -m venv {remote}/venv
 {remote}/venv/bin/pip install --disable-pip-version-check --quiet -r {remote}/src/research/requirements-learning.txt
+PYTHONPATH={remote}/src:{context['app_dir']} {remote}/venv/bin/python -m research.walk_forward_v3.maker_market_metadata \
+  --run-root {context['run_root']} \
+  --registry {remote}/src/config/v7_crypto_settlement_markets.json \
+  --minimum-wall-ns {a.minimum_wall_ns} \
+  --output {remote}/market_metadata.json
 c++ -std=c++20 -O2 -I{remote}/src/include \
   {remote}/src/research/tools/v7_external_event_export.cpp \
   -o {remote}/v7_external_event_export
@@ -105,7 +113,8 @@ from pathlib import Path
 venv,src,app,run_root,minwall,sha,output,specfile=sys.argv[1:]
 cmd=[venv,"-m","research.walk_forward_v3.maker_a0_a5_2h",
      "--root",run_root,"--minimum-wall-ns",minwall,
-     "--code-sha",sha,"--output-dir",output]
+     "--code-sha",sha,"--output-dir",output,
+     "--market-metadata",str(Path(specfile).parent/"market_metadata.json")]
 for spec in Path(specfile).read_text(encoding="utf-8").splitlines():
     if spec.strip():
         cmd.extend(["--external-venue-csv",spec.strip()])
