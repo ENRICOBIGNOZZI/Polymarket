@@ -723,6 +723,12 @@ def classify_source_feature(name: str) -> str | None:
     )):
         return None
     if any(k in n for k in (
+        "toxic_fill_probability", "toxicity_score", "predicted_markout",
+        "adverse_selection_score", "expected_adverse_markout",
+        "cancel_intensity", "cancel_rate",
+    )):
+        return "maker_toxicity"
+    if any(k in n for k in (
         "queue_ahead", "queue_confidence", "fill_probability", "fillability",
         "projected_fill", "quote_lifetime", "distance_from_touch",
         "queue_depletion", "queue_position",
@@ -733,12 +739,6 @@ def classify_source_feature(name: str) -> str | None:
         "position_size", "gross_exposure", "net_exposure", "inventory_",
     )):
         return "maker_inventory"
-    if any(k in n for k in (
-        "toxic_fill_probability", "toxicity_score", "predicted_markout",
-        "adverse_selection_score", "expected_adverse_markout",
-        "cancel_intensity", "cancel_rate",
-    )):
-        return "maker_toxicity"
     if n.startswith("tape.pm_") or any(k in n for k in (
         "pm_yes_mid", "pm_no_mid", "pm_complete_set", "pm_yes_spread",
         "pm_yes_imbalance", "depth_imbalance", "spread_ticks",
