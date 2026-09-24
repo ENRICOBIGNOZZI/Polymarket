@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_maker_challenger_ssm_request_v1",
   "version": 1,
-  "request_id": "maker-causal-value-retry-20260921T1734CEST",
-  "instance_id": "i-0fba2bac9fdc5cbeb",
-  "output_directory": "docs/research/maker-challenger-2026-09-21",
+  "request_id": "maker-alpha-horse-race-20260924T2222CEST",
+  "instance_id": "i-04042ca7da7a23215",
+  "output_directory": "docs/research/maker-challenger-2026-09-24",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
