@@ -498,7 +498,7 @@ install -d -o "$USER_NAME" -g "$(id -gn "$USER_NAME")" "$ARTIFACT_ROOT/by-sha"
 chown -R "$USER_NAME:$(id -gn "$USER_NAME")" "$TMP"
 REUSED=0
 if [[ -e "$TARGET" || -L "$TARGET" ]]; then
-  [[ -d "$TARGET" && ! -L "$TARGET" ]] || { echo "existing exact-SHA artifact target is unsafe" >&2; exit 66; }
+  [[ -d "$TARGET" && ! -L "$TARGET" ]] || {{ echo "existing exact-SHA artifact target is unsafe" >&2; exit 66; }}
   python3 - "$TARGET/manifest.json" "$SHA" <<'PYEXISTING'
 import json,sys
 v=json.load(open(sys.argv[1],encoding='utf-8'))
