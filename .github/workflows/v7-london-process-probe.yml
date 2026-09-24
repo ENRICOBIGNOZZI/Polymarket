@@ -156,35 +156,35 @@ jobs:
           echo "=== HOT FAILURE DIAGNOSTICS ==="
           echo "--- HOT:native_engine_manager_status.compact ---"
           python3 - "$ROOT/control/native_engine_manager_status.json" <<'PYHOT'
-import json,sys
-try:
-    v=json.load(open(sys.argv[1],encoding='utf-8'))
-except Exception as e:
-    print(json.dumps({"read_error":type(e).__name__})); raise SystemExit(0)
-keys=("schema","model_sha","state","blocker","expected_context_count","target_context_count",
-      "active_worker_count","managed_context_count","launch_retry_count","launch_retry_contexts",
-      "target_contexts","partitioned_native_workers","single_native_portfolio_owner",
-      "global_budget_microdollars","partition_total_microdollars","timestamp_ms")
-out={k:v.get(k) for k in keys}
-workers=[]
-for w in v.get("workers") or []:
-    if not isinstance(w,dict): continue
-    workers.append({k:w.get(k) for k in ("context","market_id","state","engine_pid","settlement_pid",
-                                         "budget_microdollars","last_error","blocker","launch_attempts")})
-out["workers"]=workers
-print(json.dumps(out,sort_keys=True,separators=(',',':')))
-PYHOT
+          import json,sys
+          try:
+              v=json.load(open(sys.argv[1],encoding='utf-8'))
+          except Exception as e:
+              print(json.dumps({"read_error":type(e).__name__})); raise SystemExit(0)
+          keys=("schema","model_sha","state","blocker","expected_context_count","target_context_count",
+                "active_worker_count","managed_context_count","launch_retry_count","launch_retry_contexts",
+                "target_contexts","partitioned_native_workers","single_native_portfolio_owner",
+                "global_budget_microdollars","partition_total_microdollars","timestamp_ms")
+          out={k:v.get(k) for k in keys}
+          workers=[]
+          for w in v.get("workers") or []:
+              if not isinstance(w,dict): continue
+              workers.append({k:w.get(k) for k in ("context","market_id","state","engine_pid","settlement_pid",
+                                                   "budget_microdollars","last_error","blocker","launch_attempts")})
+          out["workers"]=workers
+          print(json.dumps(out,sort_keys=True,separators=(',',':')))
+          PYHOT
           for rel in native_engine_manager.log universe/collector.log external_fair/external_assets_supervisor.log research/repricing_book_observer.log portfolio_guard.log; do
             echo "--- HOT:$rel ---"
             tail -n 20 "$ROOT/$rel" 2>/dev/null || true
           done
           echo "--- HOT:process_manifest_resolved.json ---"
           python3 - "$ROOT/control/process_manifest_resolved.json" <<'PYMAN'
-import json,sys
-try:v=json.load(open(sys.argv[1],encoding='utf-8'))
-except Exception as e: print(json.dumps({"read_error":type(e).__name__})); raise SystemExit(0)
-print(json.dumps(v,sort_keys=True,separators=(',',':')))
-PYMAN
+          import json,sys
+          try:v=json.load(open(sys.argv[1],encoding='utf-8'))
+          except Exception as e: print(json.dumps({"read_error":type(e).__name__})); raise SystemExit(0)
+          print(json.dumps(v,sort_keys=True,separators=(',',':')))
+          PYMAN
           echo "--- KILL EARLY ---"
           cat "$ROOT/control/KILL" 2>/dev/null || echo ABSENT
           for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json runtime_artifact_receipt.json runtime_resource_plan.json fencing_supervisor_status.json clock_guard.json; do
