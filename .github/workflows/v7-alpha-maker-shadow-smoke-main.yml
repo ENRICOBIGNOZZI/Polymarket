@@ -120,23 +120,23 @@ jobs:
           if [[ ! -x "$BINARY" ]]; then
             echo "PRECHECK_NOTE=BUILDING_EPHEMERAL_MAKER_REPLAY"
             if ! test -d "$SOURCE_REPO/.git"; then echo "PRECHECK_FAIL=SOURCE_REPO_MISSING"; exit 38; fi
-            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{commit}" 2>/dev/null; then
+            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{{commit}}" 2>/dev/null; then
               echo "PRECHECK_NOTE=FETCHING_EXACT_RUNTIME_SHA"
               sudo -u ubuntu -H git -C "$SOURCE_REPO" fetch --no-tags origin "$SHA" || true
             fi
-            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{commit}" 2>/dev/null; then
+            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{{commit}}" 2>/dev/null; then
               echo "PRECHECK_NOTE=FETCHING_RUNTIME_BRANCH"
               sudo -u ubuntu -H git -C "$SOURCE_REPO" fetch --no-tags origin refs/heads/research/unified-exact-arb-graph:refs/remotes/origin/runtime-source || true
             fi
-            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{commit}" 2>/dev/null; then
+            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{{commit}}" 2>/dev/null; then
               echo "PRECHECK_NOTE=FETCHING_LIVE_SOURCE_PR"
               sudo -u ubuntu -H git -C "$SOURCE_REPO" fetch --no-tags origin refs/pull/{live_source_pr}/head:refs/remotes/origin/live-source-pr-{live_source_pr} || true
             fi
-            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{commit}" 2>/dev/null; then
+            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{{commit}}" 2>/dev/null; then
               echo "PRECHECK_NOTE=FETCHING_ALL_SOURCE_HEADS"
               sudo -u ubuntu -H git -C "$SOURCE_REPO" fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*' || true
             fi
-            sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{commit}"
+            sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^{{commit}}"
             sudo -u ubuntu -H git -C "$SOURCE_REPO" worktree remove --force "$SOURCE" >/dev/null 2>&1 || true
             rm -rf "$SOURCE"
             chown ubuntu:ubuntu "$OUT"
