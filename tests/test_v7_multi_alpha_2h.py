@@ -15,7 +15,7 @@ def _row(decision_id, ns, market="m1", asset="BTC", horizon="M5", features=None)
 def test_required_baseline_grid_is_exact():
     assert tuple(m.LATENCIES) == (5, 10, 25, 50, 100, 250)
     assert tuple(m.EXITS) == (
-        500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 7500, 10000
+        100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 7500, 10000
     )
     assert m.SIZE == 5.0
 
@@ -35,6 +35,11 @@ def test_family_classifier_covers_tier1_and_slow_state():
         "tape.distance_to_reference_bp": "settlement",
         "tape.pm_yes_imbalance": "pm_response",
         "signal_return_bp": "baseline",
+        "tape.execution.queue_ahead": "maker_queue",
+        "tape.execution.fill_probability": "maker_queue",
+        "tape.execution.inventory_fraction": "maker_inventory",
+        "tape.execution.toxic_fill_probability": "maker_toxicity",
+        "tape.execution.predicted_markout": "maker_toxicity",
     }
     assert {name: m.classify_source_feature(name) for name in cases} == cases
 
@@ -103,7 +108,34 @@ def test_information_gate_keeps_pm_core_and_adds_declared_families():
 
 def test_nested_information_sets_are_monotone():
     previous = set()
-    for key in ("F0", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11"):
+    for key in ("F0", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "F13", "F14"):
         current = set(m.NESTED[key])
         assert previous <= current
         previous = current
+
+
+def test_realized_future_fields_are_rejected_from_information_sets():
+    for name in (
+        "tape.realized_markout_1s",
+        "future_return_250ms",
+        "label_fill",
+        "outcome_pnl",
+        "post_fill_markout",
+    ):
+        assert m.classify_source_feature(name) is None
+
+
+def test_monotonicity_report_detects_shape():
+    surface = {"cells": {}}
+    for latency in m.LATENCIES:
+        for horizon in m.EXITS:
+            surface["cells"][f"{latency}::{horizon}"] = {
+                "pnl_per_fill": -float(latency),
+                "pnl_per_observed_action": -float(latency),
+                "hit_rate": 1.0 / (1.0 + latency),
+                "observed_actions": 100,
+                "fills": max(1, 100 - int(latency / 3)),
+            }
+    report = m.monotonicity_report(surface)
+    assert report["latency"]["pnl_per_fill"][str(m.EXITS[0])]["shape"] == "NONINCREASING"
+    assert report["latency"]["hit_rate"][str(m.EXITS[0])]["shape"] == "NONINCREASING"
