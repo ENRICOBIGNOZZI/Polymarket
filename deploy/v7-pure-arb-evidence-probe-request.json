@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_pure_arb_evidence_probe_v1",
   "read_only": true,
-  "window_seconds": 300,
-  "request_id": "exact-arb-923ab0dc-post-cutover-20260924"
+  "window_seconds": 10,
+  "request_id": "exact-arb-a7fdd40a-post-cutover-10s-20260924"
 }
