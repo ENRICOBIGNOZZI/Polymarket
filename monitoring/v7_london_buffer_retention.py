@@ -182,6 +182,7 @@ def _rolling_retire(
         "raw_detail_seconds": int(config.get("rolling_raw_detail_seconds") or 0),
         "eligible": 0,
         "retired": [],
+        "pinned": [],
         "failures": [],
         "reclaimed_bytes": 0,
         "dry_run": dry_run,
@@ -250,7 +251,16 @@ def _rolling_retire(
                 "receipt_sha256": receipt_sha,
             })
         except (OSError, EOFError, gzip.BadGzipFile, ValueError) as exc:
-            result["failures"].append({"source": relative, "reason": str(exc)})
+            reason = str(exc)
+            row = {"source": relative, "reason": reason}
+            # A closed capture explicitly marked unhealthy is intentionally
+            # non-retirable. Keeping it pinned is the safety action, not a
+            # retention malfunction. Storage-limit enforcement below remains
+            # fail-closed if pinned evidence grows too large.
+            if reason == "UNHEALTHY_NATIVE_CAPTURE_PINNED":
+                result["pinned"].append(row)
+            else:
+                result["failures"].append(row)
     if windows: windows.close()
     result["state"] = "WINDOW_ENFORCED" if not result["failures"] else "WINDOW_PARTIAL_FAILURE"
     return result
