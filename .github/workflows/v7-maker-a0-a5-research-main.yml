@@ -1,0 +1,147 @@
+name: V7 trusted maker A0-A5 2H research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-maker-a0-a5-research-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-trusted-maker-a0-a5-2h
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      RESEARCH_BRANCH: research/full-feature-maker-20260924
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate trusted-main request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-maker-a0-a5-research-request.json
+          python3 - "$request" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v["schema"]=="polymarket_v7_maker_a0_a5_research_request_v1"
+          assert v["version"]==1
+          assert re.fullmatch(r"[A-Za-z0-9._:-]{8,128}",v["request_id"])
+          assert re.fullmatch(r"i-[0-9a-f]+",v["instance_id"])
+          assert re.fullmatch(r"[0-9a-f]{40}",v["expected_research_sha"])
+          assert v["research_branch"]=="research/full-feature-maker-20260924"
+          assert isinstance(v["minimum_wall_ns"],int) and v["minimum_wall_ns"]>0
+          assert v["output_directory"]=="docs/research/maker-a0-a5-2026-09-24"
+          assert v["paper_only"] is True
+          assert v["authenticated_execution"] is False
+          assert v["real_order_submission"] is False
+          assert v["real_capital_at_risk"] is False
+          assert v["automatic_promotion"] is False
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          echo "source_sha=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["expected_research_sha"])')" >> "$GITHUB_OUTPUT"
+          echo "instance_id=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["instance_id"])')" >> "$GITHUB_OUTPUT"
+          echo "minimum_wall_ns=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["minimum_wall_ns"])')" >> "$GITHUB_OUTPUT"
+          echo "output_directory=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["output_directory"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch exact A0-A5 research source
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$RESEARCH_BRANCH" --depth=200
+          branch_sha="$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$branch_sha"
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Test exact A0-A5 source
+        run: |
+          python3 -m pip install --disable-pip-version-check -q -r research/requirements-learning.txt
+          PYTHONPATH=. python3 -m pytest -q tests/test_v7_maker_a0_a5_2h.py
+          python3 -m py_compile \
+            research/walk_forward_v3/maker_a0_a5_2h.py \
+            ops/v7_maker_a0_a5_ssm.py
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-maker-a0-a5-2h
+          aws-region: eu-west-2
+
+      - name: Run exact A0-A5 maker horse race on London PAPER evidence
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+          INSTANCE_ID: ${{ steps.request.outputs.instance_id }}
+          MINIMUM_WALL_NS: ${{ steps.request.outputs.minimum_wall_ns }}
+          OUTPUT_DIR: ${{ steps.request.outputs.output_directory }}
+        run: |
+          set -euo pipefail
+          python3 ops/v7_maker_a0_a5_ssm.py \
+            --instance-id "$INSTANCE_ID" \
+            --expected-sha "$SOURCE_SHA" \
+            --minimum-wall-ns "$MINIMUM_WALL_NS" \
+            --output-dir "$OUTPUT_DIR"
+
+      - name: Validate and summarize A0-A5 package
+        env:
+          OUTPUT_DIR: ${{ steps.request.outputs.output_directory }}
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+        run: |
+          python3 - "$OUTPUT_DIR" "$SOURCE_SHA" <<'PY'
+          import csv,json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1]);sha=sys.argv[2]
+          manifest=json.load(open(root/"00_manifest.json"))
+          grid=json.load(open(root/"01_grid.json"))
+          mono=json.load(open(root/"03_monotonicity.json"))
+          summary=json.load(open(root/"05_summary.json"))
+          assert manifest["code_sha"]==sha
+          assert manifest["paper_only"] is True
+          assert manifest["authenticated_execution"] is False
+          assert manifest["real_order_submission"] is False
+          assert manifest["real_capital_at_risk"] is False
+          assert manifest["automatic_promotion"] is False
+          assert manifest["canonical_ledger_writes"] is False
+          assert manifest["window_end_ns"]-manifest["window_start_ns"]==7_200_000_000_000
+          assert manifest["latencies_ms"]==[5,10,25,50,100,250]
+          assert manifest["holding_horizons_ms"]==[100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000]
+          assert manifest["maker_mechanics"]["placement"]=="JOIN"
+          assert manifest["maker_mechanics"]["quote_ttl_ms"]==500
+          assert abs(float(manifest["maker_mechanics"]["queue_ahead_multiplier"])-1.25)<1e-12
+          policies={"A0_BASELINE","A1_EXTERNAL","A2_PM","A3_EXTERNAL_PM","A4_RESIDUAL","A5_FULL_EXECUTION"}
+          assert set(grid["policies"])==policies
+          assert set(mono["policies"])==policies
+          rows=list(csv.DictReader(open(root/"04_grid.csv",newline="")))
+          compact={
+              "split":manifest["split"],
+              "feature_counts":{k:len(v) for k,v in manifest["feature_sets"].items()},
+              "maker_mechanics":manifest["maker_mechanics"],
+              "summary":summary["policies"],
+              "grid_rows":len(rows),
+          }
+          print("A0_A5_PACKAGE_SUMMARY="+json.dumps(compact,sort_keys=True,separators=(",",":")))
+          PY
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-maker-a0-a5-${{ github.run_id }}
+          path: ${{ steps.request.outputs.output_directory }}
+          retention-days: 30
