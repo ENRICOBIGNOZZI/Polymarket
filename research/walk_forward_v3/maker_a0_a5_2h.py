@@ -140,6 +140,178 @@ def build_static_market_metadata(decisions: list[dict[str,Any]]):
     )
 
 
+def load_market_metadata(path: Path) -> dict[str,dict[str,Any]]:
+    value=json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(value,dict)
+        or value.get("schema")!="polymarket_v7_maker_market_metadata_v1"
+        or value.get("paper_only") is not True
+        or value.get("authenticated_execution") is not False
+        or value.get("real_order_submission") is not False
+        or value.get("execution_authority") is not False
+    ):
+        raise ValueError("MARKET_METADATA_CONTRACT_INVALID")
+    out={}
+    for row in value.get("markets") or []:
+        if not isinstance(row,dict):continue
+        market=str(row.get("market_id") or "")
+        yes=str(row.get("yes_token") or "");no=str(row.get("no_token") or "")
+        asset=str(row.get("asset") or "").upper();horizon=str(row.get("horizon") or "").upper()
+        try:
+            start=int(row.get("start_timestamp_ms") or 0)
+            end=int(row.get("end_timestamp_ms") or 0)
+        except (TypeError,ValueError,OverflowError):
+            continue
+        if not market or not yes or not no or yes==no or not asset or not horizon or start<=0 or end<=start:
+            continue
+        out[market]=dict(row)
+    if not out:
+        raise ValueError("MARKET_METADATA_EMPTY")
+    return out
+
+
+def _l5_imbalance(raw: dict[str,Any]) -> float|None:
+    bids=raw.get("bid_levels_l10") if isinstance(raw.get("bid_levels_l10"),list) else []
+    asks=raw.get("ask_levels_l10") if isinstance(raw.get("ask_levels_l10"),list) else []
+    def total(rows):
+        value=0.0
+        for row in rows[:5]:
+            if not isinstance(row,dict):continue
+            size=row.get("size")
+            if finite(size) and float(size)>0:value+=float(size)
+        return value
+    bid=total(bids);ask=total(asks)
+    return (bid-ask)/(bid+ask) if bid+ask>1e-12 else None
+
+
+def oriented_pm_anchor_features(raw: dict[str,Any], *, outcome: str) -> dict[str,float]:
+    placement=raw.get("placement_features") if isinstance(raw.get("placement_features"),dict) else {}
+    direction=1.0 if outcome=="YES" else -1.0
+    out={}
+    directional=("imbalance","ofi","short_return_ticks","microstructure_shadow_delta_250ms")
+    level=("spread_ticks","ew_vol_ticks","trade_intensity","cancel_intensity","local_latency_ms")
+    for name in directional:
+        value=placement.get(name)
+        if finite(value):out["pm.anchor_"+name]=direction*float(value)
+    for name in level:
+        value=placement.get(name)
+        if finite(value):out["pm.anchor_"+name]=float(value)
+    buy=placement.get("aggressive_buy_prints_per_second")
+    sell=placement.get("aggressive_sell_prints_per_second")
+    if finite(buy) and finite(sell):
+        out["pm.anchor_aggressive_net_prints_per_second"]=direction*(float(buy)-float(sell))
+        out["pm.anchor_aggressive_total_prints_per_second"]=float(buy)+float(sell)
+    bid=raw.get("bid_depth_l1");ask=raw.get("ask_depth_l1")
+    if finite(bid) and finite(ask) and float(bid)+float(ask)>1e-12:
+        out["pm.anchor_l1_depth_imbalance"]=direction*((float(bid)-float(ask))/(float(bid)+float(ask)))
+    l5=_l5_imbalance(raw)
+    if l5 is not None:
+        out["pm.anchor_l5_depth_imbalance"]=direction*l5
+    return out
+
+
+def load_book_anchor_rows(
+    root: Path, *, minimum_wall_ns: int,
+    metadata: dict[str,dict[str,Any]],
+    market_meta: dict[str,dict[str,float]],
+    context_meta: dict[tuple[str,str],dict[str,float]],
+):
+    """Fixed-cadence alpha-neutral quote anchors from causal PM book events."""
+    book_root=root/"research"/"repricing_book"/"book_observations"
+    if not book_root.is_dir():
+        raise ValueError("PM_BOOK_OBSERVATION_DIR_MISSING")
+    paths=sorted(
+        (p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()),
+        key=lambda p:(p.name=="current.jsonl",p.name),
+    )
+    chosen={}
+    counts=Counter()
+    model_shas=set()
+    cadence_ns=ANCHOR_CADENCE_MS*1_000_000
+    for path in paths:
+        counts["files"]+=1
+        for raw in robust_json_lines(path):
+            if raw.get("schema")!="polymarket_v7_causal_book_observation_v1":
+                continue
+            counts["schema_rows"]+=1
+            if (
+                raw.get("paper_only") is not True
+                or raw.get("authenticated_execution") is not False
+                or raw.get("real_order_submission") is not False
+                or raw.get("execution_authority")!="ZERO_AUTHORITY_RESEARCH_ONLY"
+                or raw.get("valid") is not True
+                or raw.get("lineage_continuous") is not True
+            ):
+                counts["authority_or_continuity_rejected"]+=1;continue
+            sha=str(raw.get("model_sha") or "")
+            if len(sha)==40:model_shas.add(sha)
+            try:
+                decision=int(raw["receive_wall_ms"])*1_000_000
+            except (KeyError,TypeError,ValueError,OverflowError):
+                counts["clock_rejected"]+=1;continue
+            if decision<minimum_wall_ns:
+                counts["before_minimum"]+=1;continue
+            market=str(raw.get("market_id") or "")
+            token=str(raw.get("token_id") or "")
+            meta=metadata.get(market)
+            if meta is None:
+                counts["metadata_unavailable"]+=1;continue
+            start=int(meta["start_timestamp_ms"])*1_000_000
+            end=int(meta["end_timestamp_ms"])*1_000_000
+            if not start<=decision<end:
+                counts["outside_contract_window"]+=1;continue
+            yes=str(meta["yes_token"]);no=str(meta["no_token"])
+            if token==yes:outcome="YES"
+            elif token==no:outcome="NO"
+            else:
+                counts["token_mismatch"]+=1;continue
+            asset=str(meta["asset"]).upper();horizon=str(meta["horizon"]).upper()
+            static=market_meta.get(market) or context_meta.get((asset,horizon)) or {}
+            rate=meta.get("fee_rate")
+            exponent=meta.get("fee_exponent")
+            minimum=meta.get("minimum")
+            if not finite(rate):rate=static.get("fee_rate")
+            if not finite(exponent):exponent=static.get("fee_exponent")
+            if not finite(minimum):minimum=static.get("minimum")
+            if not all(finite(x) for x in (rate,exponent,minimum)):
+                counts["static_terms_unavailable"]+=1;continue
+            features=oriented_pm_anchor_features(raw,outcome=outcome)
+            features["execution.tte_seconds"]=(end-decision)/1e9
+            bucket=decision//cadence_ns
+            key=(market,bucket)
+            decision_id=canonical_hash([
+                "maker-book-anchor-v1",sha,market,bucket,
+                str(raw.get("observer_session_id") or ""),
+            ])
+            row={
+                "decision_id":decision_id,
+                "market_id":market,"asset":asset,"horizon":horizon,
+                "decision_ns":decision,"information_end_ns":decision,
+                "yes_token_id":yes,"no_token_id":no,"token_id":yes,
+                "tte_ns":end-decision,"signal_age_ns":0,"direction":0,
+                "fee_rate":float(rate),"fee_exponent":float(exponent),
+                "minimum":float(minimum),"epoch":int(raw.get("connection_epoch") or 0),
+                "pair":{},"features":features,
+                "anchor_outcome":outcome,
+                "anchor_observer_sequence":int(raw.get("observer_sequence") or 0),
+                "anchor_source":"CAUSAL_PM_BOOK_FIXED_SLOT",
+            }
+            prior=chosen.get(key)
+            if prior is None or decision<int(prior["decision_ns"]):
+                chosen[key]=row
+            counts["eligible_events"]+=1
+    rows=sorted(chosen.values(),key=lambda r:(int(r["decision_ns"]),str(r["market_id"]),str(r["decision_id"])))
+    counts["anchors"]=len(rows)
+    if not rows:
+        raise ValueError("NO_ALPHA_NEUTRAL_BOOK_ANCHORS")
+    return rows,{
+        "counts":dict(counts),"model_shas":sorted(model_shas),
+        "anchor_cadence_ms":ANCHOR_CADENCE_MS,
+        "timing_selection":"FIRST_VALID_CAUSAL_PM_EVENT_PER_MARKET_PER_FIXED_SLOT_NO_ALPHA_NO_PNL",
+        "feature_semantics":"PM_EVENT_FEATURES_ORIENTED_TO_YES_PROBABILITY",
+    }
+
+
 def load_feature_anchor_rows(
     paths: Iterable[Path], *, minimum_wall_ns: int,
     market_meta: dict[str,dict[str,float]],
@@ -883,7 +1055,7 @@ def evaluate_cell(oos_rows,session_cache,trades,models,latency,horizon,ext_names
                 st["future_pm_move_sum"]+=float(actual)
             quote_sides=("YES","NO") if p=="A0_BASELINE" else (("YES",) if pred>=0 else ("NO",))
             for side in quote_sides:
-                token=str(row.get("yes_token_id") if side=="YES" else row.get("no_token_id") or "")
+                token=str((row.get("yes_token_id") if side=="YES" else row.get("no_token_id")) or "")
                 key=(str(row["market_id"]),token)
                 decision_ms=int(row["decision_ns"])//1_000_000
                 if decision_ms<cooldown[p].get(key,-1):
@@ -928,6 +1100,7 @@ def monotonicity(grid):
 def run(
     root: Path, output: Path, code_sha: str, minimum_wall_ns: int,
     external_venue_csv_specs: Iterable[str]=(),
+    market_metadata_path: Path|None=None,
 ):
     # Native lead-lag decisions are used only as an authoritative source for
     # static fee/minimum terms. Quote timing comes exclusively from the
@@ -937,12 +1110,12 @@ def run(
         raise ValueError("CAUSAL_DATASET_NOT_READY:"+str(data.get("input_state")))
     native_terms=[r for r in data["decisions"] if da._valid_state(r)]
     market_meta,context_meta=build_static_market_metadata(native_terms)
-    paths=discover_feature_tapes(root)
-    source,feature_diag=load_feature_anchor_rows(
-        paths,minimum_wall_ns=minimum_wall_ns,
+    if market_metadata_path is None:
+        raise ValueError("MARKET_METADATA_REQUIRED")
+    metadata=load_market_metadata(market_metadata_path)
+    source,feature_diag=load_book_anchor_rows(
+        root,minimum_wall_ns=minimum_wall_ns,metadata=metadata,
         market_meta=market_meta,context_meta=context_meta)
-    if not source:
-        raise ValueError("NO_ALPHA_NEUTRAL_FEATURE_ANCHORS")
 
     external_venue_index,external_venue_load_diag=load_external_venue_csvs(external_venue_csv_specs)
     if not external_venue_index:
@@ -982,7 +1155,7 @@ def run(
     # as-of join is allowed here.
     join_diag={
         "rows":len(rows),"joined_rows":len(rows),"join_rate":1.0,
-        "semantics":"QUOTE_ANCHOR_IS_CAUSAL_FEATURE_TAPE_RECORD;NO_TAKER_SIGNAL_TIMING",
+        "semantics":"QUOTE_ANCHOR_IS_FIRST_VALID_CAUSAL_PM_BOOK_EVENT_IN_FIXED_500MS_SLOT;NO_TAKER_SIGNAL_TIMING",
     }
     train,oos,cut=split_60_40(rows,start_ns)
     if not train or not oos:
@@ -1012,7 +1185,7 @@ def run(
         "code_sha":code_sha,"window_start_ns":start_ns,"window_end_ns":end_ns,
         "window_seconds":7200,"train_end_ns":cut,
         "split":{"TRAIN_60":len(train),"LOCKED_OOS_40":len(oos)},
-        "selection":window,"feature_join":join_diag,"feature_tape":feature_diag,
+        "selection":window,"feature_join":join_diag,"anchor_source":feature_diag,
         "external_venue_tape":{"load":external_venue_load_diag,"join":external_venue_join_diag},
         "trade_tape":trade_diag,"book_tape":tape_diag,
         "maker_mechanics":{
@@ -1081,10 +1254,12 @@ def main(argv=None):
     p.add_argument("--code-sha",required=True)
     p.add_argument("--minimum-wall-ns",type=int,required=True)
     p.add_argument("--external-venue-csv",action="append",default=[])
+    p.add_argument("--market-metadata",type=Path,required=True)
     a=p.parse_args(argv)
     try:result=run(
         a.root,a.output_dir,a.code_sha,a.minimum_wall_ns,
-        external_venue_csv_specs=a.external_venue_csv)
+        external_venue_csv_specs=a.external_venue_csv,
+        market_metadata_path=a.market_metadata)
     except (OSError,ValueError,RuntimeError,np.linalg.LinAlgError) as exc:
         p.exit(2,type(exc).__name__+":"+str(exc)+"\n")
     print(json.dumps(result,sort_keys=True))
