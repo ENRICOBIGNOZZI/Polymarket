@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_maker_a0_a5_research_request_v1",
   "version": 1,
-  "request_id": "maker-a0-a5-2h-exact-clock-rich-state-20260925-o",
+  "request_id": "maker-a0-a5-2h-final-exact-clock-rich-residual-20260925-p",
   "instance_id": "i-04042ca7da7a23215",
-  "expected_research_sha": "ecc09ba4d4814c926c7bca340d36898243c99005",
+  "expected_research_sha": "6955579176d5431db8071e914e51344177ecbb18",
   "research_branch": "research/full-feature-maker-20260924",
   "minimum_wall_ns": 1790278818146000000,
   "output_directory": "docs/research/maker-a0-a5-2026-09-24",
