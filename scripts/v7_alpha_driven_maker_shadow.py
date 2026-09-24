@@ -3,8 +3,8 @@
 
 This script never writes to the canonical ledger or OMS. It samples the current
 market, labels each quote opportunity by whether the canonical maker bridge
-would emit a MAKE proposal, and replays conservative resting-order fills with
-the native maker research engine.
+would emit a MAKE proposal, and replays conservative resting-order fills using
+the same public-print/queue-ahead semantics as the native research adapter.
 """
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from typing import Any
 
 from v7_causal_book import BookTimeline
 from v7_maker_opportunity_bridge import build_maker_opportunities
-from v7_profit_experiments import replay_anchor
 
 SCHEMA = "polymarket_v7_alpha_driven_maker_shadow_v1"
 STATUS_SCHEMA = "polymarket_v7_alpha_driven_maker_shadow_status_v1"
@@ -110,12 +109,280 @@ def make_anchor(row: dict[str, Any], *, market_id: str, token_id: str, model_sha
     }
 
 
+
+def replay_anchor_python(
+    anchor: dict[str, Any],
+    book: BookTimeline,
+    status: dict[str, Any],
+    protocol: dict[str, Any],
+    *,
+    evaluation_ms: int,
+) -> dict[str, Any]:
+    """Deterministic pessimistic BUY-maker replay; no execution authority.
+
+    Mirrors the native research adapter's economically material rules:
+    1ms submission latency is already encoded in the anchor clock, 100ms cancel
+    latency after TTL, strict receive/exchange causality, SELL aggressor only,
+    crossing trade price <= resting BUY price, 1.50x visible queue ahead for the
+    operational/pessimistic fill, and partial fills.
+    """
+    order = anchor["order"]
+    metadata = order["metadata"]
+    start_ms = int(anchor["origin_ms"])
+    market = str(anchor["market_id"])
+    token = str(anchor["token_id"])
+    arrival_receive_ns = int(metadata.get("arrival_receive_monotonic_ns") or 0)
+    arrival_exchange_ns = int(metadata.get("arrival_exchange_event_ns") or 0)
+    history = list(book.history.get((market, token), ()))
+    origin = next(
+        (
+            row for row in reversed(history)
+            if int(row.get("receive_monotonic_ns") or 0) <= arrival_receive_ns
+            and int(row.get("receive_wall_ms") or 0) <= start_ms
+        ),
+        None,
+    )
+
+    reason: str | None = None
+    now_ms = time.time_ns() // 1_000_000
+    try:
+        status_ts = int(status.get("timestamp_ms") or 0)
+        status_written = int(status.get("book_events_written") or 0)
+        status_wall = int(status.get("book_watermark_receive_wall_ms") or 0)
+        status_mono = int(status.get("book_watermark_receive_monotonic_ns") or 0)
+    except (TypeError, ValueError, OverflowError):
+        status_ts = status_written = status_wall = status_mono = 0
+
+    if (
+        origin is None
+        or anchor.get("book_gap_counter") != book.gaps
+        or anchor.get("observer_session_id") != book.session
+        or int(anchor.get("connection_epoch") or 0) != book.epoch
+        or not history
+        or int(history[0].get("receive_wall_ms") or 0) > start_ms
+        or book.watermark_ms < start_ms + evaluation_ms
+        or book.watermark_monotonic_ns < arrival_receive_ns + evaluation_ms * 1_000_000
+        or status.get("evidence_complete") is not True
+        or status.get("model_sha") != book.model_sha
+        or status.get("observer_session_id") != book.session
+        or int(status.get("connection_epoch") or 0) != book.epoch
+        or status.get("state") != "running"
+        or status.get("paper_only") is not True
+        or status.get("authenticated_execution") is not False
+        or status.get("real_order_submission") is not False
+        or status_written > book.sequence
+        or status_wall < start_ms + evaluation_ms
+        or status_mono < arrival_receive_ns + evaluation_ms * 1_000_000
+        or not 0 <= now_ms - status_ts <= 2_000
+    ):
+        reason = "BOOK_CONTINUITY_CENSORED"
+
+    if arrival_receive_ns <= 0 or arrival_exchange_ns <= 0:
+        reason = "MISSING_NATIVE_ARRIVAL_CLOCK"
+    if origin is not None and (
+        origin.get("valid") is not True
+        or origin.get("lineage_continuous") is not True
+        or int(origin.get("receive_monotonic_ns") or 0) <= 0
+    ):
+        reason = "INVALID_ARRIVAL_BOOK"
+
+    path = [
+        row for row in history
+        if arrival_receive_ns <= int(row.get("receive_monotonic_ns") or 0)
+        <= arrival_receive_ns + evaluation_ms * 1_000_000
+    ]
+    if origin is not None and any(row.get("tick_size") != origin.get("tick_size") for row in path):
+        reason = "TICK_REGIME_CHANGED"
+    invalid_books = sum(
+        row.get("valid") is not True or row.get("lineage_continuous") is not True
+        for row in path
+    )
+
+    output: list[dict[str, Any]] = []
+    for arm in protocol["maker"]["arms"]:
+        arm_reason = reason
+        execution_end_ns = (
+            arrival_receive_ns
+            + (int(arm["lifetime_ms"]) + 100) * 1_000_000
+        )
+        execution_path = [
+            row for row in path
+            if int(row.get("receive_monotonic_ns") or 0) <= execution_end_ns
+        ]
+        if any("public_trade" not in row for row in execution_path):
+            arm_reason = "MISSING_TRADE_PAYLOAD_CENSORED"
+        if any(
+            row.get("public_trade")
+            and (row.get("valid") is not True or row.get("lineage_continuous") is not True)
+            for row in execution_path
+        ):
+            arm_reason = "TRADE_LINEAGE_CENSORED"
+
+        row_out: dict[str, Any] = {
+            "arm": arm["id"],
+            "state": arm_reason or "OBSERVED",
+            "operational_filled_shares": None,
+            "fills": [],
+            "counterfactual": True,
+            "intermediate_invalid_book_rows": invalid_books,
+            "replay_input_basis": "CONTINUOUS_TRANSPORT_VALID_PRINTS_AND_VALID_ARRIVAL_BOOK",
+            "queue_model": "VISIBLE_QUEUE_X_1_50_PESSIMISTIC",
+            "cancel_latency_ms": 100,
+        }
+        if arm_reason or origin is None:
+            output.append(row_out)
+            continue
+
+        quantity = float(order["intended_size"])
+        tick = float(origin["tick_size"])
+        bid = float(origin["best_bid"])
+        ask = float(origin["best_ask"])
+        price = bid + (tick if arm["placement"] == "IMPROVE1" else 0.0)
+        if not (
+            math.isfinite(quantity) and quantity > 0
+            and math.isfinite(tick) and 0 < tick < 1
+            and math.isfinite(price) and 0 < price < ask < 1
+        ):
+            row_out["state"] = "POST_ONLY_OR_INPUT_INELIGIBLE"
+            output.append(row_out)
+            continue
+
+        visible_ahead = float(origin.get("bid_depth_l1") or 0.0) if arm["placement"] == "JOIN" else 0.0
+        if not math.isfinite(visible_ahead) or visible_ahead < 0:
+            row_out["state"] = "QUEUE_AHEAD_INVALID"
+            output.append(row_out)
+            continue
+
+        queue_ahead = math.ceil(visible_ahead * 1.50 * 1_000_000.0) / 1_000_000.0
+        remaining = quantity
+        cancel_request_ns = arrival_receive_ns + int(arm["lifetime_ms"]) * 1_000_000
+        cancel_effective_ns = cancel_request_ns + 100_000_000
+        fills: list[dict[str, Any]] = []
+        funnel = Counter()
+
+        for book_row in execution_path:
+            trade = book_row.get("public_trade")
+            if not isinstance(trade, dict):
+                continue
+            receive_ns = int(book_row.get("receive_monotonic_ns") or 0)
+            exchange_ns = int(trade.get("exchange_event_ns") or book_row.get("exchange_event_ns") or 0)
+            if receive_ns <= arrival_receive_ns or exchange_ns <= arrival_exchange_ns:
+                funnel["causally_pre_arrival"] += 1
+                continue
+            if receive_ns >= cancel_effective_ns:
+                funnel["cancel_effective_before_trade"] += 1
+                continue
+            if str(trade.get("aggressor_side") or "").upper() != "SELL":
+                funnel["wrong_aggressor_side"] += 1
+                continue
+            try:
+                trade_price = float(trade["price"])
+                trade_size = float(trade["size"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                funnel["invalid_trade"] += 1
+                continue
+            if not math.isfinite(trade_price) or not math.isfinite(trade_size) or trade_size <= 0:
+                funnel["invalid_trade"] += 1
+                continue
+            if trade_price > price + 1e-12:
+                funnel["price_not_crossing"] += 1
+                continue
+
+            funnel["eligible_prints"] += 1
+            available = trade_size
+            if queue_ahead > 0:
+                consumed = min(queue_ahead, available)
+                queue_ahead -= consumed
+                available -= consumed
+            if available <= 0 or remaining <= 0:
+                funnel["queue_not_depleted"] += 1
+                continue
+
+            fill_qty = min(remaining, available)
+            if fill_qty <= 0:
+                continue
+            remaining -= fill_qty
+            fill = {
+                "receive_monotonic_ns": receive_ns,
+                "quantity": fill_qty,
+                "price": price,
+                "trade_id": int(book_row.get("observer_sequence") or 0),
+                "after_cancel_request": receive_ns >= cancel_request_ns,
+                "markouts": {},
+            }
+            for horizon in protocol["maker"]["markout_horizons_ms"]:
+                target_ns = receive_ns + int(horizon) * 1_000_000
+                cut = next(
+                    (
+                        candidate for candidate in reversed(history)
+                        if int(candidate.get("receive_monotonic_ns") or 0) <= target_ns
+                    ),
+                    None,
+                )
+                if (
+                    cut is not None
+                    and cut.get("valid") is True
+                    and cut.get("lineage_continuous") is True
+                ):
+                    try:
+                        cut_bid = float(cut["best_bid"])
+                        cut_ask = float(cut["best_ask"])
+                        cut_depth = float(cut.get("bid_depth_l1") or 0.0)
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        cut = None
+                if cut is not None and 0 < cut_bid < cut_ask < 1:
+                    fill["markouts"][str(horizon)] = {
+                        "mid_minus_fill": 0.5 * (cut_bid + cut_ask) - price,
+                        "best_bid_minus_fill": cut_bid - price,
+                        "bid_depth_l1": cut_depth,
+                        "liquidation_depth_sufficient": cut_depth >= fill_qty,
+                    }
+                else:
+                    fill["markouts"][str(horizon)] = None
+            fills.append(fill)
+            funnel["fill_events"] += 1
+            if remaining <= 1e-12:
+                remaining = 0.0
+                break
+
+        row_out.update(
+            state="OBSERVED",
+            research_request={
+                "arrival_receive_ns": arrival_receive_ns,
+                "arrival_exchange_ns": arrival_exchange_ns,
+                "tick": tick,
+                "price": price,
+                "quantity": quantity,
+                "best_ask": ask,
+                "visible_queue_ahead": visible_ahead,
+                "pessimistic_queue_ahead": math.ceil(visible_ahead * 1.50 * 1_000_000.0) / 1_000_000.0,
+                "lifetime_ms": int(arm["lifetime_ms"]),
+            },
+            simulation_fill_events=len(fills),
+            operational_filled_shares=quantity - remaining,
+            fills=fills,
+            execution_outcome=(
+                "FILLED" if remaining == 0
+                else "PARTIAL_FILL" if remaining < quantity
+                else "QUEUE_NOT_DEPLETED"
+            ),
+            execution_funnel=dict(funnel),
+        )
+        output.append(row_out)
+
+    return {
+        "arms": output,
+        "book_scope": "L1_PLUS_PUBLIC_PRINTS_CAUSAL_REPLAY",
+        "comparison_semantics": "PAIRED_RESEARCH_COUNTERFACTUAL_NOT_ADDITIONAL_CANONICAL_FILLS",
+        "replay_engine": "PYTHON_PESSIMISTIC_QUEUE_PARITY_CANDIDATE_V1",
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--run-root", type=Path, required=True)
     ap.add_argument("--book-tape", type=Path, required=True)
     ap.add_argument("--book-status", type=Path, required=True)
-    ap.add_argument("--binary", type=Path, required=True)
     ap.add_argument("--model-sha", required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--status", type=Path, required=True)
@@ -130,8 +397,6 @@ def main() -> int:
         raise SystemExit("invalid model sha")
     if args.duration_seconds <= 0 or args.sample_ms < 100 or args.quantity_shares <= 0:
         raise SystemExit("invalid bounded-run arguments")
-    if not args.binary.is_file():
-        raise SystemExit("native maker replay binary missing")
 
     ttls = [int(x) for x in args.ttl_arms_ms.split(",") if x.strip()]
     markouts = [int(x) for x in args.markout_horizons_ms.split(",") if x.strip()]
@@ -237,10 +502,9 @@ def main() -> int:
                 if book.watermark_ms < int(anchor["origin_ms"]) + evaluation_ms:
                     continue
                 try:
-                    result = replay_anchor(
-                        anchor, book, status, protocol, args.binary,
-                        evaluation_ms=evaluation_ms, include_markouts=True,
-                        require_all_features=False,
+                    result = replay_anchor_python(
+                        anchor, book, status, protocol,
+                        evaluation_ms=evaluation_ms,
                     )
                 except Exception as exc:
                     counts["replay_exception"] += 1
