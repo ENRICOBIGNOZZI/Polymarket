@@ -1,0 +1,15 @@
+{
+  "schema": "polymarket_v7_full_feature_maker_research_request_v1",
+  "version": 1,
+  "request_id": "full-feature-maker-2h-postdeploy-20260924-a",
+  "instance_id": "i-04042ca7da7a23215",
+  "expected_research_sha": "4715a0bfb9d1c5ac04e40033e18962808ee9cb4e",
+  "research_branch": "research/full-feature-maker-20260924",
+  "minimum_wall_ns": 1790278818146000000,
+  "output_directory": "docs/research/full-feature-maker-2026-09-24",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}
