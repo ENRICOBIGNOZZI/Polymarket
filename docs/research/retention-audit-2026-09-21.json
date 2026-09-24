@@ -1,5 +1,6 @@
 {
   "authenticated_execution": false,
+  "compression_failures": [],
   "compression_failures_count": 0,
   "journal_tail": [
     "{\"after_bytes\": 52808569889, \"after_compression_bytes\": 22548926043, \"authenticated_execution\": false, \"before_bytes\": 52808569889, \"deleted\": [], \"dry_run\": false, \"hft_opportunity_preservation\": {\"decisions\": 0, \"failures\": [], \"pending_markets\": [], \"records\": 0, \"scan_complete\": true, \"total_markets\": 3120, \"total_opportunities\": 1732220}, \"hft_storage\": {\"compression_manifest_errors\": 0, \"estimated_compressed_gb_per_hour\": 0.15460680337241123, \"estimated_compressed_raw_hours\": 175.920642822",
@@ -39,10 +40,20 @@
   "retention_before_bytes": 55053556809,
   "retention_managed_files": 73598,
   "retention_state": "RETENTION_PARTIAL_FAILURE",
-  "retention_status_age_seconds": 21.807311534881592,
+  "retention_status_age_seconds": 97.03297734260559,
   "retention_status_present": true,
   "retention_timestamp": 1790278002,
   "retention_verified_offload_receipt": false,
+  "rolling_failures": [
+    {
+      "reason": "UNHEALTHY_NATIVE_CAPTURE_PINNED",
+      "source": "research/native_observations/6e98335a4621-1790175305-455349/4841525-493529496417579.jsonl.gz"
+    },
+    {
+      "reason": "UNHEALTHY_NATIVE_CAPTURE_PINNED",
+      "source": "research/native_observations/6e98335a4621-1790175305-455349/4841531-493526099096463.jsonl.gz"
+    }
+  ],
   "rolling_failures_count": 2,
   "rolling_state": "WINDOW_ENFORCED",
   "run_root_name": "paper_v7_london",
