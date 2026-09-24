@@ -75,7 +75,13 @@ jobs:
           tail -60 "$ROOT/native_crypto_settlement_engine.log" 2>&1 || true
           echo "--- LEDGER_ROUTER_TAIL ---"
           tail -40 "$ROOT/ledger_router.log" 2>&1 || true
+          echo "--- PORTFOLIO_GUARD_FILE ---"
+          APP=/home/ubuntu/polymarket-runtime/current
+          readlink -f "$APP" 2>&1 || true
+          stat -Lc 'guard_mode=%A guard_size=%s guard_mtime=%y guard_path=%n' "$APP/scripts/v7_portfolio_guard.py" 2>&1 || true
+          sudo -u ubuntu test -r "$APP/scripts/v7_portfolio_guard.py"; echo "guard_readable=$?" || true
           echo "--- PORTFOLIO_GUARD ---"
+          stat -Lc 'guard_log_size=%s guard_log_mtime=%y' "$ROOT/portfolio_guard.log" 2>&1 || true
           cat "$ROOT/portfolio_guard.log" 2>&1 || true
           echo "--- JOURNAL_RECENT ---"
           journalctl -u "$UNIT" --since '10 minutes ago' -n 100 --no-pager 2>&1 || true
