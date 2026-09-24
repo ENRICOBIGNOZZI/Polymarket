@@ -1,0 +1,127 @@
+name: V7 trusted full-feature maker research
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-full-feature-maker-research-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-full-feature-maker-research
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      RESEARCH_BRANCH: research/full-feature-maker-20260924
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate trusted-main request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-full-feature-maker-research-request.json
+          python3 - "$request" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v["schema"]=="polymarket_v7_full_feature_maker_research_request_v1"
+          assert v["version"]==1
+          assert re.fullmatch(r"[A-Za-z0-9._:-]{8,128}",v["request_id"])
+          assert re.fullmatch(r"i-[0-9a-f]+",v["instance_id"])
+          assert re.fullmatch(r"[0-9a-f]{40}",v["expected_research_sha"])
+          assert v["research_branch"]=="research/full-feature-maker-20260924"
+          assert isinstance(v["minimum_wall_ns"],int) and v["minimum_wall_ns"]>0
+          assert v["output_directory"]=="docs/research/full-feature-maker-2026-09-24"
+          assert v["paper_only"] is True
+          assert v["authenticated_execution"] is False
+          assert v["real_order_submission"] is False
+          assert v["real_capital_at_risk"] is False
+          assert v["automatic_promotion"] is False
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          echo "source_sha=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["expected_research_sha"])')" >> "$GITHUB_OUTPUT"
+          echo "instance_id=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["instance_id"])')" >> "$GITHUB_OUTPUT"
+          echo "minimum_wall_ns=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["minimum_wall_ns"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch exact research source
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$RESEARCH_BRANCH" --depth=100
+          branch_sha="$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$branch_sha"
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Test full-feature source
+        run: |
+          python3 -m pip install --disable-pip-version-check -q -r research/requirements-learning.txt
+          PYTHONPATH=. python3 -m pytest -q tests/test_v7_multi_alpha_2h.py
+          python3 -m py_compile             research/walk_forward_v3/multi_alpha_2h.py             research/walk_forward_v3/btc_compact_equity.py             ops/v7_multi_alpha_2h_ssm.py
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-full-feature-maker-research
+          aws-region: eu-west-2
+
+      - name: Run current post-deploy 2H full-feature research
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+          INSTANCE_ID: ${{ steps.request.outputs.instance_id }}
+          MINIMUM_WALL_NS: ${{ steps.request.outputs.minimum_wall_ns }}
+        run: |
+          set -euo pipefail
+          python3 ops/v7_multi_alpha_2h_ssm.py             --instance-id "$INSTANCE_ID"             --expected-sha "$SOURCE_SHA"             --minimum-wall-ns "$MINIMUM_WALL_NS"             --output-dir docs/research/full-feature-maker-2026-09-24
+
+      - name: Emit compact research summary
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("docs/research/full-feature-maker-2026-09-24")
+          coverage=json.load(open(root/"02_data_coverage.json"))
+          baseline=json.load(open(root/"03_baseline_manifest.json"))
+          shortlist=json.load(open(root/"17_shortlist.json"))
+          score=json.load(open(root/"16_feature_scorecard.json"))
+          mono=json.load(open(root/"20_monotonicity.json"))
+          assert baseline["latencies_ms"]==[5,10,25,50,100,250]
+          assert baseline["exit_horizons_ms"]==[100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000]
+          families=(coverage.get("feature_inventory") or {}).get("families") or {}
+          compact={
+            "rows":coverage.get("rows"),
+            "assets":coverage.get("assets"),
+            "contract_horizons":coverage.get("contract_horizons"),
+            "continuous_pm_rate":coverage.get("continuous_pm_rate"),
+            "feature_join":coverage.get("feature_join"),
+            "feature_family_counts":{k:len(v or []) for k,v in families.items()},
+            "scorecard":score.get("rows"),
+            "shortlist":shortlist.get("candidates"),
+            "baseline_monotonicity":mono.get("baseline"),
+          }
+          print("FULL_FEATURE_SUMMARY="+json.dumps(compact,sort_keys=True,separators=(",",":")))
+          PY
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: v7-full-feature-maker-${{ github.run_id }}
+          path: docs/research/full-feature-maker-2026-09-24
+          retention-days: 30
