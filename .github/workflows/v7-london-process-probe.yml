@@ -377,6 +377,27 @@ jobs:
                     "authenticated_execution","real_order_submission")
               print(name+"="+json.dumps({k:v.get(k) for k in keep if k in v},sort_keys=True))
           PYEVID
+          echo "=== ROOT CAUSE TARGETED ==="
+          echo "--- KILL stat/content ---"
+          stat -c 'size=%s mtime=%y mode=%a owner=%U group=%G' "$ROOT/control/KILL" 2>/dev/null || echo KILL_ABSENT
+          cat "$ROOT/control/KILL" 2>/dev/null || true
+          echo "--- portfolio_guard.log ---"
+          stat -c 'size=%s mtime=%y' "$ROOT/portfolio_guard.log" 2>/dev/null || true
+          tail -120 "$ROOT/portfolio_guard.log" 2>/dev/null || true
+          echo "--- native_engine_manager.log ---"
+          stat -c 'size=%s mtime=%y' "$ROOT/native_engine_manager.log" 2>/dev/null || true
+          tail -120 "$ROOT/native_engine_manager.log" 2>/dev/null || true
+          echo "--- public_https_proxy.log ---"
+          tail -80 "$ROOT/public_https_proxy.log" 2>/dev/null || true
+          echo "--- collector.log ---"
+          tail -80 "$ROOT/universe/collector.log" 2>/dev/null || true
+          echo "--- trade_recorder.log ---"
+          tail -80 "$ROOT/trade_recorder.log" 2>/dev/null || true
+          echo "--- ledger_router.log ---"
+          tail -80 "$ROOT/ledger_router.log" 2>/dev/null || true
+          echo "--- recent PAPER journal ---"
+          journalctl -u polymarket-v7-paper.service --since '10 minutes ago' --no-pager || true
+          echo "=== ROOT CAUSE TARGETED END ==="
           echo "=== FATAL CHILD LOG TAILS ==="
           for rel in \
             public_https_proxy.log \
