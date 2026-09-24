@@ -1,12 +1,12 @@
 {
   "schema": "polymarket_v7_alpha_maker_shadow_smoke_main_request_v1",
   "version": 1,
-  "request_id": "alpha-maker-a0-a5-smoke-20260924-a",
+  "request_id": "alpha-maker-a0-a5-smoke-20260924-b",
   "instance_id": "i-04042ca7da7a23215",
-  "expected_research_sha": "5c4e7c5f9ed8c1a78391db3c8762bf392c34067f",
+  "expected_research_sha": "08a87fbffa8dbd1b0daff6ee8a05a69b1c604282",
   "research_branch": "research/alpha-driven-maker-shadow",
-  "duration_seconds": 10,
-  "sample_ms": 2000,
+  "duration_seconds": 30,
+  "sample_ms": 1000,
   "quantity_shares": 5,
   "ttl_arms_ms": [
     250,
