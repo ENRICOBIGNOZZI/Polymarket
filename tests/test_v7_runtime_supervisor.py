@@ -167,6 +167,52 @@ def test_exhausted_restart_budget_has_bounded_exact_sha_cooldown(tmp_path: Path,
     assert value.restart_cooldown_seconds() == 0
 
 
+def test_recoverable_health_requires_sustained_grace(tmp_path: Path) -> None:
+    value = instance(tmp_path / "restarts.json", "a" * 40)
+    value.recoverable_grace = 30.0
+    assert not value.recoverable_grace_expired(None, 100.0)
+    assert not value.recoverable_grace_expired(100.0, 129.999)
+    assert value.recoverable_grace_expired(100.0, 130.0)
+
+
+def test_supervisor_preserves_health_failure_evidence(tmp_path: Path, monkeypatch) -> None:
+    value = instance(tmp_path / "restarts.json", "a" * 40)
+    value.recoverable_grace = 30.0
+    value.last_health_failure_path = tmp_path / "supervisor_last_health_failure.json"
+    monkeypatch.setattr(supervisor.time, "time", lambda: 12345)
+    value.record_health_failure(
+        supervisor.RECOVERABLE,
+        ["native_partition_coverage_incomplete", "runtime_status_stale"],
+        elapsed_seconds=450.0,
+        sustained_seconds=30.0,
+    )
+    row = json.loads(value.last_health_failure_path.read_text())
+    assert row["schema"] == "polymarket_v7_supervisor_health_failure_v1"
+    assert row["classification"] == supervisor.RECOVERABLE
+    assert row["paper_only"] is True
+    assert row["authenticated_execution"] is False
+    assert row["real_order_submission"] is False
+    assert row["expected_sha"] == "a" * 40
+    assert row["reasons"] == [
+        "native_partition_coverage_incomplete",
+        "runtime_status_stale",
+    ]
+    assert row["elapsed_seconds"] == 450.0
+    assert row["sustained_seconds"] == 30.0
+    assert row["recoverable_grace_seconds"] == 30.0
+
+
+def test_recoverable_grace_does_not_weaken_unsafe_fail_closed_path() -> None:
+    source = (ROOT / "ops/v7_runtime_supervisor.py").read_text()
+    unsafe = source.index("if health.classification == UNSAFE:")
+    recoverable = source.index("if health.classification == RECOVERABLE:", unsafe)
+    assert unsafe < recoverable
+    unsafe_block = source[unsafe:recoverable]
+    assert "self.stop_child()" in unsafe_block
+    assert "return 78" in unsafe_block
+    assert "recoverable_grace_expired" not in unsafe_block
+
+
 def test_service_entrypoint_auto_recovers_budget_but_not_safety_quarantine() -> None:
     entrypoint = (ROOT / "ops/v7_service_entrypoint.sh").read_text()
     assert 'quarantined) exit 0' in entrypoint
