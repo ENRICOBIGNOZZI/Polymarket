@@ -41,6 +41,26 @@ class MakerA0A5Tests(unittest.TestCase):
         self.assertEqual(external["binance_return_100ms_bp"],1.2)
         self.assertAlmostEqual(pm["ctx.pm_yes"],0.73)
 
+    def test_receive_time_venue_features_use_same_epoch_and_backward_asof(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/"btc.csv"
+            path.write_text(
+                "1000000000,1,2,7,100.0\n"
+                "1100000000,1,2,7,101.0\n"
+                "1000000000,2,2,8,100.0\n"
+                "1100000000,2,2,8,100.5\n"
+                "1000000000,3,2,9,100.0\n"
+                "1100000000,3,2,9,99.5\n",
+                encoding="utf-8")
+            index,diag=load_external_venue_csvs([f"BTC={path}"])
+            features=external_venue_features(index,"BTC",1_100_000_000)
+            self.assertGreater(features["external.binance_return_100ms_bp"],0)
+            self.assertGreater(features["external.coinbase_return_100ms_bp"],0)
+            self.assertLess(features["external.bybit_return_100ms_bp"],0)
+            self.assertIn("external.cross_venue_agreement_100ms",features)
+            self.assertEqual(diag["accepted"],6)
+
     def test_ridge_fits_simple_relation(self):
         rows=[{"x":float(i)} for i in range(100)]
         y=[2.0*float(i)+1.0 for i in range(100)]
