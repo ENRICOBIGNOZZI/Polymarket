@@ -73,6 +73,34 @@ for line in journal.stdout.splitlines():
             break
     lines.append(line)
 
+rolling_failure_details=[]
+for failure in (retention.get('rolling_retirement') or {}).get('failures') or []:
+    detail={'source':failure.get('source'),'reason':failure.get('reason')}
+    rel=failure.get('source')
+    if isinstance(rel,str) and rel:
+        source=root/rel
+        original=Path(str(source).removesuffix('.gz'))
+        closure=Path(str(original)+'.closed.json')
+        try:
+            st=source.stat()
+            detail['source_bytes']=st.st_size
+            detail['source_mtime_ns']=st.st_mtime_ns
+            detail['source_regular']=source.is_file() and not source.is_symlink()
+        except OSError as exc:
+            detail['source_stat_error']=type(exc).__name__
+        if closure.is_file() and not closure.is_symlink():
+            try:
+                value=json.loads(closure.read_text())
+                detail['closure']={k:value.get(k) for k in (
+                    'schema','closed','healthy','reason','model_sha','capture_id',
+                    'bytes','records','timestamp','timestamp_ns','exit_code','signal'
+                ) if k in value}
+            except (OSError,ValueError) as exc:
+                detail['closure_error']=type(exc).__name__
+        else:
+            detail['closure_present']=False
+    rolling_failure_details.append(detail)
+
 result={
     'schema':'polymarket_v7_retention_readonly_audit_v1',
     'paper_only':True,
@@ -93,6 +121,7 @@ result={
     'rolling_state':(retention.get('rolling_retirement') or {}).get('state'),
     'rolling_failures':(retention.get('rolling_retirement') or {}).get('failures') or [],
     'rolling_failures_count':len((retention.get('rolling_retirement') or {}).get('failures') or []),
+    'rolling_failure_details':rolling_failure_details,
     'compression_failures':(retention.get('lossless_compression') or {}).get('failures') or [],
     'compression_failures_count':len((retention.get('lossless_compression') or {}).get('failures') or []),
     'journal_tail':lines[-30:],
@@ -127,6 +156,7 @@ def main(argv=None):
     print("retention_timer_active="+str((value.get("timer") or {}).get("ActiveState")))
     print("retention_service_result="+str((value.get("service") or {}).get("Result")))
     print("rolling_failures="+json.dumps(value.get("rolling_failures") or [],sort_keys=True))
+    print("rolling_failure_details="+json.dumps(value.get("rolling_failure_details") or [],sort_keys=True))
     return 0
 
 if __name__=="__main__":
