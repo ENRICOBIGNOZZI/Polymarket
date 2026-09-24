@@ -1,0 +1,142 @@
+name: V7 trusted alpha-driven maker shadow smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-alpha-maker-shadow-smoke-main-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: v7-trusted-alpha-maker-shadow-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      RESEARCH_BRANCH: research/alpha-driven-maker-shadow
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Validate trusted-main request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-alpha-maker-shadow-smoke-main-request.json
+          python3 - "$request" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1]))
+          assert v["schema"]=="polymarket_v7_alpha_maker_shadow_smoke_main_request_v1"
+          assert v["version"]==1
+          assert re.fullmatch(r"[A-Za-z0-9._:-]{8,128}",v["request_id"])
+          assert re.fullmatch(r"i-[0-9a-f]+",v["instance_id"])
+          assert re.fullmatch(r"[0-9a-f]{40}",v["expected_research_sha"])
+          assert v["research_branch"]=="research/alpha-driven-maker-shadow"
+          assert 5 <= int(v["duration_seconds"]) <= 120
+          assert 100 <= int(v["sample_ms"]) <= 5000
+          assert 0 < float(v["quantity_shares"]) <= 20
+          assert v["ttl_arms_ms"]==[250,500,1000]
+          assert v["markout_horizons_ms"]==[250,500,1000,2000,5000]
+          assert v["paper_only"] is True
+          assert v["authenticated_execution"] is False
+          assert v["real_order_submission"] is False
+          assert v["real_capital_at_risk"] is False
+          assert v["automatic_promotion"] is False
+          PY
+          changed="$(git diff-tree --no-commit-id --name-only -r HEAD)"
+          test "$changed" = "$request"
+          echo "source_sha=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["expected_research_sha"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch and verify exact research source
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$RESEARCH_BRANCH" --depth=100
+          branch_sha="$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$branch_sha"
+          git show "$SOURCE_SHA:scripts/v7_alpha_driven_maker_shadow.py" >/tmp/v7_alpha_driven_maker_shadow.py
+          git show "$SOURCE_SHA:tests/test_v7_alpha_driven_maker_shadow.py" >/tmp/test_v7_alpha_driven_maker_shadow.py
+          PYTHONPATH=scripts python3 -m py_compile /tmp/v7_alpha_driven_maker_shadow.py
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-alpha-maker-shadow-main
+          aws-region: eu-west-2
+
+      - name: Run exact-source bounded shadow on London PAPER evidence
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python3 - "$SOURCE_SHA" <<'PY'
+          import base64,json,shlex,sys
+          from pathlib import Path
+          sys.path.insert(0,"ops")
+          from v7_london_ssm_deploy import run,REGION
+
+          source_sha=sys.argv[1]
+          req=json.load(open("deploy/v7-alpha-maker-shadow-smoke-main-request.json"))
+          payload=base64.b64encode(Path("/tmp/v7_alpha_driven_maker_shadow.py").read_bytes()).decode()
+          instance=req["instance_id"]
+          request_id=req["request_id"]
+          ttls=",".join(map(str,req["ttl_arms_ms"]))
+          marks=",".join(map(str,req["markout_horizons_ms"]))
+          remote=f"""set -euo pipefail
+          UNIT=polymarket-v7-paper.service
+          systemctl is-active --quiet "$UNIT"
+          ENVIRONMENT="$(systemctl show "$UNIT" -p Environment --value)"
+          ROOT="$(printf '%s' "$ENVIRONMENT" | python3 -c 'import shlex,sys;v=shlex.split(sys.stdin.read());print(next(x.split("=",1)[1] for x in v if x.startswith("PM_V7_RUN_ROOT=")))')"
+          APP="$(printf '%s' "$ENVIRONMENT" | python3 -c 'import shlex,sys;v=shlex.split(sys.stdin.read());print(next(x.split("=",1)[1] for x in v if x.startswith("POLYMARKET_APP_DIR=")))')"
+          SHA="$(printf '%s' "$ENVIRONMENT" | python3 -c 'import shlex,sys;v=shlex.split(sys.stdin.read());print(next(x.split("=",1)[1] for x in v if x.startswith("POLYMARKET_EXPECTED_SHA=")))')"
+          test -d "$APP"
+          test -d "$ROOT"
+          test -x "$APP/build/polymarket_v7_maker_research_replay"
+          test -s "$ROOT/research/repricing_book/book_observations/current.jsonl"
+          test -s "$ROOT/research/repricing_book/fillability_ws_status.json"
+          OUT="/tmp/{request_id}"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          printf '%s' {shlex.quote(payload)} | base64 -d > "$OUT/v7_alpha_driven_maker_shadow.py"
+          printf '%s\n' {shlex.quote(source_sha)} > "$OUT/research_sha.txt"
+          cd "$APP"
+          PYTHONPATH="$APP/scripts:$APP" python3 "$OUT/v7_alpha_driven_maker_shadow.py" \
+            --run-root "$ROOT" \
+            --book-tape "$ROOT/research/repricing_book/book_observations/current.jsonl" \
+            --book-status "$ROOT/research/repricing_book/fillability_ws_status.json" \
+            --binary "$APP/build/polymarket_v7_maker_research_replay" \
+            --model-sha "$SHA" \
+            --output "$OUT/shadow.jsonl" \
+            --status "$OUT/status.json" \
+            --duration-seconds {float(req["duration_seconds"])} \
+            --sample-ms {int(req["sample_ms"])} \
+            --quantity-shares {float(req["quantity_shares"])} \
+            --ttl-arms-ms {shlex.quote(ttls)} \
+            --markout-horizons-ms {shlex.quote(marks)}
+          echo LIVE_SHA="$SHA"
+          echo RESEARCH_SHA={shlex.quote(source_sha)}
+          echo SHADOW_STATUS_BEGIN
+          cat "$OUT/status.json"
+          echo SHADOW_STATUS_END
+          echo SHADOW_ROWS="$(wc -l < "$OUT/shadow.jsonl")"
+          """
+          stdout,stderr=run(REGION,instance,remote,300)
+          print(stdout)
+          if stderr:
+              print(stderr,file=sys.stderr)
+          PY
