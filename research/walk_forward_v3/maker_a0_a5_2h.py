@@ -542,6 +542,58 @@ def maker_value(row,session,fill_result,horizon_ms):
     },"OBSERVED"
 
 
+
+def recent_trade_flow(row: dict[str,Any], trades, window_ms: int=1000) -> dict[str,float]:
+    """Receive-time public flow strictly before the quote decision."""
+    decision_ms=int(row["decision_ns"])//1_000_000
+    out={}
+    for outcome,token in (
+        ("yes",str(row.get("yes_token_id") or "")),
+        ("no",str(row.get("no_token_id") or "")),
+    ):
+        idx=trades.get((str(row["market_id"]),token))
+        buy=sell=buy_n=sell_n=0.0
+        if idx is not None:
+            left=bisect_left(idx["stamps"],decision_ms-window_ms)
+            right=bisect_right(idx["stamps"],decision_ms)
+            for wall,epoch,aggressor,price,size in idx["rows"][left:right]:
+                if aggressor=="BUY":
+                    buy+=float(size);buy_n+=1.0
+                elif aggressor=="SELL":
+                    sell+=float(size);sell_n+=1.0
+        out[f"pm.{outcome}_aggressive_buy_shares_1s"]=buy
+        out[f"pm.{outcome}_aggressive_sell_shares_1s"]=sell
+        out[f"pm.{outcome}_aggressive_net_shares_1s"]=buy-sell
+        out[f"pm.{outcome}_aggressive_buy_prints_1s"]=buy_n
+        out[f"pm.{outcome}_aggressive_sell_prints_1s"]=sell_n
+    return out
+
+
+def pm_execution_context(
+    row: dict[str,Any], session, trades, *, include_queue: bool,
+) -> dict[str,float|None]:
+    pair=current_pair(row,session)
+    if pair is None:return {}
+    yes=side_state(pair,"YES");no=side_state(pair,"NO")
+    out={
+        "pm.yes_bid_depth_l1":None if yes is None else yes["bid_depth"],
+        "pm.yes_ask_depth_l1":None if yes is None else yes["ask_depth"],
+        "pm.no_bid_depth_l1":None if no is None else no["bid_depth"],
+        "pm.no_ask_depth_l1":None if no is None else no["ask_depth"],
+        "pm.yes_spread":None if yes is None else yes["ask"]-yes["bid"],
+        "pm.no_spread":None if no is None else no["ask"]-no["bid"],
+    }
+    out.update(recent_trade_flow(row,trades))
+    if include_queue:
+        out.update({
+            "execution.yes_queue_ahead":None if yes is None else QUEUE_AHEAD_MULTIPLIER*yes["bid_depth"],
+            "execution.no_queue_ahead":None if no is None else QUEUE_AHEAD_MULTIPLIER*no["bid_depth"],
+            "execution.quote_lifetime_ms":float(QUOTE_TTL_MS),
+            "execution.queue_multiplier":float(QUEUE_AHEAD_MULTIPLIER),
+        })
+    return out
+
+
 def prediction_names(train_rows):
     ext=select_names(train_rows,external_feature)
     pm=select_names(train_rows,pm_feature)
@@ -580,7 +632,7 @@ def residual_features(row,session,external_model,external_names):
     }
 
 
-def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,full_names,external_model):
+def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,full_names,external_model,trades):
     specs={
         "A1_EXTERNAL":ext_names,
         "A2_PM":pm_names,
@@ -597,19 +649,15 @@ def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,
             y=future_delta(row,session,latency,horizon)
             if y is None:continue
             rec=feature_dict(row,names0,include_pm=(policy!="A1_EXTERNAL"),include_signal_age=(policy!="A2_PM"))
+            if policy in ("A2_PM","A3_EXTERNAL_PM","A5_FULL_EXECUTION"):
+                rec.update(pm_execution_context(
+                    row,session,trades,include_queue=(policy=="A5_FULL_EXECUTION")))
             if policy=="A5_FULL_EXECUTION":
-                pair=current_pair(row,session)
-                if pair is None:continue
-                yes=side_state(pair,"YES");no=side_state(pair,"NO")
                 rec.update({
                     "action.latency_ms":float(latency),
                     "action.horizon_ms":float(horizon),
                     "action.quote_ttl_ms":float(QUOTE_TTL_MS),
                     "action.queue_multiplier":float(QUEUE_AHEAD_MULTIPLIER),
-                    "state.yes_bid_depth":None if yes is None else yes["bid_depth"],
-                    "state.no_bid_depth":None if no is None else no["bid_depth"],
-                    "state.yes_spread":None if yes is None else yes["ask"]-yes["bid"],
-                    "state.no_spread":None if no is None else no["ask"]-no["bid"],
                 })
             records.append(rec);targets.append(float(y))
         names=sorted({k for rec in records for k in rec})
@@ -638,7 +686,7 @@ def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,
     return models,receipts
 
 
-def predict_policy(policy,row,session,model,ext_names,pm_names,full_names,external_model,latency,horizon):
+def predict_policy(policy,row,session,model,ext_names,pm_names,full_names,external_model,latency,horizon,trades):
     if policy=="A0_BASELINE":return None
     if policy=="A1_EXTERNAL":rec=feature_dict(row,ext_names,include_pm=False,include_signal_age=False)
     elif policy=="A2_PM":rec=feature_dict(row,pm_names,include_pm=True,include_signal_age=False)
@@ -648,18 +696,15 @@ def predict_policy(policy,row,session,model,ext_names,pm_names,full_names,extern
         if rec is None:return None
     elif policy=="A5_FULL_EXECUTION":
         rec=feature_dict(row,full_names,include_pm=True,include_signal_age=True)
-        pair=current_pair(row,session)
-        if pair is None:return None
-        yes=side_state(pair,"YES");no=side_state(pair,"NO")
+    else:return None
+    if policy in ("A2_PM","A3_EXTERNAL_PM","A5_FULL_EXECUTION"):
+        rec.update(pm_execution_context(
+            row,session,trades,include_queue=(policy=="A5_FULL_EXECUTION")))
+    if policy=="A5_FULL_EXECUTION":
         rec.update({
             "action.latency_ms":float(latency),"action.horizon_ms":float(horizon),
             "action.quote_ttl_ms":float(QUOTE_TTL_MS),"action.queue_multiplier":float(QUEUE_AHEAD_MULTIPLIER),
-            "state.yes_bid_depth":None if yes is None else yes["bid_depth"],
-            "state.no_bid_depth":None if no is None else no["bid_depth"],
-            "state.yes_spread":None if yes is None else yes["ask"]-yes["bid"],
-            "state.no_spread":None if no is None else no["ask"]-no["bid"],
         })
-    else:return None
     return model.predict(rec)
 
 
@@ -707,7 +752,7 @@ def evaluate_cell(oos_rows,session_cache,trades,models,latency,horizon,ext_names
         for p in POLICIES[1:]:
             model=models.get(p)
             predictions[p]=None if model is None else predict_policy(
-                p,row,session,model,ext_names,pm_names,full_names,external_model,latency,horizon)
+                p,row,session,model,ext_names,pm_names,full_names,external_model,latency,horizon,trades)
         for p in POLICIES:
             st=stats[p];st["observations"]+=1
             pred=predictions[p]
@@ -827,7 +872,7 @@ def run(root: Path, output: Path, code_sha: str, minimum_wall_ns: int):
         for horizon in EXITS:
             if horizon<=latency:continue
             models,receipt=fit_cell_models(
-                train,session_cache,latency,horizon,ext_names,pm_names,full_names,external_model)
+                train,session_cache,latency,horizon,ext_names,pm_names,full_names,external_model,trades)
             receipts[f"{latency}::{horizon}"]=receipt
             cell=evaluate_cell(
                 oos,session_cache,trades,models,latency,horizon,
