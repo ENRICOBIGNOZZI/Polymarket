@@ -80,7 +80,7 @@ c++ -std=c++20 -O2 -I{remote}/src/include \
   -o {remote}/v7_external_event_export
 END_WALL_NS="$(python3 -c 'import time; print(time.time_ns())')"
 python3 - {context['run_root']} {remote} {a.minimum_wall_ns} "$END_WALL_NS" {remote}/v7_external_event_export <<'PYEXT'
-import subprocess,sys
+import json,subprocess,sys
 from pathlib import Path
 run_root=Path(sys.argv[1]); remote=Path(sys.argv[2])
 start=int(sys.argv[3]); end=int(sys.argv[4]); exporter=sys.argv[5]
