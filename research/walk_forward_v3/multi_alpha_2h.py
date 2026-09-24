@@ -306,6 +306,94 @@ def _quantile(values: Iterable[float], q: float) -> float | None:
     return values[max(0, min(len(values) - 1, index))]
 
 
+def _monotone_shape(points: list[tuple[int, float | None]]) -> dict[str, Any]:
+    clean = [(int(x), float(y)) for x, y in points if finite(y)]
+    if len(clean) < 3:
+        return {"state": "INSUFFICIENT_DATA", "points": clean}
+    clean.sort()
+    ys = [y for _, y in clean]
+    tol = max(1e-12, 1e-9 * max(1.0, max(abs(y) for y in ys)))
+    diffs = [b - a for a, b in zip(ys, ys[1:])]
+    nondecreasing = all(d >= -tol for d in diffs)
+    nonincreasing = all(d <= tol for d in diffs)
+    if nondecreasing and nonincreasing:
+        shape = "FLAT"
+    elif nondecreasing:
+        shape = "NONDECREASING"
+    elif nonincreasing:
+        shape = "NONINCREASING"
+    else:
+        shape = "MIXED"
+    concordant = 0
+    discordant = 0
+    for i in range(len(ys)):
+        for j in range(i + 1, len(ys)):
+            delta = ys[j] - ys[i]
+            if delta > tol:
+                concordant += 1
+            elif delta < -tol:
+                discordant += 1
+    denom = concordant + discordant
+    tau = (concordant - discordant) / denom if denom else 0.0
+    return {
+        "state": "READY",
+        "shape": shape,
+        "kendall_tau_vs_grid": tau,
+        "points": clean,
+        "adjacent_differences": diffs,
+    }
+
+
+def monotonicity_report(surface: dict[str, Any]) -> dict[str, Any]:
+    cells = surface.get("cells") or {}
+    metrics = ("pnl_per_fill", "pnl_per_observed_action", "hit_rate")
+    out = {"latency": {}, "holding_horizon": {}}
+    for metric in metrics:
+        by_horizon = {}
+        for horizon in EXITS:
+            points = []
+            for latency in LATENCIES:
+                cell = cells.get(f"{latency}::{horizon}") or {}
+                value = cell.get(metric)
+                if metric == "hit_rate" and value is None:
+                    value = None
+                points.append((latency, value))
+            by_horizon[str(horizon)] = _monotone_shape(points)
+        out["latency"][metric] = by_horizon
+
+        by_latency = {}
+        for latency in LATENCIES:
+            points = []
+            for horizon in EXITS:
+                cell = cells.get(f"{latency}::{horizon}") or {}
+                points.append((horizon, cell.get(metric)))
+            by_latency[str(latency)] = _monotone_shape(points)
+        out["holding_horizon"][metric] = by_latency
+
+    fill_rate_latency = {}
+    for horizon in EXITS:
+        points = []
+        for latency in LATENCIES:
+            cell = cells.get(f"{latency}::{horizon}") or {}
+            observed = int(cell.get("observed_actions") or 0)
+            fills = int(cell.get("fills") or 0)
+            points.append((latency, fills / observed if observed else None))
+        fill_rate_latency[str(horizon)] = _monotone_shape(points)
+    out["latency"]["fill_rate"] = fill_rate_latency
+
+    fill_rate_horizon = {}
+    for latency in LATENCIES:
+        points = []
+        for horizon in EXITS:
+            cell = cells.get(f"{latency}::{horizon}") or {}
+            observed = int(cell.get("observed_actions") or 0)
+            fills = int(cell.get("fills") or 0)
+            points.append((horizon, fills / observed if observed else None))
+        fill_rate_horizon[str(latency)] = _monotone_shape(points)
+    out["holding_horizon"]["fill_rate"] = fill_rate_horizon
+    return out
+
+
 def build_market_session_index(sessions: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for session in sessions:
@@ -1662,6 +1750,25 @@ def run_program(
         "promotion": "NONE_RESEARCH_ONLY"})
     write_json(output / "18_rejected_features.json", {
         "schema": SCHEMA + "_rejected_features", **SAFETY_PLUS, "features": rejected})
+
+    monotonicity = {
+        "schema": SCHEMA + "_monotonicity_v1",
+        **SAFETY_PLUS,
+        "interpretation": (
+            "DESCRIPTIVE_SHAPE_DIAGNOSTIC_ONLY;NO_BEST_CELL_SELECTION;"
+            "NORMALIZE_BY_FILL_OR_OBSERVED_ACTION_WHEN_INTERPRETING_PNL"
+        ),
+        "baseline": monotonicity_report(baseline),
+        "validation": {
+            name: monotonicity_report(surface)
+            for name, surface in validation_results.items()
+        },
+        "internal_test": {
+            name: monotonicity_report(surface)
+            for name, surface in test_results.items()
+        },
+    }
+    write_json(output / "20_monotonicity.json", monotonicity)
 
     next_stage = """# Next stage
 
