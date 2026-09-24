@@ -63,5 +63,16 @@ def tape_growth(before,after):
     x,y=before.get("rows_written"),after.get("rows_written")
     if before.get("generation") and type(x) is int and type(y) is int:
         if y<x:return {**base,"state":"WRITER_COUNTER_REGRESSION"}
-        result.update(rows_added=y-x,exact_rows=True,live=y>x)
+        delta=y-x
+        if delta>0:
+            result.update(rows_added=delta,exact_rows=True,live=True)
+        elif added>0:
+            # The filesystem proves new append bytes even though the auxiliary
+            # row counter did not advance. Preserve byte-level liveness and
+            # downgrade the stale counter instead of turning a live tape red.
+            result.update(rows_added=None,exact_rows=False,live=True)
+        elif removed:
+            result.update(rows_added=None,exact_rows=False,live=None)
+        else:
+            result.update(rows_added=0,exact_rows=True,live=False)
     return result
