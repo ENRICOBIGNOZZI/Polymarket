@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from v7_alpha_driven_maker_shadow import (
     POLICIES,
+    RotatingBookTimeline,
     active_markets,
     make_anchor,
     make_protocol,
@@ -93,6 +94,19 @@ class AlphaDrivenMakerShadowTests(unittest.TestCase):
         }
         flags = policy_flags(outcome="YES", external=external, pm=pm_features(row))
         self.assertTrue(flags["A4_MEAN_REVERSION"])
+
+    def test_rotating_reader_uses_nonempty_segment_when_current_is_empty(self):
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "current.jsonl").write_bytes(b"")
+            segment = root / "session.segment-1000000.jsonl"
+            segment.write_text("{}\n", encoding="utf-8")
+            now = time.time_ns()
+            segment.touch()
+            reader = RotatingBookTimeline(root, "a" * 40, retention_ms=10_000)
+            self.assertEqual(reader._candidate(), segment)
 
     def test_anchor_is_zero_authority_counterfactual(self):
         row = {
