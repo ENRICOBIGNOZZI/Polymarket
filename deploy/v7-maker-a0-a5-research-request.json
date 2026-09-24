@@ -1,0 +1,15 @@
+{
+  "schema": "polymarket_v7_maker_a0_a5_research_request_v1",
+  "version": 1,
+  "request_id": "maker-a0-a5-2h-current-20260924-a",
+  "instance_id": "i-04042ca7da7a23215",
+  "expected_research_sha": "6b109ca365da6cf65ba78ee6d88a17f9f409790c",
+  "research_branch": "research/full-feature-maker-20260924",
+  "minimum_wall_ns": 1790278818146000000,
+  "output_directory": "docs/research/maker-a0-a5-2026-09-24",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false
+}
