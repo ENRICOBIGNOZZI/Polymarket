@@ -162,7 +162,7 @@ jobs:
           printf '%s' {shlex.quote(payload)} | base64 -d > "$OUT/v7_alpha_driven_maker_shadow.py"
           printf '%s\n' {shlex.quote(source_sha)} > "$OUT/research_sha.txt"
           cd "$APP"
-          PYTHONPATH="$APP/scripts:$APP" python3 "$OUT/v7_alpha_driven_maker_shadow.py" \
+          PYTHONPATH="$SOURCE/scripts:$SOURCE:$APP/scripts:$APP" python3 "$OUT/v7_alpha_driven_maker_shadow.py" \
             --run-root "$ROOT" \
             --book-tape "$ROOT/research/repricing_book/book_observations/current.jsonl" \
             --book-status "$ROOT/research/repricing_book/fillability_ws_status.json" \
