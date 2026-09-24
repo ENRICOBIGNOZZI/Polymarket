@@ -59,22 +59,50 @@ jobs:
           out["workers"]=[{k:w.get(k) for k in ("context","market_id","state","engine_pid","settlement_pid",
               "budget_microdollars","last_error","blocker","launch_attempts")} for w in status.get("workers") or [] if isinstance(w,dict)]
           print("NATIVE_STATUS="+json.dumps(out,sort_keys=True,separators=(",",":")))
-          pat=re.compile(r"error|fatal|fail|invalid|not found|blocked|timeout|reject|exception|terminate|exit|usage",re.I)
           for p in sorted(root.glob("native_crypto_settlement_engine_*.log")):
               try:
                   lines=p.read_text(encoding="utf-8",errors="replace").splitlines()
                   st=p.stat()
               except OSError:
                   continue
-              tail=lines[-160:]
-              bad=[x for x in tail if pat.search(x)]
-              print("WORKER_LOG="+json.dumps({"file":p.name,"bytes":st.st_size,"bad":bad[-8:],"last":tail[-4:]},sort_keys=True,separators=(",",":")))
-          for rel in ("native_engine_manager.log","universe/collector.log"):
+              last={}
+              for line in reversed(lines[-20:]):
+                  try:
+                      value=json.loads(line)
+                  except Exception:
+                      continue
+                  if isinstance(value,dict):
+                      last=value; break
+              pure=last.get("pure_arb_native_shadow") if isinstance(last.get("pure_arb_native_shadow"),dict) else {}
+              pm=last.get("polymarket") if isinstance(last.get("polymarket"),dict) else {}
+              bn=last.get("binance") if isinstance(last.get("binance"),dict) else {}
+              by=last.get("bybit_confirmation") if isinstance(last.get("bybit_confirmation"),dict) else {}
+              compact={
+                  "file":p.name,"bytes":st.st_size,"json_summary":bool(last),
+                  "asset":last.get("asset"),"horizon":last.get("horizon"),
+                  "evaluations":last.get("evaluations"),
+                  "adapter_healthy":last.get("adapter_healthy"),
+                  "evidence_healthy":last.get("evidence_healthy"),
+                  "clean_capture":last.get("clean_capture"),
+                  "slow_context_failures":last.get("slow_context_failures"),
+                  "pm_messages":pm.get("messages"),"pm_errors":pm.get("errors"),
+                  "pm_reconnects":pm.get("reconnects"),"pm_drops":pm.get("drops"),
+                  "binance_transport_failures":bn.get("transport_failures"),"binance_drops":bn.get("drops"),
+                  "bybit_transport_failures":by.get("transport_failures"),"bybit_drops":by.get("drops"),
+                  "pure_arb_evaluations":pure.get("evaluations"),
+                  "pure_arb_stale_pair_rejections":pure.get("stale_pair_rejections"),
+                  "pure_arb_latency_max_ns":(pure.get("receive_to_decision") or {}).get("max_ns") if isinstance(pure.get("receive_to_decision"),dict) else None,
+              }
+              print("WORKER_SUMMARY="+json.dumps(compact,sort_keys=True,separators=(",",":")))
+          for rel in ("native_engine_manager.log","universe/collector.log","portfolio_guard.log","ledger_router.log"):
               p=root/rel
-              try: rows=p.read_text(encoding="utf-8",errors="replace").splitlines()[-12:]
+              try: rows=p.read_text(encoding="utf-8",errors="replace").splitlines()[-20:]
               except OSError: rows=[]
               print("TAIL="+json.dumps({"file":rel,"lines":rows},sort_keys=True,separators=(",",":")))
           PYREMOTE
+          echo "JOURNAL_BEGIN"
+          journalctl -u polymarket-v7-paper.service --since '2026-09-24 18:22:00' --until '2026-09-24 18:33:30' --no-pager -o short-iso | tail -n 120 || true
+          echo "JOURNAL_END"
           '''
           stdout,stderr=run(REGION,instance,command,180)
           print(stdout)
