@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
 from research.walk_forward_v3.maker_a0_a5_2h import (
-    Ridge, external_feature, pm_feature, full_execution_feature, feature_dict, split_60_40,
+    Ridge, external_feature, external_fair_feature, pm_feature, full_execution_feature, feature_dict, split_60_40,
     load_external_venue_csvs, external_venue_features, oriented_pm_anchor_features,
     load_feature_anchor_rows, load_book_anchor_rows, recent_trade_flow,
     build_static_market_metadata, WINDOW_NS,
@@ -23,6 +23,14 @@ class MakerA0A5Tests(unittest.TestCase):
         self.assertTrue(full_execution_feature("queue_ahead"))
         self.assertTrue(full_execution_feature("distance_to_reference_bp"))
         self.assertFalse(full_execution_feature("realized_markout_1s"))
+
+    def test_external_fair_features_are_external_only(self):
+        self.assertTrue(external_fair_feature("tape.external.spot_minus_oracle_bp"))
+        self.assertTrue(external_fair_feature("tape.deribit.implied_vol"))
+        self.assertTrue(external_fair_feature("external.binance_return_100ms_bp"))
+        self.assertFalse(external_fair_feature("tape.pm_yes_mid"))
+        self.assertFalse(external_fair_feature("pm.yes_bid_depth_l1"))
+        self.assertFalse(external_fair_feature("execution.yes_queue_ahead"))
 
     def test_external_feature_view_excludes_pm_context(self):
         row={
