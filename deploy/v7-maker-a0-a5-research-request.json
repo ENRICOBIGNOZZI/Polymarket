@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_maker_a0_a5_research_request_v1",
   "version": 1,
-  "request_id": "maker-a0-a5-2h-final-clean-a2-20260925-t",
+  "request_id": "maker-a0-a5-2h-final-observable-20260925-u",
   "instance_id": "i-04042ca7da7a23215",
   "expected_research_sha": "fdf25a42c125ff47ea5b0a865198c5c33d1b6e22",
   "research_branch": "research/full-feature-maker-20260924",
