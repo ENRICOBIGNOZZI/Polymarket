@@ -244,6 +244,10 @@ class Supervisor:
         self.startup_grace = int(service["startup_grace_seconds"])
         self.health_interval = float(service["health_interval_seconds"])
         self.stale_seconds = int(service["runtime_stale_seconds"])
+        # One transient RECOVERABLE sample is normal around market rollover or
+        # asynchronous settlement. Keep UNSAFE fail-closed, but require a
+        # bounded continuous RECOVERABLE interval before restarting the child.
+        self.recoverable_grace = max(self.health_interval, float(self.stale_seconds))
         self.termination_grace = float(service["termination_grace_seconds"])
         restart = service["restart"]
         self.restart_maximum = int(restart["maximum_attempts"])
@@ -252,6 +256,7 @@ class Supervisor:
         self.control = self.run_root / "control"
         self.status_path = self.control / "supervisor_status.json"
         self.restart_path = self.control / "supervisor_restarts.json"
+        self.last_health_failure_path = self.control / "supervisor_last_health_failure.json"
         self.lock = self.control / "supervisor.lock"
         self.child: subprocess.Popen[bytes] | None = None
         self.stopping = False
@@ -369,6 +374,34 @@ class Supervisor:
         while not self.stopping and time.monotonic() < deadline:
             time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
 
+    def recoverable_grace_expired(self, since: float | None, now: float) -> bool:
+        return (
+            since is not None
+            and now >= since
+            and now - since >= self.recoverable_grace
+        )
+
+    def record_health_failure(
+        self, classification: str, reasons: list[str] | tuple[str, ...],
+        *, elapsed_seconds: float, sustained_seconds: float,
+    ) -> None:
+        _atomic_json(
+            self.last_health_failure_path,
+            {
+                "schema": "polymarket_v7_supervisor_health_failure_v1",
+                "timestamp": int(time.time()),
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "expected_sha": self.expected_sha,
+                "classification": classification,
+                "reasons": sorted(set(reasons)),
+                "elapsed_seconds": max(0.0, float(elapsed_seconds)),
+                "sustained_seconds": max(0.0, float(sustained_seconds)),
+                "recoverable_grace_seconds": float(self.recoverable_grace),
+            },
+        )
+
     def reconcile(self) -> Any:
         result = assess_reconciliation(self.run_root, self.expected_sha, now=int(time.time()))
         self.status("reconciling" if result.may_start else "quarantined", result.reasons)
@@ -438,10 +471,12 @@ class Supervisor:
                 start_new_session=True,
             )
             launched = time.monotonic()
+            recoverable_since: float | None = None
             self.status("starting", assessment.reasons)
             failure: Any = None
             while not self.stopping and self.child.poll() is None:
-                elapsed = time.monotonic() - launched
+                now_monotonic = time.monotonic()
+                elapsed = now_monotonic - launched
                 # runtime_status may still describe the stopped runtime for a
                 # moment; do not mistake that stale file for the new child.
                 if elapsed < min(2.0, float(self.startup_grace)):
@@ -456,15 +491,30 @@ class Supervisor:
                 )
                 if health.classification == UNSAFE:
                     failure = health
+                    self.record_health_failure(
+                        health.classification, health.reasons,
+                        elapsed_seconds=elapsed, sustained_seconds=0.0,
+                    )
                     self.status("quarantined", health.reasons)
                     self.stop_child()
                     return 78
-                if elapsed >= self.startup_grace and health.classification == RECOVERABLE:
-                    failure = health
-                    self.status("unhealthy", health.reasons)
-                    self.stop_child()
-                    break
-                if health.classification == SAFE:
+                if health.classification == RECOVERABLE:
+                    if elapsed >= self.startup_grace:
+                        if recoverable_since is None:
+                            recoverable_since = now_monotonic
+                        sustained = max(0.0, now_monotonic - recoverable_since)
+                        self.status("degraded", health.reasons)
+                        if self.recoverable_grace_expired(recoverable_since, now_monotonic):
+                            failure = health
+                            self.record_health_failure(
+                                health.classification, health.reasons,
+                                elapsed_seconds=elapsed, sustained_seconds=sustained,
+                            )
+                            self.status("unhealthy", health.reasons)
+                            self.stop_child()
+                            break
+                elif health.classification == SAFE:
+                    recoverable_since = None
                     self.status("running")
                 time.sleep(self.health_interval)
 
