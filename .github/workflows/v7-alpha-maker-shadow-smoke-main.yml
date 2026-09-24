@@ -113,9 +113,18 @@ jobs:
           rm -rf "$OUT"
           mkdir -p "$OUT"
           BINARY="$APP/build/polymarket_v7_maker_research_replay"
+          SOURCE_REPO=/home/ubuntu/polymarket
+          SOURCE="$OUT/source"
           if [[ ! -x "$BINARY" ]]; then
             echo "PRECHECK_NOTE=BUILDING_EPHEMERAL_MAKER_REPLAY"
-            if ! cmake -S "$APP" -B "$OUT/build" -DCMAKE_BUILD_TYPE=Release >"$OUT/cmake-configure.log" 2>&1; then
+            if ! test -d "$SOURCE_REPO/.git"; then echo "PRECHECK_FAIL=SOURCE_REPO_MISSING"; exit 38; fi
+            sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^commit"
+            sudo -u ubuntu -H git -C "$SOURCE_REPO" worktree remove --force "$SOURCE" >/dev/null 2>&1 || true
+            rm -rf "$SOURCE"
+            chown ubuntu:ubuntu "$OUT"
+            sudo -u ubuntu -H git -C "$SOURCE_REPO" worktree add --detach "$SOURCE" "$SHA" >/dev/null
+            if [[ "$(sudo -u ubuntu -H git -C "$SOURCE" rev-parse HEAD)" != "$SHA" ]]; then echo "PRECHECK_FAIL=SOURCE_SHA_MISMATCH"; exit 39; fi
+            if ! cmake -S "$SOURCE" -B "$OUT/build" -DCMAKE_BUILD_TYPE=Release >"$OUT/cmake-configure.log" 2>&1; then
               echo "PRECHECK_FAIL=CMAKE_CONFIGURE"
               tail -n 120 "$OUT/cmake-configure.log" || true
               exit 36
