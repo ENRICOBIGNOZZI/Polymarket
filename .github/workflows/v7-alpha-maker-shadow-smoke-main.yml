@@ -156,8 +156,19 @@ jobs:
           fi
           if ! test -x "$BINARY"; then echo "PRECHECK_FAIL=MAKER_REPLAY_BUILD_MISSING"; tail -n 100 "$OUT/cmake-build.log" 2>/dev/null || true; exit 33; fi
           echo "PRECHECK_BINARY=$BINARY"
-          if ! test -s "$ROOT/research/repricing_book/book_observations/current.jsonl"; then echo "PRECHECK_FAIL=BOOK_TAPE_MISSING"; exit 34; fi
-          if ! test -s "$ROOT/research/repricing_book/fillability_ws_status.json"; then echo "PRECHECK_FAIL=BOOK_STATUS_MISSING"; exit 35; fi
+          BOOK_TAPE="$ROOT/research/repricing_book/book_observations/current.jsonl"
+          BOOK_STATUS="$ROOT/research/repricing_book/fillability_ws_status.json"
+          for _ in $(seq 1 200); do
+            if [[ -s "$BOOK_TAPE" && -s "$BOOK_STATUS" ]]; then break; fi
+            sleep 0.1
+          done
+          if ! test -s "$BOOK_TAPE"; then
+            echo "PRECHECK_FAIL=BOOK_TAPE_MISSING_AFTER_ROTATION_GRACE"
+            ls -lah "$ROOT/research/repricing_book/book_observations" | tail -n 40 || true
+            exit 34
+          fi
+          if ! test -s "$BOOK_STATUS"; then echo "PRECHECK_FAIL=BOOK_STATUS_MISSING"; exit 35; fi
+          echo "PRECHECK_BOOK_TAPE=$BOOK_TAPE"
           echo "PRECHECK_OK=1"
           printf '%s' {shlex.quote(payload)} | base64 -d > "$OUT/v7_alpha_driven_maker_shadow.py"
           printf '%s\n' {shlex.quote(source_sha)} > "$OUT/research_sha.txt"
