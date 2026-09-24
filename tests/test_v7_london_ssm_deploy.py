@@ -165,7 +165,8 @@ def test_same_sha_live_requires_fresh_running_exact_generation():
 
 def test_artifact_upload_never_overwrites_existing_exact_sha_generation():
     source = (ROOT / "ops/v7_london_ssm_deploy.py").read_text()
-    assert "V7_ARTIFACT_REUSED=1" not in source
+    assert 'REUSED=0' in source
+    assert 'if [[ -e "$TARGET" || -L "$TARGET" ]]' in source
     assert 'printf \'V7_ARTIFACT_REUSED=%s\\n\' "$REUSED"' in source
     assert 'rm -rf "$TARGET"' not in source
     assert "existing exact-SHA artifact target is unsafe" in source
