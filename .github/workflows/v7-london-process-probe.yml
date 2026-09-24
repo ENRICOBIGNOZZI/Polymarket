@@ -90,6 +90,16 @@ jobs:
           systemctl show polymarket-v7-paper.service -p ActiveEnterTimestamp -p ExecMainStatus -p ExecMainCode -p Result -p MainPID -p Environment --no-pager | head -30 || true
           echo "=== PAPER STATUS ==="
           systemctl --no-pager --full status polymarket-v7-paper.service || true
+          echo "=== ENTRYPOINT EXEC DIAGNOSTICS ==="
+          ENTRY=/home/ubuntu/polymarket-runtime/current/ops/v7_service_entrypoint.sh
+          echo "entry=$ENTRY"
+          readlink -f "$ENTRY" || true
+          stat -Lc 'mode=%A octal=%a owner=%U group=%G type=%F path=%n' "$ENTRY" 2>&1 || true
+          namei -l "$ENTRY" 2>&1 || true
+          findmnt -T "$ENTRY" -o TARGET,SOURCE,FSTYPE,OPTIONS -n 2>&1 || true
+          sudo -u ubuntu test -r "$ENTRY"; echo "ubuntu_readable=$?" || true
+          sudo -u ubuntu test -x "$ENTRY"; echo "ubuntu_executable=$?" || true
+          head -1 "$ENTRY" 2>&1 || true
           echo "=== SUPERVISOR CONTROL ==="
           ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
           echo "--- KILL EARLY ---"
