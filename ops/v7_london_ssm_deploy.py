@@ -271,7 +271,7 @@ def cancel_prior_deploy_transports(region: str, instance: str,
 
 PROBE_COMMAND = r"""set -euo pipefail
 python3 - <<'PY'
-import json,os,shlex,subprocess,socket
+import json,os,shlex,subprocess,socket,time
 def cmd(args):
     p=subprocess.run(args,text=True,capture_output=True)
     return p.returncode,(p.stdout or '').strip(),(p.stderr or '').strip()
@@ -318,12 +318,22 @@ if run_root and os.path.isabs(run_root):
         with open(path) as f: runtime=json.load(f)
     except Exception:
         runtime={}
-rc,working_directory,_=cmd(['systemctl','show',unit,'-p','WorkingDirectory','--value'])
+runtime_app=env.get('POLYMARKET_APP_DIR','')
 release_sha=None
-if rc==0 and os.path.isabs(working_directory):
+if runtime_app and os.path.isabs(runtime_app):
     try:
-        with open(os.path.join(working_directory,'deploy/london/runtime_sha')) as f:release_sha=f.read().strip()
+        with open(os.path.join(runtime_app,'deploy/london/runtime_sha')) as f:release_sha=f.read().strip()
     except OSError:pass
+runtime_pid=0
+runtime_pid_alive=False
+runtime_fresh=False
+try:
+    runtime_pid=int(runtime.get('pid') or 0)
+    if runtime_pid>0:
+        os.kill(runtime_pid,0); runtime_pid_alive=True
+    runtime_fresh=abs(int(time.time())-int(runtime.get('timestamp') or 0))<=30
+except (OSError,TypeError,ValueError):
+    pass
 rc,started_at,_=cmd(['systemctl','show',unit,'-p','ActiveEnterTimestamp','--value'])
 print('V7_SSM_PROBE='+json.dumps({
   'hostname':socket.gethostname(),
@@ -337,6 +347,9 @@ print('V7_SSM_PROBE='+json.dumps({
   'run_root':run_root or None,
   'runtime_state':runtime.get('state'),
   'runtime_sha':runtime.get('model_sha'),
+  'runtime_pid':runtime_pid,
+  'runtime_pid_alive':runtime_pid_alive,
+  'runtime_fresh':runtime_fresh,
   'release_sha':release_sha,
   'service_started_at':started_at if rc==0 else None,
   'paper_only':runtime.get('paper_only'),
@@ -483,15 +496,33 @@ assert v.get('runtime_training') is False
 PY
 install -d -o "$USER_NAME" -g "$(id -gn "$USER_NAME")" "$ARTIFACT_ROOT/by-sha"
 chown -R "$USER_NAME:$(id -gn "$USER_NAME")" "$TMP"
-rm -rf "$TARGET"
-mv "$TMP" "$TARGET"
+REUSED=0
+if [[ -e "$TARGET" || -L "$TARGET" ]]; then
+  [[ -d "$TARGET" && ! -L "$TARGET" ]] || { echo "existing exact-SHA artifact target is unsafe" >&2; exit 66; }
+  python3 - "$TARGET/manifest.json" "$SHA" <<'PYEXISTING'
+import json,sys
+v=json.load(open(sys.argv[1],encoding='utf-8'))
+assert v.get('schema')=='polymarket_v7_runtime_artifact_bundle_v1'
+assert v.get('target_model_sha')==sys.argv[2]
+assert v.get('paper_only') is True
+assert v.get('authenticated_execution') is False
+assert v.get('real_order_submission') is False
+assert v.get('runtime_training') is False
+PYEXISTING
+  rm -rf "$TMP"
+  REUSED=1
+else
+  mv "$TMP" "$TARGET"
+fi
 rm -f "$B64" "$TGZ"
 printf 'V7_ARTIFACT_READY=%s\n' "$TARGET"
+printf 'V7_ARTIFACT_REUSED=%s\n' "$REUSED"
 """
     stdout, _ = run(region, instance, finalize, 300)
     if f"V7_ARTIFACT_READY={target}" not in stdout:
         raise SsmDeployError("artifact finalize marker missing")
-    return {"bytes": size, "sha256": digest, "chunks": chunks, "remote": target}
+    reused = "V7_ARTIFACT_REUSED=1" in stdout
+    return {"bytes": size, "sha256": digest, "chunks": chunks, "remote": target, "reused": reused}
 
 
 def cutover_command(expected_sha: str, selected: dict[str, Any]) -> str:
@@ -558,7 +589,6 @@ trap cleanup EXIT
 # Stage/build/test runs entirely as the service user that owns the immutable
 # worktree. Keep root only for the later cutover/systemd control plane.
 install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$RUNTIME_ROOT" "$RUNTIME_ROOT/by-sha"
-rm -rf -- "$RUNTIME_ROOT/by-sha/$SHA"
 
 # The canonical SSM path reuses the exact-SHA GitHub release matrix. The
 # stage script independently re-verifies those check-runs before skipping its
@@ -611,6 +641,20 @@ PY
 """
 
 
+def same_sha_live(selected: dict[str, Any], expected_sha: str) -> bool:
+    return bool(
+        selected.get("unit_active") is True
+        and selected.get("runtime_state") == "running"
+        and selected.get("runtime_sha") == expected_sha
+        and selected.get("release_sha") == expected_sha
+        and selected.get("runtime_pid_alive") is True
+        and selected.get("runtime_fresh") is True
+        and selected.get("paper_only") is True
+        and selected.get("authenticated_execution") is False
+        and selected.get("real_order_submission") is False
+    )
+
+
 def deploy(region: str, stack_name: str, expected_sha: str,
            expected_tailscale_ip: str, expected_instance_id: str,
            artifact: Path) -> dict[str, Any]:
@@ -621,6 +665,30 @@ def deploy(region: str, stack_name: str, expected_sha: str,
     candidates = candidate_instances(region, stack_name)
     probes = probe(region, candidates)
     selected = select_target(probes, expected_tailscale_ip, expected_instance_id)
+    if same_sha_live(selected, expected_sha):
+        return {
+            "schema": "polymarket_v7_ssm_deploy_receipt_v1",
+            "expected_sha": expected_sha,
+            "region": region,
+            "aws_account": identity.get("Account"),
+            "selected": selected,
+            "probes": probes,
+            "cancelled_prior_deploy_transports": [],
+            "artifact": {"reused": True, "remote": f"/home/{selected['app']['user']}/polymarket-artifacts/by-sha/{expected_sha}"},
+            "cutover": {
+                "sha": expected_sha,
+                "run_root": selected.get("run_root"),
+                "pid": selected.get("runtime_pid"),
+                "paper_only": True,
+                "authenticated_execution": False,
+                "real_order_submission": False,
+                "reused_running_exact_sha": True,
+            },
+            "stderr_tail": "",
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+        }
     recovered_transports = cancel_prior_deploy_transports(
         region, selected["instance_id"], expected_sha,
     )
