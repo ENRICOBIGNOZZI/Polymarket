@@ -70,10 +70,27 @@ jobs:
           systemctl is-active polymarket-v7-retention.timer 2>/dev/null || true
           systemctl show polymarket-v7-retention.timer -p ActiveState -p SubState -p NextElapseUSecRealtime -p LastTriggerUSec --no-pager 2>/dev/null || true
           systemctl show polymarket-v7-retention.service -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus --no-pager 2>/dev/null || true
-          journalctl -u polymarket-v7-retention.service -n 40 --no-pager 2>/dev/null || true
+          journalctl -u polymarket-v7-retention.service -n 80 --no-pager 2>/dev/null | grep -v 'python3.*{"after_bytes"' || true
           if [[ -n "$ROOT_EARLY" ]]; then
-            echo "--- retention status json ---"
-            cat "$ROOT_EARLY/control/london_buffer_retention_status.json" 2>/dev/null || true
+            echo "--- retention compact ---"
+            python3 - "$ROOT_EARLY/control/london_buffer_retention_status.json" <<'PYRET'
+          import json,sys
+          try:
+              v=json.load(open(sys.argv[1],encoding="utf-8"))
+          except Exception as exc:
+              print("RETENTION_COMPACT="+json.dumps({"read_error":type(exc).__name__},sort_keys=True)); raise SystemExit(0)
+          comp=v.get("lossless_compression") if isinstance(v.get("lossless_compression"),dict) else {}
+          roll=v.get("rolling_retirement") if isinstance(v.get("rolling_retirement"),dict) else {}
+          pres=v.get("hft_opportunity_preservation") if isinstance(v.get("hft_opportunity_preservation"),dict) else {}
+          out={k:v.get(k) for k in ("schema","timestamp","state","before_bytes","after_compression_bytes","after_bytes","target_bytes","maximum_bytes","managed_files","verified_offload_receipt")}
+          out["compression_state"]=comp.get("state")
+          out["compression_failures"]=(comp.get("failures") or [])[:20]
+          out["rolling_state"]=roll.get("state")
+          out["rolling_failures"]=(roll.get("failures") or [])[:20]
+          out["preservation_failures"]=(pres.get("failures") or [])[:20]
+          out["deleted_count"]=len(v.get("deleted") or [])
+          print("RETENTION_COMPACT="+json.dumps(out,sort_keys=True,separators=(",",":")))
+          PYRET
           fi
           echo "=== CPU VISIBILITY ==="
           echo "nproc=$(nproc 2>/dev/null || true) nproc_all=$(nproc --all 2>/dev/null || true)"
