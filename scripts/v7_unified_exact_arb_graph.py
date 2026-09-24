@@ -209,6 +209,7 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]], lookup
     proof = prove(raw)  # Fraction-based statewise equality/inequality proof.
     states, legs = raw["states"], raw["legs"]
     compiled_legs, nodes = [], []
+    negrisk_conditions = set()
     for leg in legs:
         outcome = str(leg.get("outcome") or "").upper()
         market = resolve_market(markets, leg.get("selector"), lookup)
@@ -217,6 +218,8 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]], lookup
             mapping = token_map(market) or mapping
         if mapping is None or outcome not in mapping:
             raise GraphError("unresolved_claim")
+        if market.get("neg_risk") is True or market.get("negRisk") is True:
+            negrisk_conditions.add(str(market.get("condition_id") or ""))
         claim = node(market, mapping[outcome], outcome)
         coefficient = frac(leg.get("coefficient", 1))
         if coefficient <= 0: raise GraphError("non_positive_coefficient")
@@ -257,6 +260,16 @@ def _compile_relation(raw: dict[str, Any], markets: list[dict[str, Any]], lookup
                 "relation_type": str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY"),
                 "directions": directions(raw),
                 "enabled": raw.get("enabled") is True and str(raw.get("relation_type") or "CONSTANT_PAYOUT_EQUALITY")=="CONSTANT_PAYOUT_EQUALITY", "automatic_promotion": False}
+    conditions={leg["condition_id"] for leg in compiled_legs}
+    if (relation["relation_family"]=="NEGRISK_COMPLETE_SET"
+            or (negrisk_conditions and len(conditions)>1)
+            or (relation["transformation"] or {}).get("kind")=="NEGRISK_CONVERSION"):
+        # Registry and component booleans cannot bypass the same missing
+        # independent semantics. Preserve the mathematical proof as research
+        # material, but do not enable a cross-condition NegRisk equality.
+        # Same-condition binary complete sets retain their separate semantics.
+        relation.update(enabled=False,verification="UNVERIFIED_CANDIDATE",
+            semantic_rejection_reason="independent_negrisk_exhaustiveness_or_conversion_proof_required")
     if not relation["relation_id"]: raise GraphError("relation_id")
     if len({leg["token_id"] for leg in compiled_legs}) != len(compiled_legs):
         raise GraphError("duplicate_token_claim")
@@ -319,33 +332,17 @@ def automatic_partition_relations(markets: list[dict[str, Any]]) -> list[dict[st
 
 
 def automatic_negrisk_relations(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Compile a NegRisk event complete set only from per-member attestation."""
-    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for market in markets:
-        if (market.get("neg_risk") is True or market.get("negRisk") is True) and str(market.get("event_id") or ""):
-            groups[str(market["event_id"])].append(market)
-    result=[]
-    for event_id, members in groups.items():
-        members=sorted(members,key=lambda value:str(value.get("market_id") or ""))
-        member_ids=[str(row.get("market_id") or "") for row in members]
-        if (len(members)<2 or any(row.get("neg_risk_complete_set_verified") is not True for row in members)
-                or any(sorted(row.get("neg_risk_complete_set_market_ids") or []) != member_ids for row in members)
-                or any(outcome_map(row) is None or "YES" not in outcome_map(row) for row in members)):
-            continue
-        states=[str(row["market_id"]) for row in members]
-        legs=[]
-        for index,row in enumerate(members):
-            vector=[0]*len(members);vector[index]=1
-            legs.append({"selector":{"market_id":str(row["market_id"])},"outcome":"YES",
-                         "coefficient":1,"payout_vector":vector})
-        raw={"id":"negrisk-complete:"+event_id,"enabled":True,"relation_family":"NEGRISK_COMPLETE_SET",
-             "discovery":"AUTO_VERIFIED_NEGRISK_COMPLETE_SET","directions":["BUY_BASKET"],
-             "states":states,"guaranteed_payout":1,"legs":legs,
-             "capital_transformation_semantics":"NEGRISK_REDEMPTION_LOCKED"}
-        try:prove_relation(raw)
-        except ValueError:continue
-        result.append(raw)
-    return result
+    """No one-hot state space may be manufactured from metadata booleans.
+
+    The independent block verifier can observe all current contract members,
+    but the adapter enforces AT MOST one winner, not an exactly-one proof for
+    an unresolved event. It also allows the oracle to append questions. Until
+    an independent semantic verifier supports exhaustiveness, these candidates
+    cannot enter through this automatic discovery path. Explicit finite-state
+    research registries retain their mathematical proof, but cannot bypass
+    the same semantic admission gate in _compile_relation.
+    """
+    return []
 
 
 def component_sources(inputs: list[dict[str, Any]], model_sha: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -359,6 +356,24 @@ def component_sources(inputs: list[dict[str, Any]], model_sha: str) -> tuple[lis
     relations, candidates, provenance = [], [], []
     for value in inputs:
         schema = str(value.get("schema") or "UNKNOWN")
+        if schema == "polymarket_v7_negrisk_block_attestation_v1":
+            from v7_exact_arb_negrisk_attestation import validate_receipt
+            try:
+                observed=validate_receipt(value)
+            except (ValueError,TypeError,KeyError):
+                candidates.append({"relation_family":"NEGRISK_COMPLETE_SET","verification":"UNVERIFIED_CANDIDATE",
+                                   "source_schema":schema,"reason":"invalid_negrisk_block_attestation"})
+                provenance.append({"schema":schema,"safe":False})
+                continue
+            # Historical model-independent facts are allowed only as disabled
+            # provenance, never as a live lease or a finite-state equality.
+            provenance.append({"schema":schema,"safe":True,"proof_hash":value["proof_hash"],
+                               "block":observed["block"],"scope":"HISTORICAL_BLOCK_OBSERVATION_ONLY"})
+            candidates.append({"relation_family":"NEGRISK_COMPLETE_SET","verification":"UNVERIFIED_CANDIDATE",
+                "event_id":observed["event_id"],"membership_hash":observed["membership_hash"],
+                "reason":"independent_terminal_exhaustiveness_unproven","source_schema":schema,
+                "attestation_reasons":observed["reasons"],"proof_hash":value["proof_hash"]})
+            continue
         safe_input = (value.get("model_sha") == model_sha and value.get("paper_only") is True
                       and value.get("authenticated_execution") is False
                       and value.get("real_order_submission") is False)
@@ -441,6 +456,13 @@ def compile_graph(registries: list[dict[str, Any]], universe: dict[str, Any], mo
     unverified=[{"relation_family":"NEGRISK_TRANSFORMATION","verification":"UNVERIFIED_CANDIDATE","market_id":str(row.get("market_id") or ""),"reason":"no_verified_conversion_semantics"}
                 for row in markets if row.get("neg_risk") is True or row.get("negRisk") is True]
     unverified.extend(component_candidates)
+    unverified.extend({"relation_family":relation["relation_family"],"relation_id":relation["relation_id"],
+        "verification":"UNVERIFIED_CANDIDATE","reason":relation["semantic_rejection_reason"]}
+        for relation in relations if relation.get("semantic_rejection_reason"))
+    unverified.extend({"relation_family":"NEGRISK_COMPLETE_SET","verification":"UNVERIFIED_CANDIDATE",
+        "market_id":str(row.get("market_id") or ""),"event_id":str(row.get("event_id") or ""),
+        "reason":"metadata_flag_is_not_independent_terminal_exhaustiveness_proof"}
+        for row in markets if row.get("neg_risk") is True or row.get("negRisk") is True)
     for market in markets:
         mapping=outcome_map(market)
         if mapping and not (market.get("binary_partition_verified") is True if len(mapping)==2 else market.get("partition_verified") is True):

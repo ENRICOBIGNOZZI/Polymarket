@@ -1,0 +1,21 @@
+# SOTA gap analysis
+
+Study: `3b5a3d2787f463f729a1c1bf14b2173ec6c868cba9138f6eaca92697a4c0dd3c`. Recorded model SHA: `f50147e18e02ebed76cabe900b708e4d9479e603`.
+
+Session: 1790267378940-30808. PAPER / zero authority.
+
+Automatically generated from this directory's `report.json` and hash-bound evidence. This is a recorded-session analysis, not current London health, full CI certification or a profitability claim. Missing data means UNVERIFIED, never zero.
+
+| Component | Current | Target | Evidence | Gap | Action |
+| --- | --- | --- | --- | --- | --- |
+| Native raw replay | RECORDED | Complete supplied replay validated | data_quality.native_replay_validated=True | Producer tail and graph-decision re-execution not certified | Reconcile producer counters and independently replay graph decisions |
+| Diagnostic relations | RECORDED | Causal adequately observed relation population | 130 retained evaluations | Update-weighted diagnostics are not independent opportunities | Preserve episode censoring and cluster by event/time |
+| Universe / semantics | UNVERIFIED | Broad independently verified payoff coverage | 2 diagnostic family/direction groups; exchange coverage unknown | No coverage weights or independent NegRisk completeness attestation in study | Verify settlement semantics before enabling new relations |
+| Execution | SCENARIO_ONLY | Calibrated arrival, matching, ACK/cancel and unwind | arms and shared_execution; separate alternative worlds | Public L2 simulation and recorded metadata leases do not attest venue behavior or atomic match-time fee freshness | Require exact admitted receipt provenance; verify remaining fee/matching semantics |
+| Control-plane continuity | CHECKPOINTED_PREFIX | No fills after observed metadata invalidation | {"authenticated_execution":false,"automatic_promotion":false,"execution_authority":false,"last_record_sha256":"6065294ebe911ac66d713f775dff2f64657199544e7aaebfff91fc31393b6a7a","paper_only":true,"producer_tail_completeness_verified":false,"real_capital_at_risk":false,"real_order_submission":false,"records":69,"schema":"polymarket_v7_native_exact_arb_control_receipt_v1","state":"CHECKPOINTED_PREFIX","venue_semantics_verified":false,"watermark_monotonic_ns":1533906995959458} | Only recorded local source-admission intervals; not independent venue semantics | Preserve all control transitions and checkpoints alongside causal books |
+| Sizing / capital | MODEL_LIFECYCLE_ONLY | Global q*, champion parity, verified inventory and release | capital_plans/transitions.jsonl; separate no-release resource_plans baseline | Known modeled ACK outcomes release excess reservations, not settlement payout; fees, matching and economic capacity remain unverified | Verify venue accounting, retained inventory settlement and capacity under observed depth |
+| Maker / markout | UNVERIFIED | Calibrated paired fill and adverse-selection economics | UNVERIFIED | No calibrated maker queue evidence in this study | Separate maker forward calibration from locked taker PnL |
+| Latency | PARTIALLY_MEASURED | Full segmented latency with champion non-regression | 130 paired host-clock observations | Transport/ACK and isolated relation compute unmeasured | Measure missing stages and actual champion under side-by-side load |
+| Runtime / release | UNVERIFIED | Fresh canonical identity health and exact-SHA official release | {"assessment_as_of_ms":null,"reported_engineering_health":null,"reported_graph_health":null,"state":"UNVERIFIED"} | Optional receipt is not remote attestation, study uptime or clean release CI | Obtain canonical runtime receipt and complete official release gates |
+| Reporting | OFFLINE_HOURLY_WINDOWS | Reproducible reports plus hourly live evidence | Four documents and hash-bound hourly.jsonl | Hourly multi-session service not established; session monotonic hours are not UTC or observed uptime | Wire bounded hourly orchestration with session/clock provenance without pooling alternate arms |
+| Economic decision | INSUFFICIENT_EVIDENCE | Predeclared bounded causal economic test | economic_evidence.research_decision=null | No sufficient coverage/exposure, after-cost portfolio PnL or cluster uncertainty | Freeze protocol, collect 8–48h qualifying evidence, apply stopping criteria |

@@ -1,5 +1,11 @@
 # Exact-arbitrage engineering checkpoint — not a final economic report
 
+Historical checkpoint. Later worktree evidence is in
+[fee attribution and public settlement observations](exact-arb-fee-attribution-checkpoint-20260924.md)
+[independent NegRisk observation](exact-arb-negrisk-attestation-checkpoint-20260924.md),
+with the subsequent [causal shadow capital lifecycle](exact-arb-capital-lifecycle-checkpoint-20260924.md).
+These do not close the remaining technical gates or the London economic study.
+
 Branch: `research/unified-exact-arb-graph`; PR #1470 remains draft.
 Initial audited commit: `3adf41f90cf613327dc5c426065d2a442abb06c4`.
 Current base commit: `01950279cda4b531b2c302806d68b605864c9a7b` (audit report commit).

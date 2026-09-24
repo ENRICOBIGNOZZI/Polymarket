@@ -76,12 +76,13 @@ def collect(root,identity,*,service_active,kill_exists,prometheus_ready,grafana_
     clock=load(control/"clock_guard.json");fencing=load(control/"fencing_supervisor_status.json")
     book=load(base/"fillability_ws_status.json");pure=load(base/"pure_arb_status.json")
     graph=load(base/"unified_exact_arb_graph_status.json")
+    graph_native=load(base/"graph_hotset/native_exact_arb_status.json")
     collectors={name:load(base/name) for name in ("pure_arb_arrival_survival_status.json",
         "pure_arb_deep_sizing_status.json","exchange_execution_status.json",
         "exact_arb_exchange_universe_status.json","unified_exact_arb_graph_execution_status.json")}
     queue=native.get("native_observations_queue_depth",runtime.get("native_observations_queue_depth"))
-    drops=graph.get("dropped_observations")
-    graph_drops=sum(drops.values()) if isinstance(drops,dict) and all(counter(v) is not None for v in drops.values()) else None
+    graph_drop_parts=[counter(graph_native.get(k)) for k in ("observations_dropped","full_evidence_dropped")]
+    graph_drops=sum(graph_drop_parts) if all(v is not None for v in graph_drop_parts) else None
     out={"schema":"polymarket_v7_canonical_runtime_health_v1",**SAFETY,
          "runtime_instance_id":identity.get("runtime_instance_id"),"runtime_az":identity.get("runtime_az"),
          "runtime_model_sha":runtime.get("model_sha"),"runtime_release_sha":identity.get("runtime_release_sha"),
@@ -97,9 +98,20 @@ def collect(root,identity,*,service_active,kill_exists,prometheus_ready,grafana_
          "book_rows_written_total":counter(book.get("book_events_written")),
          "candidate_rows_written_total":counter(pure.get("cycles_total")),
          "counter_scope":"CURRENT_WRITER_GENERATION_NOT_LIFETIME_ACROSS_RESTARTS",
-         "graph_state":graph.get("state"),"graph_generation":graph.get("graph_generation"),
-         "graph_relations":counter(graph.get("relations_compiled")),
-         "graph_events_processed":counter(graph.get("events_processed")),"graph_dropped_events":graph_drops,
+         "graph_state":graph_native.get("state"),"graph_generation":graph_native.get("graph_generation"),
+         "graph_relations":counter(graph_native.get("relation_directions")),
+         "graph_relation_count_scope":"COMPILED_DIRECTIONAL_RELATIONS",
+         "graph_events_processed":counter(graph_native.get("frames_processed")),"graph_dropped_events":graph_drops,
+         "graph_drop_counter_scope":"TELEMETRY_RECORDS_NOT_UNIQUE_MARKET_EVENTS",
+         "graph_relation_evaluations":counter(graph_native.get("evaluations")),
+         "graph_queue_depth":counter(graph_native.get("queue_depth")),
+         "graph_full_evidence_dropped":counter(graph_native.get("full_evidence_dropped")),
+         "graph_ws_frames_written":counter(graph_native.get("ws_frames_written")),
+         "graph_ws_frames_dropped":counter(graph_native.get("ws_frames_dropped")),
+         "graph_ws_frames_disk_suppressed":counter(graph_native.get("ws_frames_disk_suppressed")),
+         "graph_control_journal_failed":graph_native.get("control_journal_failed") if type(graph_native.get("control_journal_failed")) is bool else None,
+         "graph_control_records_written":counter(graph_native.get("control_records_written")),
+         "graph_reference_state":graph.get("state"),
          "collector_states":{k:{"state":v.get("state"),"fresh":fresh(v,now_ms)} for k,v in collectors.items()},
          "prometheus_ready":prometheus_ready,"grafana_ready":grafana_ready,"timestamp_ms":now_ms,
          "economic_evidence":"NOT_ASSESSED_BY_HEALTH_RECEIPT"}
@@ -122,7 +134,20 @@ def collect(root,identity,*,service_active,kill_exists,prometheus_ready,grafana_
     for name,value in (("clock",clock),("fencing",fencing),("native",native),("book",book),("pure_arb",pure)):
         checks[name+"_model_match"]=runtime.get("model_sha") is not None and value.get("model_sha")==runtime.get("model_sha")
     out["checks"]=checks;out["engineering_health"]="HEALTHY" if all(checks.values()) else "UNSAFE_OR_INCOMPLETE"
-    out["graph_health"]="HEALTHY" if (fresh(graph,now_ms) and graph.get("state")=="COLLECTING"
-        and graph_drops==0 and graph.get("model_sha")==runtime.get("model_sha") and runtime.get("model_sha")) else "UNAVAILABLE_OR_DEGRADED"
+    out["graph_health"]="HEALTHY" if (fresh(graph_native,now_ms,5000) and graph_native.get("state")=="RUNNING"
+        and graph_native.get("schema")=="polymarket_v7_native_exact_arb_status_v1"
+        and all(graph_native.get(k) is v for k,v in SAFETY.items())
+        and graph_native.get("execution_authority") is False
+        and type(graph_native.get("valid_until_ms")) is int and now_ms < graph_native["valid_until_ms"]
+        and bool(graph_native.get("target_bundle_sha256"))
+        and graph_native.get("target_bundle_sha256")==graph_native.get("observed_bundle_sha256")
+        and graph_drops==0 and graph_native.get("disk_suppressed")==0 and graph_native.get("full_disk_suppressed")==0
+        and graph_native.get("invalid_frames")==0
+        and out["graph_ws_frames_written"] is not None and out["graph_ws_frames_written"]>0
+        and out["graph_ws_frames_dropped"]==0 and out["graph_ws_frames_disk_suppressed"]==0
+        and out["graph_control_journal_failed"] is False
+        and out["graph_control_records_written"] is not None and out["graph_control_records_written"]>0
+        and bool(re.fullmatch(r"[0-9a-f]{64}",str(graph_native.get("control_record_sha256") or "")))
+        and graph_native.get("model_sha")==runtime.get("model_sha") and runtime.get("model_sha")) else "UNAVAILABLE_OR_DEGRADED"
     out["missing_fields"]=[k for k,v in out.items() if v is None]
     return out

@@ -9,7 +9,7 @@ import sys
 from types import SimpleNamespace
 import pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"scripts"))
-from v7_unified_exact_arb_graph import SAFETY, GraphError, evaluate, compile_graph, validate_graph, prove
+from v7_unified_exact_arb_graph import SAFETY, GraphError, evaluate, compile_graph, validate_graph, prove, sha
 from v7_exact_arb_causal import CausalBooks, ResourceLedger, ReconstructedDepth
 from v7_unified_exact_arb_graph_execution_shadow import simulate
 from v7_exact_arb_native_compile import compile_native
@@ -17,8 +17,10 @@ from v7_exact_arb_native_compile import compile_native
 
 def relation(n=3):
     return {"relation_id":"test","enabled":True,"guaranteed_payout":"1","reserve_per_unit":".0005",
-            "relation_family":"PARTITION","legs":[{"token_id":str(i),"coefficient":"1","fee_rate":"0",
-            "fee_exponent":"1","minimum_order":"0"} for i in range(n)]}
+            "relation_family":"PARTITION","states":[str(i) for i in range(n)],
+            "legs":[{"token_id":str(i),"coefficient":"1","fee_rate":"0",
+            "payout_vector":[int(j==i) for j in range(n)],
+            "fee_exponent":"1","minimum_order":"0","tick_size":".01"} for i in range(n)]}
 
 
 def book(t,price=".2",size="10",lineage="a"):
@@ -28,7 +30,9 @@ def book(t,price=".2",size="10",lineage="a"):
 
 def opportunity(r=None):
     r=r or relation()
+    anchors={leg["token_id"]:book(100) for leg in r["legs"]}
     return {**SAFETY,"model_sha":"a"*40,"timestamp_ms":100,"graph_generation":"b"*64,
+            "decision_books":anchors,"decision_books_sha256":sha(anchors),
             "opportunity_id":"id","relation":r,"result":{"direction":"BUY","quantity":"2","net_locked_pnl":".799"}}
 
 
@@ -42,18 +46,23 @@ def test_future_book_never_becomes_arrival_book():
     assert [r["book_timestamp_ms"] for r in parallel["legs"]]==[100,100,100]
     assert [r["book_timestamp_ms"] for r in sequential["legs"]]==[100,102,102]
     assert Fraction(parallel["net_locked_pnl"])>0
-    assert Fraction(sequential["net_locked_pnl"])<0
+    # Limits come from the detection book, not the less favorable arrival book.
+    assert [Fraction(r["filled_size"]) for r in sequential["legs"]] == [2,0,0]
+    assert sequential["state"] == "PARTIAL_UNWOUND"
+    assert Fraction(sequential["realized_counterfactual_pnl"]) < 0
     assert parallel["realized_counterfactual_pnl"] is None
 
 
 def test_partial_leg_unwind_and_unavailable_liquidity():
     history=CausalBooks()
-    initial={str(i):book(100,size="1" if i==2 else "10") for i in range(3)}
-    history.ingest(100,initial);history.ingest(110,{str(i):book(110) for i in range(3)})
+    initial={str(i):book(100) for i in range(3)}
+    arrival={str(i):book(101,size="1" if i==2 else "10") for i in range(3)}
+    history.ingest(100,initial);history.ingest(101,arrival);history.ingest(110,{str(i):book(110) for i in range(3)})
     result=simulate(opportunity(),history,"BATCH",1,0)
     assert result["partial_fill"] and result["number_of_filled_legs"]==3
     assert result["state"]=="PARTIAL_UNWOUND" and Fraction(result["realized_counterfactual_pnl"])<0
-    initial["0"]["bids"]=[]
+    arrival["0"]["bids"]=[]
+    history=CausalBooks(); history.ingest(100,initial); history.ingest(101,arrival); history.ingest(110,{})
     result=simulate(opportunity(),history,"BATCH",1,0)
     assert result["state"]=="EXPOSURE_REMAINS" and result["realized_counterfactual_pnl"] is None
 

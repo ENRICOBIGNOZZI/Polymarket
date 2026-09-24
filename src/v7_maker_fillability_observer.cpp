@@ -5,6 +5,7 @@
 #include "pm/v7_pure_arb_lane.hpp"
 #include "pm/v7_maker_lane.hpp"
 #include "pm/v7_spsc.hpp"
+#include "pm/v7_exact_arb_graph_shadow.hpp"
 
 #include <boost/json.hpp>
 
@@ -187,6 +188,8 @@ struct Options {
     bool selection_explicit = false;
     bool pure_arb_paper = false;
     bool graph_deep_evidence = false;
+    bool graph_native_shadow = false;
+    std::string graph_capital_policy;
     double pure_arb_reserve_per_share = 0.0005;
     std::int64_t pure_arb_max_leg_skew_ms = 100;
     std::int64_t pure_arb_max_receive_to_decision_ns = 50'000'000LL;
@@ -215,6 +218,8 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--compact-label-tape-dir") options.compact_label_tape_dir = next();
         else if (arg == "--pure-arb-paper") options.pure_arb_paper = true;
         else if (arg == "--graph-deep-evidence") options.graph_deep_evidence = true;
+        else if (arg == "--graph-native-shadow") options.graph_native_shadow = true;
+        else if (arg == "--graph-capital-policy") options.graph_capital_policy = next();
         else if (arg == "--pure-arb-reserve-per-share") options.pure_arb_reserve_per_share = std::stod(next());
         else if (arg == "--pure-arb-max-leg-skew-ms") options.pure_arb_max_leg_skew_ms = std::stoll(next());
         else if (arg == "--pure-arb-max-receive-to-decision-ms") options.pure_arb_max_receive_to_decision_ns = std::stoll(next()) * 1'000'000LL;
@@ -238,6 +243,10 @@ Options parse_options(int argc, char** argv) {
     }
     if (options.pure_arb_paper && (!options.selection_only || options.state_only || options.fair_only)) {
         throw std::runtime_error("--pure-arb-paper requires the full selection-only causal book observer");
+    }
+    if (options.graph_native_shadow && (!options.selection_only || !options.graph_deep_evidence
+        || options.pure_arb_paper || options.state_only || options.fair_only || options.graph_capital_policy.empty())) {
+        throw std::runtime_error("--graph-native-shadow requires isolated graph selection/deep evidence/capital policy; cannot enable champion economics");
     }
     if (!std::isfinite(options.pure_arb_reserve_per_share)
         || options.pure_arb_reserve_per_share < 0.0 || options.pure_arb_reserve_per_share >= 1.0) {
@@ -738,7 +747,7 @@ public:
                     std::int64_t pure_arb_max_leg_skew_ms = 100,
                     std::int64_t pure_arb_max_receive_to_decision_ns = 50'000'000LL,
                     double pure_arb_prefunded_complete_set_shares = 1000.0,
-                    bool graph_deep_evidence = false)
+                    bool graph_deep_evidence = false, bool graph_native_shadow = false)
         : tokens_(std::move(tokens)), ws_url_(std::move(ws_url)),
           output_dir_(std::move(output_dir)), model_sha_(std::move(model_sha)),
           state_only_(state_only), state_publish_ms_(state_publish_ms),
@@ -820,6 +829,24 @@ public:
             if (!book_output_) throw std::runtime_error("cannot open canonical book evidence file");
         }
         session_id_ = std::to_string(wall_ms()) + "-" + std::to_string(::getpid());
+        if (graph_native_shadow) {
+            std::vector<pm::v7::exact_arb_graph::NativeTokenBinding> native_bindings;
+            for (const auto& token : tokens_) {
+                const bool fees_known = token.fee_verified && std::isfinite(token.fee_rate)
+                    && token.fee_rate >= 0 && token.fee_rate <= 1 && std::isfinite(token.fee_exponent)
+                    && token.fee_exponent >= 0 && token.fee_exponent <= 2
+                    && std::floor(token.fee_exponent) == token.fee_exponent;
+                const auto minimum = std::isfinite(token.minimum_order_shares)
+                    && token.minimum_order_shares > 0 && token.minimum_order_shares < 1e9
+                    ? static_cast<std::int64_t>(std::ceil(token.minimum_order_shares*1e6)) : 0;
+                native_bindings.push_back({token.token_id, static_cast<std::uint32_t>(token.instrument_handle),
+                    token.tick_size_e4, token.start_wall_ms, token.end_wall_ms, minimum,
+                    fees_known ? std::llround(token.fee_rate*1e9) : -1,
+                    fees_known ? static_cast<std::int64_t>(token.fee_exponent) : -1});
+            }
+            graph_native_ = std::make_unique<pm::v7::exact_arb_graph::NativeGraphShadow>(
+                output_dir_, model_sha_, session_id_, std::move(native_bindings));
+        }
         if (!compact_label_tape_dir_.empty()) initialize_compact_label_tape();
         if (pure_arb_paper_) {
             restore_pure_arb_status();
@@ -832,6 +859,23 @@ public:
                 throw std::runtime_error("cannot open causal deep book evidence file");
             }
         }
+    }
+
+    ~ExactWsObserver() { if (feed_) feed_->stop(); }
+
+    void refresh_native_graph(const fs::path& selection, const fs::path& capital_policy) {
+        if (!graph_native_) return;
+        try {
+            if (fs::file_size(selection) > 8*1024*1024 || fs::file_size(capital_policy) > 65536)
+                throw std::runtime_error("native_graph_input_size");
+            const auto selection_bytes = read_file(selection);
+            const auto policy_bytes = read_file(capital_policy);
+            graph_native_->refresh(selection_bytes, policy_bytes, wall_ms(), monotonic_ns());
+        } catch (const std::exception& e) { graph_native_->invalidate(e.what()); }
+    }
+
+    void invalidate_native_graph(std::string reason) {
+        if (graph_native_) graph_native_->invalidate(std::move(reason));
     }
 
     void maybe_queue_pure_arb_deep(
@@ -1023,6 +1067,12 @@ public:
             if (!queue_->try_push(row)) dropped_.fetch_add(1, std::memory_order_relaxed);
             maybe_queue_pure_arb_deep(
                 event, receive, decode_complete_ns, row.enqueue_monotonic_ns);
+        }
+        if (graph_native_) {
+            graph_native_->on_frame(*decoder_, std::span<const MarketWsEvent>(events.data(), std::min(result.output_count, events.size())),
+                {receive.wall_ms, receive.monotonic_ns, monotonic_ns(), decode_complete_ns},
+                connection_epoch_.load(std::memory_order_relaxed),
+                !root_lineage_failure && decoder_failures_.load(std::memory_order_relaxed) == 0, payload);
         }
         // A later full WS snapshot may already have healed the affected token.
         // Do not restart a recovered stream merely because a past root failure
@@ -1919,6 +1969,7 @@ public:
     }
 
     void drain(bool force_flush = false) {
+        if (graph_native_) graph_native_->drain(disk_pressure());
         TradeEvidence row;
         bool wrote = false;
         while (queue_->try_pop(row)) {
@@ -1971,6 +2022,7 @@ public:
     }
 
     void write_status(bool stopped = false, bool publish_flow = true) {
+        if (graph_native_) graph_native_->write_status(wall_ms(), stopped);
         flush_pure_arb_events();
         const auto feed = feed_ ? feed_->snapshot() : pm::fast::FeedSnapshot{};
         json::object root;
@@ -2372,6 +2424,7 @@ private:
     std::int64_t pure_arb_receive_to_decision_limit_ns_ = 50'000'000LL;
     double pure_arb_prefunded_complete_set_shares_ = 1000.0;
     bool graph_deep_evidence_ = false;
+    std::unique_ptr<pm::v7::exact_arb_graph::NativeGraphShadow> graph_native_;
     fs::path pure_arb_status_path_;
     fs::path pure_arb_trades_path_;
     std::ofstream pure_arb_output_;
@@ -2504,7 +2557,7 @@ int main(int argc, char** argv) {
                 options.pure_arb_reserve_per_share,
                 options.pure_arb_max_leg_skew_ms,
                 options.pure_arb_max_receive_to_decision_ns,
-                options.pure_arb_prefunded_complete_set_shares, options.graph_deep_evidence);
+                options.pure_arb_prefunded_complete_set_shares, options.graph_deep_evidence, options.graph_native_shadow);
             const fs::path disk_pressure_marker = fs::path(options.run_root) / "control" / "DISK_PRESSURE";
             const auto local_disk_pressure = [&]() {
                 if (fs::exists(disk_pressure_marker)) return true;
@@ -2514,6 +2567,7 @@ int main(int argc, char** argv) {
                 return error || space.available <= options.disk_pressure_min_free_bytes;
             };
             observer.set_disk_pressure(local_disk_pressure());
+            if (options.graph_native_shadow) observer.refresh_native_graph(options.selection, options.graph_capital_policy);
             observer.start();
             std::int64_t last_status_ms = 0;
             std::int64_t last_membership_check_ms = 0;
@@ -2534,6 +2588,7 @@ int main(int argc, char** argv) {
                 if (now - last_membership_check_ms >= 1000) {
                     last_membership_check_ms = now;
                     observer.set_disk_pressure(local_disk_pressure());
+                    if (options.graph_native_shadow) observer.refresh_native_graph(options.selection, options.graph_capital_policy);
                     if (options.pure_arb_paper) observer.refresh_pure_arb_metadata(options.selection);
                     // Price/feature refreshes do not change the subscription.
                     // Restarting on every mtime update erased queue evidence.
@@ -2549,13 +2604,21 @@ int main(int argc, char** argv) {
                         reload = true;
                     }
                     if (!options.fair_only) {
-                        const auto latest_pairs = load_selected_pairs(
-                            options.selection, options.selection_only, options.model_sha);
-                        if (latest_pairs != selected_pairs) {
-                            const bool defer_rollover = options.pure_arb_paper
-                                && defer_pure_arb_membership_reload(
-                                    options.selection, selected_pairs, now);
-                            reload = reload || !defer_rollover;
+                        try {
+                            const auto latest_pairs = load_selected_pairs(
+                                options.selection, options.selection_only, options.model_sha);
+                            if (latest_pairs != selected_pairs) {
+                                const bool defer_rollover = options.pure_arb_paper
+                                    && defer_pure_arb_membership_reload(
+                                        options.selection, selected_pairs, now);
+                                reload = reload || !defer_rollover;
+                            }
+                        } catch (const std::exception& e) {
+                            if (!options.graph_native_shadow) throw;
+                            // The optional research observer stays alive across
+                            // a source outage. Keep capturing WS books, but no
+                            // graph decision can use the expired/invalid source.
+                            observer.invalidate_native_graph(e.what());
                         }
                     }
                 }

@@ -37,6 +37,8 @@ enum class HotReject : std::uint8_t {
     UnknownFee,
     NumericOverflow,
     TransformationUnavailable,
+    VenuePrecision,
+    SizingIncomplete,
 };
 
 struct RationalCoefficient {
@@ -111,6 +113,8 @@ struct HotDecision {
 
 struct HotResources {
     std::int64_t capital_microunits = std::numeric_limits<std::int64_t>::max();
+    // Relation-unit sizing limit, not a synthetic transformation or inventory.
+    std::int64_t quantity_limit_microunits = std::numeric_limits<std::int64_t>::max();
     // Indexed by book handle, in actual leg shares. Empty means no inventory.
     std::span<const std::int64_t> inventory{};
     const CompiledTransformation* transformation = nullptr;
@@ -150,12 +154,26 @@ struct HotTimingContext {
     return true;
 }
 
-// Exact venue fee rounding for the native-supported rate lattice/exponents.
+// Exact arithmetic for the recorded 5dp fee model and supported rate lattice /
+// exponents. This is not an attestation of venue tie or fill-fragment semantics.
 // The frozen champion remains untouched: binary floating-point ties in its
 // std::round path are not copied into the graph's accounting oracle.
-[[nodiscard]] inline double exact_fee(std::int64_t shares_micro, std::int32_t price_e4,
-                                     const CompiledLeg& leg) noexcept {
-    if (leg.fee_rate == 0.0) return 0.0;
+[[nodiscard]] inline bool valid_fee_terms(const CompiledLeg& leg) noexcept {
+    return leg.fee_verified && std::isfinite(leg.fee_rate) && leg.fee_rate >= 0 && leg.fee_rate <= 1
+        && std::isfinite(leg.fee_exponent) && leg.fee_exponent >= 0 && leg.fee_exponent <= 2
+        && std::abs(leg.fee_rate*1e9-std::round(leg.fee_rate*1e9)) <= 1e-7
+        && std::floor(leg.fee_exponent) == leg.fee_exponent;
+}
+
+struct RoundedFeeUnits {
+    unsigned __int128 units = 0; // 1e-5 PUSD fee units
+    bool valid = true;
+};
+
+[[nodiscard]] inline RoundedFeeUnits rounded_fee_units(std::int64_t shares_micro, std::int32_t price_e4,
+                                                      const CompiledLeg& leg) noexcept {
+    if (shares_micro < 0 || price_e4 <= 0 || price_e4 >= 10000 || !valid_fee_terms(leg)) return {0, false};
+    if (leg.fee_rate == 0.0) return {};
     using Wide = unsigned __int128;
     const auto rate = static_cast<std::uint64_t>(std::llround(leg.fee_rate * 1e9));
     Wide numerator = static_cast<Wide>(shares_micro) * rate;
@@ -164,18 +182,26 @@ struct HotTimingContext {
     for (int i=0; i<static_cast<int>(leg.fee_exponent); ++i) {
         const auto factor = static_cast<std::uint64_t>(price_e4) * (10000-price_e4);
         if (numerator > maximum/factor || denominator > maximum/100000000ULL)
-            return std::numeric_limits<double>::quiet_NaN();
+            return {0, false};
         numerator *= factor; denominator *= 100000000ULL;
     }
-    if (numerator < denominator) return 0.0;
+    if (numerator < denominator) return {};
     const Wide whole = numerator/denominator;
     const Wide remainder = numerator%denominator;
     const Wide rounded = whole + (remainder >= (denominator+1)/2 ? 1 : 0);
-    return static_cast<double>(rounded)/100000.0;
+    return {rounded, true};
 }
 
-// Full-depth N-leg buy sizing.  Every loop advances at least one level, so it
-// is bounded by the sum of preallocated book depths, not graph cardinality.
+[[nodiscard]] inline double exact_fee(std::int64_t shares_micro, std::int32_t price_e4,
+                                     const CompiledLeg& leg) noexcept {
+    const auto rounded = rounded_fee_units(shares_micro, price_e4, leg);
+    return rounded.valid ? static_cast<double>(rounded.units)/100000.0 : std::numeric_limits<double>::quiet_NaN();
+}
+
+// Legacy full-depth marginal sweep, retained for baseline comparisons. It is
+// NOT a global quantity optimizer under rounded fees and fragments fees at
+// basket breakpoints. The native research runtime uses order_sizing.hpp.
+// Every loop advances at least one level, bounded by total book depth.
 [[nodiscard]] inline HotDecision evaluate_basket(
     const CompiledRelation& relation, std::span<const BookDeepSnapshot> books,
     bool buy, HotTimingContext timing = {}, HotResources resources = {}) noexcept {
@@ -184,13 +210,14 @@ struct HotTimingContext {
     if (relation.enabled == 0 || relation.leg_count == 0 || relation.leg_count > kMaxLegs
         || relation.guaranteed_payout_microunits <= 0 || relation.reserve_per_unit_microunits < 0) return out;
 
-    std::int64_t capacity = std::numeric_limits<std::int64_t>::max();
+    std::int64_t capacity = resources.quantity_limit_microunits;
+    if (capacity < 0) return out;
     if (resources.transformation) {
         const auto& t = *resources.transformation;
         if (!t.verified || t.capacity_microunits <= 0 || t.latency_ns < 0 || t.capital_lock_ns <= 0) {
             out.reject = HotReject::TransformationUnavailable; return out;
         }
-        capacity = t.capacity_microunits;
+        capacity = std::min(capacity, t.capacity_microunits);
     }
     if (resources.capital_microunits < 0) { out.reject = HotReject::CapitalLimit; return out; }
 
@@ -205,10 +232,7 @@ struct HotTimingContext {
             out.reject = leg.book_handle >= books.size() ? HotReject::MissingBook : HotReject::IncompleteDepth;
             return out;
         }
-        if (!leg.fee_verified || !std::isfinite(leg.fee_rate) || leg.fee_rate < 0 || leg.fee_rate > 1
-            || !std::isfinite(leg.fee_exponent) || leg.fee_exponent < 0 || leg.fee_exponent > 2
-            || std::abs(leg.fee_rate*1e9-std::round(leg.fee_rate*1e9)) > 1e-7
-            || std::floor(leg.fee_exponent) != leg.fee_exponent) {
+        if (!valid_fee_terms(leg)) {
             out.reject = HotReject::UnknownFee; return out;
         }
         for (std::size_t j = 0; j < i; ++j) if (relation.legs[j].book_handle == leg.book_handle) return out;

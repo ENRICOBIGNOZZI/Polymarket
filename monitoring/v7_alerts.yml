@@ -6,6 +6,11 @@ groups:
         for: 30s
         labels: {severity: critical}
         annotations: {summary: "Canonical runtime identity, safety or telemetry receipt is unhealthy or incomplete"}
+      - alert: PolymarketV7NativeExactArbResearchUnhealthy
+        expr: polymarket_v7_canonical_graph_health_ok < 1
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "Native exact-arbitrage research evidence is missing, stale, mismatched or dropping; not a champion profitability signal"}
       - alert: PolymarketV7ExporterDown
         expr: up{job="polymarket-v7"} == 0
         for: 30s

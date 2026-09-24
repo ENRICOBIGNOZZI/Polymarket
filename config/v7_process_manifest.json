@@ -1067,6 +1067,9 @@
         "${RUN_ROOT}/research/repricing_book/unified_exact_arb_hotset_selection.json",
         "--status",
         "${RUN_ROOT}/research/repricing_book/unified_exact_arb_hotset_selection_status.json",
+        "--collect-venue-terms",
+        "--venue-terms-directory",
+        "${RUN_ROOT}/research/repricing_book/graph_hotset/native_venue_terms",
         "--model-sha",
         "${SHA}",
         "--max-markets",
@@ -1086,6 +1089,7 @@
       "outputs": [
         "research/repricing_book/unified_exact_arb_hotset_selection.json",
         "research/repricing_book/unified_exact_arb_hotset_selection_status.json",
+        "research/repricing_book/graph_hotset/native_venue_terms",
         "research/repricing_book/unified_exact_arb_hotset_selection.log"
       ],
       "dependencies": [
@@ -1115,7 +1119,10 @@
         "${RUN_ROOT}/research/repricing_book/graph_hotset",
         "--model-sha",
         "${SHA}",
-        "--graph-deep-evidence"
+        "--graph-deep-evidence",
+        "--graph-native-shadow",
+        "--graph-capital-policy",
+        "${ROOT}/config/v7_pure_arb_capital_policy.json"
       ],
       "profile": "observer",
       "inputs": [
@@ -1126,6 +1133,11 @@
         "research/repricing_book/graph_hotset/fillability_ws_status.json",
         "research/repricing_book/graph_hotset/book_observations/current.jsonl",
         "research/repricing_book/graph_hotset/pure_arb_deep_book_snapshots.jsonl",
+        "research/repricing_book/graph_hotset/native_exact_arb_status.json",
+        "research/repricing_book/graph_hotset/native_exact_arb_observations.jsonl",
+        "research/repricing_book/graph_hotset/native_exact_arb_full_evidence.jsonl",
+        "research/repricing_book/graph_hotset/native_exact_arb_ws_frames.jsonl",
+        "research/repricing_book/graph_hotset/native_exact_arb_control.jsonl",
         "research/repricing_book/unified_exact_arb_hotset_observer.log"
       ],
       "dependencies": [

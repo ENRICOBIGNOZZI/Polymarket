@@ -213,10 +213,12 @@ class Shadow:
     self.rejects_by_family[family]["capital_conflict"]+=1;continue
    self.count(family,"candidate_emitted");self.count(family,"unique_economic_opportunity_count")
    self.last_candidate_ms=now
+   decision_books={leg["token_id"]:self.books[leg["token_id"]] for leg in relation["legs"]}
    evidence={"schema":"polymarket_v7_unified_exact_arb_graph_opportunity_v1",**SAFETY,
      "model_sha":self.a.model_sha,"execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
      "graph_generation":self.generation,"relation_id":relation["relation_id"],"relation":relation,
      "opportunity_id":opportunity_id,"trigger_event_id":event_id,"timestamp_ms":now,
+     "decision_books":decision_books,"decision_books_sha256":sha(decision_books),
      "counterfactual_modes":["SEQUENTIAL","PARALLEL","BATCH"],"capital_conflict":False,
      "inventory_reserved":r["direction"]=="SELL","resource_vector":required,
      "execution_candidate":native_binary_candidate(relation,r,now),"result":r}

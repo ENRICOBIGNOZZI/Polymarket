@@ -64,8 +64,12 @@ class V7MakerFillabilityObserverContractTest(unittest.TestCase):
         self.assertIn(marker, loop)
         segment = loop.split(marker, 1)[1].split('v7_register_optional_child "$!"', 1)[0]
         self.assertIn("--graph-deep-evidence", segment)
+        self.assertIn("--graph-native-shadow", segment)
+        self.assertIn("--graph-capital-policy", segment)
         self.assertIn("--selection-only", segment)
         self.assertNotIn("--pure-arb-paper", segment)
+        self.assertIn("if (!options.graph_native_shadow) throw;", source)
+        self.assertIn("observer.invalidate_native_graph(e.what());", source)
 
 
     def test_build_contains_exact_ws_observer(self) -> None:

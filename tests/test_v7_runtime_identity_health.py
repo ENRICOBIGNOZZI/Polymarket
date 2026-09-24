@@ -134,7 +134,7 @@ def test_complete_health_then_stale_wrong_sha_or_instance_fails(tmp_path):
 
 
 def test_scheduled_health_has_no_historical_host_or_request_sha_fallback():
-    for name in ("v7-paper-server-health.yml","v7-collection-health.yml","v7-pure-arb-live-probe.yml","v7-pure-arb-evidence-probe.yml"):
+    for name in ("v7-paper-server-health.yml","v7-collection-health.yml","v7-pure-arb-live-probe.yml","v7-pure-arb-evidence-probe.yml","v7-london-process-probe.yml"):
         text=(ROOT/".github/workflows"/name).read_text()
         assert "i-0fba2bac9fdc5cbeb" not in text and "i-04042ca7da7a23215" not in text
         assert "ops/v7_runtime_identity.py" in text
@@ -142,11 +142,86 @@ def test_scheduled_health_has_no_historical_host_or_request_sha_fallback():
     assert "github.sha" not in text and "git checkout" not in text and "current-deploy-request" not in text
 
 
+def test_graph_receipt_uses_native_evidence_not_healthy_python_reference(tmp_path):
+    base=tmp_path/"research/repricing_book"
+    (base/"graph_hotset").mkdir(parents=True)
+    (tmp_path/"control").mkdir()
+    (tmp_path/"control/runtime_status.json").write_text(json.dumps({"model_sha":SHA}))
+    (base/"unified_exact_arb_graph_status.json").write_text(json.dumps({
+        "state":"COLLECTING","model_sha":SHA,"timestamp_ms":100,"events_processed":999,
+        "dropped_observations":{},"graph_generation":"legacy-reference"}))
+    kwargs=dict(identity={},service_active=None,kill_exists=None,prometheus_ready=None,grafana_ready=None,now_ms=101)
+    missing=collect(tmp_path,**kwargs)
+    assert missing["graph_health"]=="UNAVAILABLE_OR_DEGRADED"
+    assert missing["graph_events_processed"] is None and missing["graph_dropped_events"] is None
+    native={"schema":"polymarket_v7_native_exact_arb_status_v1",**SAFETY,"execution_authority":False,
+        "model_sha":SHA,"timestamp_ms":100,"valid_until_ms":200,"state":"RUNNING",
+        "target_bundle_sha256":"b"*64,"observed_bundle_sha256":"b"*64,
+        "graph_generation":"c"*64,"relation_directions":4,"frames_processed":12,"evaluations":20,
+        "observations_dropped":0,"full_evidence_dropped":0,"disk_suppressed":0,
+        "full_disk_suppressed":0,"invalid_frames":0,"queue_depth":1,
+        "ws_frames_written":12,"ws_frames_dropped":0,"ws_frames_disk_suppressed":0,
+        "control_journal_failed":False,"control_records_written":4,"control_record_sha256":"d"*64}
+    path=base/"graph_hotset/native_exact_arb_status.json"
+    path.write_text(json.dumps(native))
+    out=collect(tmp_path,**kwargs)
+    assert out["graph_health"]=="HEALTHY"
+    assert out["graph_events_processed"]==12 and out["graph_relation_evaluations"]==20
+    assert out["graph_generation"]=="c"*64 and out["graph_reference_state"]=="COLLECTING"
+    for field,value in (("valid_until_ms",101),("observed_bundle_sha256","a"*64),
+                        ("full_evidence_dropped",1),("full_disk_suppressed",1),
+                        ("ws_frames_written",None),("ws_frames_dropped",1),("ws_frames_disk_suppressed",1),
+                        ("control_journal_failed",True),("control_records_written",0),("control_record_sha256",None),
+                        ("authenticated_execution",True),("model_sha","b"*40),("state","BLOCKED")):
+        path.write_text(json.dumps({**native,field:value}))
+        assert collect(tmp_path,**kwargs)["graph_health"]=="UNAVAILABLE_OR_DEGRADED"
+
+
 def test_workflow_shell_blocks_parse():
     import subprocess,yaml
-    for name in ("v7-paper-server-health.yml","v7-collection-health.yml","v7-pure-arb-evidence-probe.yml"):
+    for name in ("v7-paper-server-health.yml","v7-collection-health.yml","v7-pure-arb-evidence-probe.yml","v7-london-process-probe.yml"):
         data=yaml.safe_load((ROOT/".github/workflows"/name).read_text())
         for job in data["jobs"].values():
             for step in job["steps"]:
                 if "run" in step:
                     subprocess.run(["bash","-n"],input=step["run"],text=True,check=True,capture_output=True)
+
+
+@pytest.mark.parametrize("restart",[False,True])
+def test_process_probe_embedded_rotation_program(tmp_path,monkeypatch,capsys,restart):
+    """Exercise the shipped remote Python block, not a second probe implementation."""
+    import base64,yaml
+    from unittest.mock import patch
+    workflow=yaml.safe_load((ROOT/".github/workflows/v7-london-process-probe.yml").read_text())
+    steps=workflow["jobs"]["probe"]["steps"]
+    target_step=next(step for step in steps if step.get("id")=="target")
+    assert "ops/v7_runtime_identity.py" in target_step["run"]
+    step=next(step for step in steps if step.get("name")=="Inspect London runtime and quarantine")
+    assert step["env"]["INSTANCE_ID"]=="${{ steps.target.outputs.instance_id }}"
+    code=step["run"].split("<<'PYEVID'\n",1)[1].split("\nPYEVID",1)[0]
+    code=code.replace("__TAPE_HEALTH_SOURCE__",base64.b64encode((ROOT/"scripts/v7_tape_health.py").read_bytes()).decode())
+    base=tmp_path/"research/repricing_book"
+    tape=base/"book_observations/current.jsonl"
+    tape.parent.mkdir(parents=True)
+    tape.write_text("old row\n"*20)
+    status=base/"fillability_ws_status.json"
+    status.write_text(json.dumps({"observer_session_id":"one","book_events_written":20}))
+    def rotate(seconds):
+        assert seconds==10
+        with tape.open("a") as stream: stream.write("before rotate\n")
+        tape.rename(tape.with_name("one.segment-1.jsonl"))
+        tape.write_text("new\n")
+        status.write_text(json.dumps({"observer_session_id":"two" if restart else "one",
+                                     "book_events_written":1 if restart else 22}))
+    monkeypatch.setattr(sys,"argv",["-",str(tmp_path)])
+    with patch("time.sleep",rotate): exec(compile(code,"process-probe-evidence","exec"),{})
+    receipt=json.loads(capsys.readouterr().out.splitlines()[0])
+    result=receipt["rotation_health"]["book_observations/current.jsonl"]
+    if restart:
+        assert result["state"]=="WRITER_GENERATION_CHANGED" and result["live"] is None
+        assert receipt["row_growth"]["book_observations/current.jsonl"] is None
+    else:
+        assert result["rotated"] and result["live"] and result["exact_rows"]
+        assert receipt["row_growth"]["book_observations/current.jsonl"]==2
+        assert receipt["growth_bytes_lower_bound"]["book_observations/current.jsonl"]==18
+    assert receipt["growth_bytes_lower_bound"]["pure_arb_trades.jsonl"] is None

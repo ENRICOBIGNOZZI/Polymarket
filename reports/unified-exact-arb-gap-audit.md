@@ -1,5 +1,20 @@
 # Unified exact-arbitrage audit
 
+Historical baseline matrix; do not read its implementation/test counts as the
+current worktree status. The latest economic-accounting evidence is in
+[fee attribution](exact-arb-fee-attribution-checkpoint-20260924.md),
+[NegRisk attestation](exact-arb-negrisk-attestation-checkpoint-20260924.md) and
+[causal shadow capital](exact-arb-capital-lifecycle-checkpoint-20260924.md), with subsequent
+[hourly study attribution](exact-arb-hourly-attribution-checkpoint-20260924.md).
+The subsequent [native pressure checkpoint](exact-arb-native-pressure-checkpoint-20260924.md)
+finds a real worst-case sizing bottleneck and improves it without closing the performance gate.
+The [public-feed pilot](exact-arb-public-pilot-checkpoint-20260924.md) exercises
+the actual decoder/replay/study path, discovers 7,049 additional non-YES/NO
+mapping gaps in a broad metadata sample, and corrects the earlier unverified
+identification of the local SSH alias as London.
+Full champion parity, verified execution semantics, capital/maker validation,
+official release gates and the bounded London economic study remain incomplete.
+
 Baseline: `1be49edd0cbd219eedd164cd76a0d01d1be87ab1`, feature branch only.
 All work is zero-authority research. No production readiness or live profitability
 is inferred from fixture tests. This matrix supersedes the earlier completion claim.

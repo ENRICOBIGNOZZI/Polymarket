@@ -1,0 +1,42 @@
+{
+  "authenticated_execution": false,
+  "automatic_promotion": false,
+  "causal_session_binding_verified": false,
+  "condition_id": "0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7",
+  "execution_authority": false,
+  "paper_only": true,
+  "real_capital_at_risk": false,
+  "real_order_submission": false,
+  "reason": "HTTPError:HTTP Error 403: Forbidden",
+  "requests": [
+    {
+      "duration_monotonic_ns": null,
+      "finished_at_ns": null,
+      "raw_response": null,
+      "raw_sha256": null,
+      "role": "compact",
+      "started_at_ns": 1790248585227028000,
+      "state": "FAILED",
+      "url": "https://clob.polymarket.com/clob-markets/0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7"
+    }
+  ],
+  "rule_sources": {
+    "fees": "https://docs.polymarket.com/trading/fees",
+    "lifecycle": "https://docs.polymarket.com/concepts/order-lifecycle",
+    "openapi": "https://docs.polymarket.com/api-spec/clob-openapi.yaml",
+    "orders": "https://docs.polymarket.com/trading/place-orders"
+  },
+  "rule_version": "POLYMARKET_PUBLIC_DELAY_RULE_20260924_V1",
+  "schema": "polymarket_v7_exact_arb_public_venue_terms_v1",
+  "scope": "NONATOMIC_PUBLIC_VENUE_METADATA_ONLY",
+  "snapshot_sha256": "4d768ded99893f951a65e11aeadbb9bfcca7ffb015b51b2495bd78b101be2375",
+  "source_authenticity_cryptographically_attested": false,
+  "state": "UNVERIFIED",
+  "terms": null,
+  "token_ids": [
+    "25659310674993675562345759665114759892400026242514633218387667107987341231962",
+    "32338220190071351435772801779725302244575775216413325951443816017994629993401"
+  ],
+  "valid_until_ns": null,
+  "venue_execution_verified": false
+}

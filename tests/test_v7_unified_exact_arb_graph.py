@@ -1,5 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
+import json
 import sys
 from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -109,7 +110,7 @@ def test_machine_attested_n_way_partition_is_a_single_hyperedge() -> None:
     assert relation["relation_family"]=="N_WAY_COMPLETE_PARTITION" and len(relation["legs"])==3
 
 
-def test_machine_attested_negrisk_event_compiles_only_when_every_member_is_verified() -> None:
+def test_negrisk_metadata_verified_flags_cannot_manufacture_an_exhaustive_state_space() -> None:
     model, semantic="d"*40,"e"*64
     members=[]
     for mid in ("n1","n2","n3"):
@@ -119,7 +120,9 @@ def test_machine_attested_negrisk_event_compiles_only_when_every_member_is_verif
           "contract_family":"negrisk","settlement_semantic_hash":semantic,"fee_schedule":{"rate":0},
           "clob_token_ids":[mid+"y",mid+"n"],"outcomes":["YES","NO"]})
     graph=compile_graph([_registry([])],{**SAFETY,"model_sha":model,"markets":members},model)
-    assert graph["relations"][0]["relation_family"]=="NEGRISK_COMPLETE_SET"
+    assert not graph["relations"]
+    assert any(c["reason"]=="metadata_flag_is_not_independent_terminal_exhaustiveness_proof"
+               for c in graph["unverified_candidates"])
     members[-1]["neg_risk_complete_set_verified"]=False
     graph=compile_graph([_registry([])],{**SAFETY,"model_sha":model,"markets":members},model)
     assert not graph["relations"] and graph["unverified_candidates"]
@@ -290,6 +293,10 @@ def test_incremental_shadow_deduplicates_changed_leg_paths_and_records_funnel(tm
     assert shadow.funnel["unique_economic_opportunity_count"]==1
     assert shadow.funnel["deduplicated_path_count"]==0
     assert shadow.funnel_by_family["EXPLICIT_EXACT"]["books_ready"]==1
+    emitted=json.loads(args.opportunities.read_text().splitlines()[0])
+    assert set(emitted["decision_books"]) == {"ay","an"}
+    from v7_unified_exact_arb_graph import sha
+    assert emitted["decision_books_sha256"] == sha(emitted["decision_books"])
     candidate=native_binary_candidate(graph["relations"][0], {"direction":"BUY","quantity":"3"}, 10)
     assert candidate is not None and candidate["kind"]=="BUY_COMPLETE_SET" and candidate["market_id"]=="a"
 

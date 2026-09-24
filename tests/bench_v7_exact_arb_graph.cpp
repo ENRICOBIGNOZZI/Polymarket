@@ -1,7 +1,9 @@
 #include "pm/v7_exact_arb_graph_hotpath.hpp"
+#include "pm/v7_exact_arb_order_sizing.hpp"
 #include <chrono>
 #include <cassert>
 #include <iostream>
+#include <memory>
 #include <vector>
 
 using namespace pm::v7;
@@ -28,6 +30,7 @@ int main(int argc, char** argv) {
     const std::size_t iterations = argc > 1 ? std::stoul(argv[1]) : 100000;
     if (iterations < 10000 || iterations > 10000000) return 2;
     std::array<BookDeepSnapshot, kMaxLegs> books{};
+    auto workspace=std::make_unique<order_sizing_detail::DepthWorkspace>();
     auto prepare = [&](std::size_t n) {
         CompiledRelation r{}; r.enabled = 1; r.proof_handle = 1;
         r.leg_count = static_cast<std::uint8_t>(n); r.guaranteed_payout_microunits = 1000000;
@@ -58,13 +61,27 @@ int main(int argc, char** argv) {
         const auto g = evaluate_buy_basket(r, books);
         return g.quantity_microunits + g.net_pnl_microunits;
     });
-    for (auto n : {3,4,8,16}) {
+    double native_binary_p99 = 0;
+    for (auto n : {2,3,4,8,16}) {
         r = prepare(n); std::cout << ',';
         const auto name = "graph_"+std::to_string(n)+"_leg_full_depth_sizing";
         measure(name.c_str(), iterations, [&](std::size_t i) {
             books[0].ask_levels[0].price_e4 = 9000/n + static_cast<int>(i%2);
             return evaluate_buy_basket(r, books).net_pnl_microunits;
         });
+        std::cout << ',';
+        const auto constrained_name = "native_order_lattice_"+std::to_string(n)+"_leg_sizing";
+        const auto native_p99 = measure(constrained_name.c_str(), iterations, [&](std::size_t i) {
+            books[0].ask_levels[0].price_e4 = 9000/n + static_cast<int>(i%2);
+            const auto sized = evaluate_order_constrained_basket(r, books, {}, {}, 10000,512,workspace.get());
+            return sized.decision.net_pnl_microunits+sized.quantities_evaluated;
+        });
+        if (n == 2) native_binary_p99 = native_p99;
+        const auto sizing_receipt = evaluate_order_constrained_basket(r, books, {}, {}, 10000,512,workspace.get());
+        std::cout << ",\"native_order_lattice_" << n << "_leg_certificate\":{\"quantities_evaluated\":"
+                  << sizing_receipt.quantities_evaluated << ",\"global_model_optimum_proven\":"
+                  << (sizing_receipt.global_optimum_proven ? "true" : "false")
+                  << ",\"search_exhausted\":" << (sizing_receipt.search_exhausted ? "true" : "false") << '}';
     }
     std::array<TokenDependency, 1024> dependencies{};
     for (std::uint32_t i = 0; i < dependencies.size(); ++i) dependencies[i] = {i,0,1};
@@ -84,5 +101,14 @@ int main(int argc, char** argv) {
                               [&](auto decision){pnl=decision.net_pnl_microunits;});
         return pnl;
     });
-    std::cout << "},\"graph_binary_over_champion_p99\":" << (champion ? binary/champion : 0) << "}\n";
+    std::cout << ',';
+    measure("native_order_lattice_binary_raw_nonpositive", iterations, [&](std::size_t i) {
+        for (unsigned leg=0;leg<2;++leg) for (int j=0;j<4;++j)
+            books[leg].ask_levels[j].price_e4=5000+j*10+static_cast<int>(i%2);
+        return evaluate_order_constrained_basket(r,books,{}, {},10000,512,workspace.get()).quantities_evaluated;
+    });
+    std::cout << "},\"graph_binary_over_champion_p99\":" << (champion ? binary/champion : 0)
+              << ",\"graph_binary_ratio_scope\":\"LEGACY_SWEEP_NOT_NATIVE_ORDER_LATTICE\""
+              << ",\"native_order_lattice_binary_over_champion_p99\":" << (champion ? native_binary_p99/champion : 0)
+              << ",\"venue_execution_verified\":false,\"side_by_side_champion_load_verified\":false}\n";
 }

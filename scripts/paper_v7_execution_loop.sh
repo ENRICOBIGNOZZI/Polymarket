@@ -541,6 +541,7 @@ v7_exec_class COLLECTOR python3 scripts/v7_exact_arb_hotset_selection.py \
   --hotset "$PURE_ARB_DIR/unified_exact_arb_hotset.json" \
   --output "$PURE_ARB_DIR/unified_exact_arb_hotset_selection.json" \
   --status "$PURE_ARB_DIR/unified_exact_arb_hotset_selection_status.json" \
+  --collect-venue-terms --venue-terms-directory "$PURE_ARB_DIR/graph_hotset/native_venue_terms" \
   --model-sha "$SHA" --max-markets 64 --interval-seconds 1 \
   >> "$PURE_ARB_DIR/unified_exact_arb_hotset_selection.log" 2>&1 &
 v7_register_optional_child "$!"
@@ -553,7 +554,8 @@ v7_exec_class LATENCY_OBSERVER "$FILLABILITY_OBSERVER" \
   --config "$CONFIG" \
   --selection "$PURE_ARB_DIR/unified_exact_arb_hotset_selection.json" --selection-only \
   --run-root "$RUN_ROOT" --output-dir "$GRAPH_HOTSET_DIR" \
-  --model-sha "$SHA" --graph-deep-evidence \
+  --model-sha "$SHA" --graph-deep-evidence --graph-native-shadow \
+  --graph-capital-policy "$ROOT/config/v7_pure_arb_capital_policy.json" \
   >> "$PURE_ARB_DIR/unified_exact_arb_hotset_observer.log" 2>&1 &
 v7_register_optional_child "$!"
 

@@ -35,6 +35,22 @@ jobs:
           /tmp/exact-arb-review/bin/python -m pytest -q \
             tests/test_v7_unified_exact_arb_graph.py \
             tests/test_v7_exact_arb_adversarial.py \
+            tests/test_v7_exact_arb_execution_orders.py \
+            tests/test_v7_exact_arb_venue_terms.py \
+            tests/test_v7_exact_arb_venue_selection.py \
+            tests/test_v7_exact_arb_negrisk_attestation.py \
+            tests/test_v7_exact_arb_settlement_fee_audit.py \
+            tests/test_v7_exact_arb_native_runtime_bundle.py \
+            tests/test_v7_exact_arb_native_evidence.py \
+            tests/test_v7_exact_arb_native_execution_bridge.py \
+            tests/test_v7_exact_arb_native_arrival.py \
+            tests/test_v7_exact_arb_native_run.py \
+            tests/test_v7_exact_arb_resource_scheduler.py \
+            tests/test_v7_exact_arb_shared_execution.py \
+            tests/test_v7_exact_arb_sota_report.py \
+            tests/test_v7_exact_arb_hourly.py \
+            tests/test_v7_exact_arb_pressure_bench.py \
+            tests/test_v7_exact_arb_control_history.py \
             tests/test_v7_exact_arb_exchange_universe.py \
             tests/test_v7_exact_arb_warm_scan.py \
             tests/test_v7_exact_arb_hotset_selection.py \
@@ -45,7 +61,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [Release, Debug, Sanitizer]
+        variant: [Release, Debug, Sanitizer, ThreadSanitizer]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -71,6 +87,11 @@ jobs:
             extra=(-DPM_V7_ENABLE_IPO=OFF \
               '-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer' \
               '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined')
+          elif [[ "$VARIANT" == ThreadSanitizer ]]; then
+            mode=Debug
+            extra=(-DPM_V7_ENABLE_IPO=OFF \
+              '-DCMAKE_CXX_FLAGS=-fsanitize=thread -fno-omit-frame-pointer' \
+              '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread')
           fi
           # The runtime-only deployment configuration deliberately excludes tests.
           # Configure the test-enabled tree, then build only these review targets.
@@ -80,6 +101,13 @@ jobs:
           cmake --build /tmp/exact-arb-native --parallel 2 --target \
             polymarket_v7_maker_fillability_observer \
             pm_v7_exact_arb_graph_hotpath_tests pm_v7_pure_arb_lane_tests \
+            pm_v7_exact_arb_order_sizing_tests \
+            pm_v7_exact_arb_graph_runtime_tests \
+            pm_v7_exact_arb_pressure_bench \
+            pm_v7_causal_book_observer_tests \
+            pm_v7_exact_arb_graph_loader_tests \
+            pm_v7_exact_arb_ws_replay_tests polymarket_v7_exact_arb_ws_replay \
+            pm_v7_exact_arb_diagnostics_tests \
             pm_v7_pure_arb_replay_parity_tests pm_v7_pure_arb_multi_engine_tests
           ctest --test-dir /tmp/exact-arb-native --output-on-failure \
-            -R '^pm_v7_(exact_arb_graph_hotpath|pure_arb_lane|pure_arb_replay_parity|pure_arb_multi_engine)_tests$'
+            -R '^pm_v7_(exact_arb_graph_hotpath|exact_arb_order_sizing|exact_arb_graph_runtime|exact_arb_pressure_contract|exact_arb_graph_loader|exact_arb_graph_python_bundle|exact_arb_ws_replay|exact_arb_native_arrival|exact_arb_diagnostics|causal_book_observer|pure_arb_lane|pure_arb_replay_parity|pure_arb_multi_engine)_tests$'

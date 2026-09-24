@@ -18,7 +18,6 @@ jobs:
       AWS_REGION: eu-west-2
       AWS_DEFAULT_REGION: eu-west-2
       ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
-      INSTANCE_ID: i-04042ca7da7a23215
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Validate request
@@ -33,7 +32,12 @@ jobs:
           role-to-assume: ${{ env.ROLE_ARN }}
           role-session-name: polymarket-v7-process-probe
           aws-region: eu-west-2
+      - name: Resolve canonical observed runtime identity
+        id: target
+        run: python3 ops/v7_runtime_identity.py --output runtime-identity.json --github-output "$GITHUB_OUTPUT"
       - name: Inspect London runtime and quarantine
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
         run: |
           set -euo pipefail
           echo "=== AWS INSTANCE ==="
@@ -114,8 +118,9 @@ jobs:
           PYNATIVE
           echo "=== PURE ARB EVIDENCE GROWTH ==="
           python3 - "$ROOT" <<'PYEVID'
-          import json,sys,time
+          import base64,json,sys,time
           from pathlib import Path
+          exec(base64.b64decode('__TAPE_HEALTH_SOURCE__'),globals())
           root=Path(sys.argv[1]); base=root/"research/repricing_book"
           rels=[
             "book_observations/current.jsonl",
@@ -126,19 +131,18 @@ jobs:
             "exchange_execution_cycles.jsonl",
           ]
           def sample():
-              out={}
-              for rel in rels:
-                  p=base/rel
-                  try:
-                      st=p.stat()
-                      out[rel]={"bytes":st.st_size,"mtime_ns":st.st_mtime_ns}
-                  except OSError:
-                      out[rel]={"bytes":None,"mtime_ns":None}
-              return out
+              try: book=json.loads((base/"fillability_ws_status.json").read_text())
+              except (OSError,ValueError): book={}
+              return {rel:sample_tape(base/rel,
+                  generation=book.get("observer_session_id") if rel=="book_observations/current.jsonl" else None,
+                  rows_written=book.get("book_events_written") if rel=="book_observations/current.jsonl" else None)
+                  for rel in rels}
           a=sample(); time.sleep(10); b=sample()
+          rotation={k:tape_growth(a[k],b[k]) for k in rels}
           print(json.dumps({"t0":a,"t1":b,
-              "growth":{k:None if a[k]["bytes"] is None or b[k]["bytes"] is None
-                        else b[k]["bytes"]-a[k]["bytes"] for k in rels}},sort_keys=True))
+              "rotation_health":rotation,
+              "growth_bytes_lower_bound":{k:v["bytes_added_lower_bound"] for k,v in rotation.items()},
+              "row_growth":{k:v["rows_added"] for k,v in rotation.items()}},sort_keys=True))
           for name in (
               "pure_arb_status.json","pure_arb_arrival_survival_status.json",
               "pure_arb_deep_sizing_status.json","exchange_execution_status.json",
@@ -240,6 +244,8 @@ jobs:
           journalctl -u polymarket-v7-paper.service -n 160 --no-pager || true
           SH
           )"
+          tape_source="$(base64 -w0 scripts/v7_tape_health.py)"
+          payload="${payload/__TAPE_HEALTH_SOURCE__/$tape_source}"
           encoded="$(printf '%s' "$payload" | base64 -w0)"
           wrapped="printf '%s' '$encoded' | base64 -d | bash"
           params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["90"]},separators=(",",":")))' "$wrapped")"

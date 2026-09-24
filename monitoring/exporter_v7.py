@@ -1269,10 +1269,14 @@ def render_prometheus(snapshot: dict[str, Any]) -> str:
     lines.extend(_render_unified_exact_arb_graph_execution_metrics(snapshot.get("unified_exact_arb_graph_execution") or {}))
     receipt=snapshot.get("runtime_health") or {}
     lines.append(_metric("polymarket_v7_canonical_runtime_health_ok", receipt.get("engineering_health")=="HEALTHY"))
+    lines.append(_metric("polymarket_v7_canonical_graph_health_ok", receipt.get("graph_health")=="HEALTHY"))
     for name,value in (receipt.get("checks") or {}).items():
         lines.append(_metric("polymarket_v7_canonical_runtime_check_ok",value,{"check":name}))
     for name in ("native_observations_written","native_observations_dropped","native_queue_depth",
-                 "book_rows_written_total","candidate_rows_written_total","graph_events_processed","graph_dropped_events"):
+                 "book_rows_written_total","candidate_rows_written_total","graph_events_processed","graph_dropped_events",
+                 "graph_relation_evaluations","graph_queue_depth","graph_full_evidence_dropped",
+                 "graph_ws_frames_written","graph_ws_frames_dropped","graph_ws_frames_disk_suppressed",
+                 "graph_control_journal_failed","graph_control_records_written"):
         lines.append(_metric("polymarket_v7_canonical_"+name,receipt.get(name)))
     retention=operations.get('retention') or {}
     storage=retention.get('hft_storage') or {}

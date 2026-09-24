@@ -1,0 +1,175 @@
+{
+  "schema": "polymarket_v7_exact_arb_order_sizing_benchmark_receipt_v1",
+  "date": "2026-09-24",
+  "branch": "research/unified-exact-arb-graph",
+  "base_sha": "f50147e18e02ebed76cabe900b708e4d9479e603",
+  "uncommitted_worktree": true,
+  "host": {
+    "architecture": "arm64",
+    "cpu": "Apple M4",
+    "build": "local Release"
+  },
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false,
+  "automatic_promotion": false,
+  "source_hashes": {
+    "include/pm/v7_exact_arb_order_sizing.hpp": "4f4138ddaf53fb9e42d09167f1e1b5c5d50913aafaef15b21c90ac2c6586edc9",
+    "include/pm/v7_exact_arb_graph_hotpath.hpp": "798d345596d790b30125342b77d0a8645ddfbd483c9e52563b6775d9ac3eafb1",
+    "tests/bench_v7_exact_arb_graph.cpp": "1682f486b83bf0d45f55f35c367e298be4a1bb35697664a53b89839f0e8658bd",
+    "tests/test_v7_exact_arb_order_sizing.cpp": "f935bdb61071df8611e37520176dcb10b16ff7b7b81a7f3011e2855193fabdf0",
+    "build-Release/pm_v7_exact_arb_graph_bench": "4f31abb506d2e506283fe6412316ea58489421ff4683f10b3e80798a2c6dff63"
+  },
+  "command": "build-Release/pm_v7_exact_arb_graph_bench 100000",
+  "result": {
+    "schema": "polymarket_v7_exact_arb_native_benchmark_v1",
+    "iterations": 100000,
+    "units": "nanoseconds",
+    "depth_levels": 4,
+    "timed_io": false,
+    "measurements": {
+      "champion_binary_sweep": {
+        "p50": 250,
+        "p90": 583,
+        "p99": 792,
+        "p99_9": 875,
+        "max": 33667
+      },
+      "graph_binary_full_depth_sizing": {
+        "p50": 375,
+        "p90": 500,
+        "p99": 542,
+        "p99_9": 584,
+        "max": 11584
+      },
+      "graph_2_leg_full_depth_sizing": {
+        "p50": 250,
+        "p90": 292,
+        "p99": 292,
+        "p99_9": 375,
+        "max": 10416
+      },
+      "native_order_lattice_2_leg_sizing": {
+        "p50": 542,
+        "p90": 542,
+        "p99": 625,
+        "p99_9": 708,
+        "max": 10292
+      },
+      "native_order_lattice_2_leg_certificate": {
+        "quantities_evaluated": 3,
+        "global_model_optimum_proven": true,
+        "search_exhausted": false
+      },
+      "graph_3_leg_full_depth_sizing": {
+        "p50": 375,
+        "p90": 375,
+        "p99": 417,
+        "p99_9": 500,
+        "max": 10417
+      },
+      "native_order_lattice_3_leg_sizing": {
+        "p50": 750,
+        "p90": 792,
+        "p99": 792,
+        "p99_9": 958,
+        "max": 13084
+      },
+      "native_order_lattice_3_leg_certificate": {
+        "quantities_evaluated": 3,
+        "global_model_optimum_proven": true,
+        "search_exhausted": false
+      },
+      "graph_4_leg_full_depth_sizing": {
+        "p50": 500,
+        "p90": 500,
+        "p99": 583,
+        "p99_9": 625,
+        "max": 10500
+      },
+      "native_order_lattice_4_leg_sizing": {
+        "p50": 959,
+        "p90": 1000,
+        "p99": 1041,
+        "p99_9": 1209,
+        "max": 14416
+      },
+      "native_order_lattice_4_leg_certificate": {
+        "quantities_evaluated": 3,
+        "global_model_optimum_proven": true,
+        "search_exhausted": false
+      },
+      "graph_8_leg_full_depth_sizing": {
+        "p50": 875,
+        "p90": 917,
+        "p99": 1000,
+        "p99_9": 1125,
+        "max": 14375
+      },
+      "native_order_lattice_8_leg_sizing": {
+        "p50": 17209,
+        "p90": 17542,
+        "p99": 17917,
+        "p99_9": 27666,
+        "max": 38625
+      },
+      "native_order_lattice_8_leg_certificate": {
+        "quantities_evaluated": 59,
+        "global_model_optimum_proven": true,
+        "search_exhausted": false
+      },
+      "graph_16_leg_full_depth_sizing": {
+        "p50": 1708,
+        "p90": 1709,
+        "p99": 1833,
+        "p99_9": 2167,
+        "max": 21833
+      },
+      "native_order_lattice_16_leg_sizing": {
+        "p50": 33625,
+        "p90": 34208,
+        "p99": 38417,
+        "p99_9": 45334,
+        "max": 64417
+      },
+      "native_order_lattice_16_leg_certificate": {
+        "quantities_evaluated": 59,
+        "global_model_optimum_proven": true,
+        "search_exhausted": false
+      },
+      "dependency_lookup": {
+        "p50": 0,
+        "p90": 42,
+        "p99": 42,
+        "p99_9": 42,
+        "max": 167
+      },
+      "graph_binary_total_decision_compute": {
+        "p50": 291,
+        "p90": 292,
+        "p99": 292,
+        "p99_9": 375,
+        "max": 12209
+      },
+      "native_order_lattice_binary_raw_nonpositive": {
+        "p50": 125,
+        "p90": 167,
+        "p99": 167,
+        "p99_9": 208,
+        "max": 7250
+      }
+    },
+    "graph_binary_over_champion_p99": 0.684343,
+    "graph_binary_ratio_scope": "LEGACY_SWEEP_NOT_NATIVE_ORDER_LATTICE",
+    "native_order_lattice_binary_over_champion_p99": 0.789141,
+    "venue_execution_verified": false,
+    "side_by_side_champion_load_verified": false
+  },
+  "limitations": [
+    "Synthetic four-level wide-edge baskets; not London live causal evidence.",
+    "Single local run, sequential function timings; no CPU-isolated side-by-side load claim.",
+    "Default 512-evaluation bound can exhaust on other shapes; worst-case 1024-level/multi-relation load unmeasured.",
+    "Certified optima refer only to PER_L2_LEVEL_5DP_EXACT_ORDER_LATTICE_V1; venue semantics unverified."
+  ]
+}

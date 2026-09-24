@@ -18,6 +18,7 @@ from typing import Any
 
 from v7_unified_exact_arb_graph import SAFETY, GraphError, load, safe, validate_graph
 from v7_exact_arb_source_health import universe_lease, graph_lease, lease, HOTSET_MAX_AGE_MS
+from v7_exact_arb_native_compile import compile_runtime_bundle
 
 SCHEMA = "polymarket_v7_exact_arb_hotset_selection_v1"
 STATUS_SCHEMA = "polymarket_v7_exact_arb_hotset_selection_status_v1"
@@ -132,6 +133,7 @@ def compile_selection(
             selection_rows[mid] = {
                 "market_id": mid,
                 "event_id": str(market.get("event_id") or ""),
+                "condition_id": market.get("condition_id"),
                 "yes_token": yes,
                 "no_token": no,
                 "start_timestamp_ms": start_ms,
@@ -146,6 +148,12 @@ def compile_selection(
                 "minimum_order_size": market.get("minimum_order_size"),
             }
     rows = sorted(selection_rows.values(), key=lambda row: row["market_id"])
+    # Publication is one atomic selection file: membership, proof-carrying
+    # native operands and source expiration cannot belong to different graphs.
+    native_bundle = compile_runtime_bundle(
+        graph, model_sha, list(dict.fromkeys(selected_relation_ids)),
+        [token for row in rows for token in (row["yes_token"], row["no_token"])],
+    )
     identity = {
         "graph_generation": graph["graph_generation"],
         "markets": [
@@ -173,6 +181,7 @@ def compile_selection(
         "source_evidence_quality": EVIDENCE,
         "source_actionable": False,
         "selected_relation_ids": selected_relation_ids,
+        "native_runtime_bundle": native_bundle,
         "markets": rows,
     }
     status = {
@@ -203,11 +212,19 @@ def main() -> int:
     ap.add_argument("--max-markets", type=int, default=64)
     ap.add_argument("--interval-seconds", type=float, default=1.0)
     ap.add_argument("--once", action="store_true")
+    ap.add_argument("--collect-venue-terms", action="store_true", help="Collect public terms off-path; invalidates native selection while refreshing")
+    ap.add_argument("--venue-terms-directory", type=Path, help="Immutable receipt archive; use graph_hotset/native_venue_terms beside native_generations")
     args = ap.parse_args()
     if len(args.model_sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.model_sha):
         raise SystemExit("invalid model sha")
     if not (1 <= args.max_markets <= 64 and .1 <= args.interval_seconds <= 60):
         raise SystemExit("invalid bounds")
+    if bool(args.venue_terms_directory) != args.collect_venue_terms:
+        raise SystemExit("venue collection requires an explicit receipt archive directory")
+    venue_cache=None
+    if args.collect_venue_terms:
+        from v7_exact_arb_venue_selection import VenueTermsCache
+        venue_cache=VenueTermsCache(args.venue_terms_directory)
     while True:
         try:
             selection, status = compile_selection(
@@ -215,6 +232,20 @@ def main() -> int:
                 args.model_sha, args.max_markets,
                 as_of_ms=time.time_ns() // 1_000_000,
             )
+            if venue_cache is not None:
+                now=time.time_ns()//1_000_000
+                if venue_cache.due(selection,now):
+                    # Publication failure stops before network work. Old terms
+                    # are not granted continuity across a failed source refresh.
+                    atomic(args.output,{**selection,"source_valid":False,"valid_until_ms":0,
+                                        "venue_terms_refreshing":True})
+                    atomic(args.status,{**status,"state":"VENUE_TERMS_REFRESHING"})
+                    venue_cache.refresh(selection,now)
+                    selection,status=compile_selection(load(args.graph),load(args.universe),load(args.hotset),
+                        args.model_sha,args.max_markets,as_of_ms=time.time_ns()//1_000_000)
+                selection=venue_cache.attach(selection,time.time_ns()//1_000_000)
+                status["venue_terms_states"]={state:sum(row["state"]==state for row in selection["venue_terms"]["receipts"])
+                    for state in ("OBSERVED_SUPPORTED_TERMS","UNVERIFIED")}
             atomic(args.output, selection)
             atomic(args.status, status)
             print(json.dumps(status, sort_keys=True), flush=True)

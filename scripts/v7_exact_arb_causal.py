@@ -2,6 +2,7 @@
 from __future__ import annotations
 from bisect import bisect_right
 from collections import defaultdict
+from copy import deepcopy
 from fractions import Fraction
 import json
 import os
@@ -43,7 +44,9 @@ class CausalBooks:
     def ingest(self, now, books):
         if now < self.watermark: raise GraphError("timestamp_reversal")
         for token, book in books.items():
-            self.history[token].append(book)
+            # Decoder/control-plane dictionaries may be reused by the caller.
+            # A later mutation must not rewrite the causal past in replay.
+            self.history[token].append(deepcopy(book))
             self.times[token].append(now)
             if len(self.times[token]) > self.maximum_snapshots:
                 del self.times[token][0]; del self.history[token][0]
@@ -52,7 +55,7 @@ class CausalBooks:
     def at(self, token, timestamp):
         # Selection is by local availability, never by exchange event time.
         index = bisect_right(self.times.get(token, []), timestamp)-1
-        return self.history[token][index] if index >= 0 else None
+        return deepcopy(self.history[token][index]) if index >= 0 else None
 
 
 class ResourceLedger:
