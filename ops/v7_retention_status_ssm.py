@@ -91,7 +91,9 @@ result={
     'retention_managed_files':retention.get('managed_files'),
     'retention_verified_offload_receipt':retention.get('verified_offload_receipt'),
     'rolling_state':(retention.get('rolling_retirement') or {}).get('state'),
+    'rolling_failures':(retention.get('rolling_retirement') or {}).get('failures') or [],
     'rolling_failures_count':len((retention.get('rolling_retirement') or {}).get('failures') or []),
+    'compression_failures':(retention.get('lossless_compression') or {}).get('failures') or [],
     'compression_failures_count':len((retention.get('lossless_compression') or {}).get('failures') or []),
     'journal_tail':lines[-30:],
 }
@@ -124,6 +126,7 @@ def main(argv=None):
     print("retention_status_age_seconds="+str(value.get("retention_status_age_seconds")))
     print("retention_timer_active="+str((value.get("timer") or {}).get("ActiveState")))
     print("retention_service_result="+str((value.get("service") or {}).get("Result")))
+    print("rolling_failures="+json.dumps(value.get("rolling_failures") or [],sort_keys=True))
     return 0
 
 if __name__=="__main__":
