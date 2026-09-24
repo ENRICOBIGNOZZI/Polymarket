@@ -107,6 +107,7 @@ jobs:
           SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
         run: |
           set -euo pipefail
+          echo FETCH_SOURCE > /tmp/a0-a5-stage
           git fetch origin "$RESEARCH_BRANCH" --depth=200
           branch_sha="$(git rev-parse FETCH_HEAD)"
           git cat-file -e "$SOURCE_SHA^{commit}"
@@ -116,17 +117,25 @@ jobs:
 
       - name: Test exact A0-A5 source
         run: |
-          python3 -m pip install --disable-pip-version-check -q -r research/requirements-learning.txt
-          PYTHONPATH=. python3 -m pytest -q \
-            tests/test_v7_maker_a0_a5_2h.py \
-            tests/test_v7_maker_market_metadata.py
-          python3 -m py_compile \
-            research/walk_forward_v3/maker_a0_a5_2h.py \
-            research/walk_forward_v3/maker_market_metadata.py \
-            ops/v7_maker_a0_a5_ssm.py
-          c++ -std=c++20 -O2 -Iinclude \
-            research/tools/v7_external_event_export.cpp \
-            -o /tmp/v7_external_event_export
+          set -euo pipefail
+          set -o pipefail
+          echo PREFLIGHT_TEST > /tmp/a0-a5-stage
+          {
+            python3 -m pip install --disable-pip-version-check -q -r research/requirements-learning.txt
+            PYTHONPATH=. python3 -m pytest -q \
+              tests/test_v7_maker_a0_a5_2h.py \
+              tests/test_v7_maker_market_metadata.py
+            python3 -m py_compile \
+              research/walk_forward_v3/maker_a0_a5_2h.py \
+              research/walk_forward_v3/maker_market_metadata.py \
+              ops/v7_maker_a0_a5_ssm.py
+            c++ -std=c++20 -O2 -Iinclude \
+              research/tools/v7_external_event_export.cpp \
+              -o /tmp/v7_external_event_export
+          } 2>&1 | tee /tmp/v7-maker-a0-a5-preflight.log
+
+      - name: Mark AWS authentication stage
+        run: echo AWS_OIDC_AUTH > /tmp/a0-a5-stage
 
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
@@ -143,6 +152,7 @@ jobs:
         run: |
           set -euo pipefail
           set -o pipefail
+          echo LONDON_SSM > /tmp/a0-a5-stage
           python3 ops/v7_maker_a0_a5_ssm.py \
             --instance-id "$INSTANCE_ID" \
             --expected-sha "$SOURCE_SHA" \
@@ -155,6 +165,7 @@ jobs:
           OUTPUT_DIR: ${{ steps.request.outputs.output_directory }}
           SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
         run: |
+          echo VALIDATE_PACKAGE > /tmp/a0-a5-stage
           python3 - "$OUTPUT_DIR" "$SOURCE_SHA" <<'PY'
           import csv,json,sys
           from pathlib import Path
@@ -238,6 +249,13 @@ jobs:
           grid=root/"04_grid.csv"
           if grid.is_file():
               payload["grid"]=list(csv.DictReader(open(grid,newline="")))
+          stage=Path("/tmp/a0-a5-stage")
+          if stage.is_file():
+              payload["failure_stage"]=stage.read_text(encoding="utf-8",errors="replace").strip()
+          preflight=Path("/tmp/v7-maker-a0-a5-preflight.log")
+          if preflight.is_file():
+              lines=preflight.read_text(encoding="utf-8",errors="replace").splitlines()
+              payload["preflight_log_tail"]=lines[-200:]
           log=Path("/tmp/v7-maker-a0-a5.log")
           if log.is_file():
               lines=log.read_text(encoding="utf-8",errors="replace").splitlines()
