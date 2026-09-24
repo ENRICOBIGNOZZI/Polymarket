@@ -107,6 +107,8 @@ def test_cutover_parses_systemd_environment_with_shlex_not_broken_tr_escape():
 
 def test_linux_runtime_pins_artifacts_to_exact_sha_generation():
     unit=(ROOT/'ops/systemd/polymarket-v7-paper.service.in').read_text()
+    assert 'ExecStart=/usr/bin/bash @APP_DIR@/ops/v7_service_entrypoint.sh' in unit
+    assert 'ExecStart=@APP_DIR@/ops/v7_service_entrypoint.sh' not in unit
     cutover=(ROOT/'ops/v7_london_cutover.sh').read_text()
     deploy=(ROOT/'.github/workflows/v7-deploy-paper-server.yml').read_text()
 
