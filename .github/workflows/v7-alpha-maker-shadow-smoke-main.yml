@@ -188,14 +188,14 @@ jobs:
           maker_model=load("micro_maker/execution_model.json")
           maker_selection=load("micro_maker/reward_selection.json")
           fair_status=load("external_fair/status.json")
-          print("MAKER_STATE="+json.dumps({
+          print("MAKER_STATE="+json.dumps({{
               "selection_present":bool(maker_selection),
               "model_state":maker_model.get("model_state"),
               "model_orders":((maker_model.get("groups") or {}).get("GLOBAL") or {}).get("orders"),
               "model_filled_orders":((maker_model.get("groups") or {}).get("GLOBAL") or {}).get("filled_orders"),
               "fair_state":fair_status.get("state"),
               "fair_blockers":fair_status.get("blockers"),
-          },sort_keys=True,separators=(",",":")))
+          }},sort_keys=True,separators=(",",":")))
           selection=load("universe/book_selection.json")
           selection_compact={{
               "schema":selection.get("schema"),"model_sha":selection.get("model_sha"),
@@ -251,9 +251,9 @@ jobs:
           python3 - "$OUT/status.json" <<'PYCOMPACT'
           import json,sys
           v=json.load(open(sys.argv[1]))
-          out={"state":v.get("state"),"counts":v.get("counts"),"asset_horizon":v.get("asset_horizon"),"policies":{}}
+          out={{"state":v.get("state"),"counts":v.get("counts"),"asset_horizon":v.get("asset_horizon"),"policies":{{}}}}
           for policy,arms in (v.get("policy_arm") or {}).items():
-              p={"eligible_anchors":0,"evaluated":0,"observed":0,"filled_anchors":0,"fill_events":0,"filled_shares":0.0,"arms":{}}
+              p={{"eligible_anchors":0,"evaluated":0,"observed":0,"filled_anchors":0,"fill_events":0,"filled_shares":0.0,"arms":{{}}}}
               seen_eligible=[]
               for arm,s in (arms or {}).items():
                   p["evaluated"]+=int(s.get("evaluated") or 0)
@@ -262,11 +262,11 @@ jobs:
                   p["fill_events"]+=int(s.get("fill_events") or 0)
                   p["filled_shares"]+=float(s.get("filled_shares") or 0.0)
                   if s.get("eligible_anchors") is not None: seen_eligible.append(int(s.get("eligible_anchors") or 0))
-                  p["arms"][arm]={
+                  p["arms"][arm]={{
                       "observed":s.get("observed"),"filled_anchors":s.get("filled_anchors"),
                       "fill_anchor_rate":s.get("fill_anchor_rate"),"filled_shares":s.get("filled_shares"),
                       "executable_markout":s.get("executable_markout"),
-                  }
+                  }}
               p["eligible_anchors"]=max(seen_eligible) if seen_eligible else 0
               out["policies"][policy]=p
           print(json.dumps(out,sort_keys=True,separators=(",",":")))
