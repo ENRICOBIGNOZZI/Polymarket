@@ -20,6 +20,8 @@ class MakerA0A5Tests(unittest.TestCase):
         self.assertFalse(external_feature("tape.pm_yes_imbalance"))
         self.assertTrue(pm_feature("tape.pm_yes_imbalance"))
         self.assertTrue(pm_feature("short_return_ticks"))
+        self.assertFalse(pm_feature("tape.external.depth_imbalance"))
+        self.assertFalse(pm_feature("external.trade_intensity"))
         self.assertTrue(full_execution_feature("queue_ahead"))
         self.assertTrue(full_execution_feature("distance_to_reference_bp"))
         self.assertFalse(full_execution_feature("realized_markout_1s"))
