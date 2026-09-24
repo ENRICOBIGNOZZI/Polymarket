@@ -153,6 +153,13 @@ jobs:
           head -1 "$ENTRY" 2>&1 || true
           echo "=== SUPERVISOR CONTROL ==="
           ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
+          echo "=== HOT FAILURE DIAGNOSTICS ==="
+          for rel in native_engine_manager.log trade_recorder.log universe/collector.log external_fair/external_assets_supervisor.log research/repricing_book_observer.log portfolio_guard.log; do
+            echo "--- HOT:$rel ---"
+            tail -n 120 "$ROOT/$rel" 2>/dev/null || true
+          done
+          echo "--- HOT:process_manifest_resolved.json ---"
+          cat "$ROOT/control/process_manifest_resolved.json" 2>/dev/null || true
           echo "--- KILL EARLY ---"
           cat "$ROOT/control/KILL" 2>/dev/null || echo ABSENT
           for name in supervisor_status.json supervisor_restarts.json runtime_status.json portfolio_state.json runtime_artifact_receipt.json runtime_resource_plan.json fencing_supervisor_status.json clock_guard.json; do
