@@ -582,6 +582,27 @@ def external_feature(name: str) -> bool:
     ))
 
 
+def external_fair_feature(name: str) -> bool:
+    """External-only level/state features for p_external; never PM/CLOB state."""
+    n=name.lower()
+    if not safe_feature_name(n):
+        return False
+    if any(x in n for x in (
+        "pm.","pm_","polymarket","clob","book_","book.","queue","fill",
+        "markout","tox","adverse_selection","spread_ticks","imbalance",
+        "microprice",
+    )):
+        return False
+    if external_feature(n):
+        return True
+    return any(x in n for x in (
+        "oracle","reference","strike","spot","index_price","mark_price",
+        "perp","basis","funding","open_interest","liquidat","deribit",
+        "implied_vol","realized_vol","native_vol","vol_fast","vol_slow",
+        "distance_to_","distance_from_","time_to_resolution","tte",
+    ))
+
+
 def pm_feature(name: str) -> bool:
     n=name.lower()
     if not safe_feature_name(n) or external_feature(n):
@@ -810,7 +831,8 @@ def maker_fill(row,session,trades,side,latency_ms):
     if idx is None:
         return {"fills":[],"quote_price":price,"arrival_pair":pair,"posted_shares":TARGET_SHARES},"OBSERVED_NO_TRADES"
     left=bisect_right(idx["stamps"],arrival_ms)
-    right=bisect_right(idx["stamps"],end_ms)
+    # Trade exactly at expiry has ambiguous order at millisecond resolution.
+    right=bisect_left(idx["stamps"],end_ms)
     remaining=TARGET_SHARES
     fills=[]
     for wall,epoch,aggressor,trade_price,size in idx["rows"][left:right]:
@@ -931,7 +953,8 @@ def prediction_names(train_rows):
     ext=select_names(train_rows,external_feature)
     pm=select_names(train_rows,pm_feature)
     full=select_names(train_rows,full_execution_feature)
-    return ext,pm,full
+    fair=select_names(train_rows,external_fair_feature)
+    return ext,pm,full,fair
 
 
 def train_external_fair(train_rows,session_cache,ext_names):
@@ -949,23 +972,24 @@ def train_external_fair(train_rows,session_cache,ext_names):
 
 
 def residual_features(row,session,external_model,external_names):
+    """A4 sees PM only through the signed PM-minus-external residual."""
     pair=current_pair(row,session)
     if pair is None:return None
     base=feature_dict(row,external_names,include_pm=False,include_signal_age=False)
     fair=min(1.0,max(0.0,external_model.predict(base)))
     residual=float(pair["pm_yes"])-fair
+    tte_s=float(row.get("tte_ns") or 0)/1e9
     return {
         "residual.pm_minus_external":residual,
         "residual.abs":abs(residual),
-        "residual.external_fair":fair,
-        "residual.pm_yes":float(pair["pm_yes"]),
-        "ctx.tte_s":float(row.get("tte_ns") or 0)/1e9,
+        "residual.x_tte_s":residual*tte_s,
+        "ctx.tte_s":tte_s,
         "asset::"+str(row.get("asset") or "UNKNOWN"):1.0,
         "contract::"+str(row.get("horizon") or "UNKNOWN"):1.0,
     }
 
 
-def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,full_names,external_model,trades):
+def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,full_names,fair_names,external_model,trades):
     specs={
         "A1_EXTERNAL":ext_names,
         "A2_PM":pm_names,
@@ -1007,7 +1031,7 @@ def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,
         if session is None:continue
         y=future_delta(row,session,latency,horizon)
         if y is None:continue
-        rec=residual_features(row,session,external_model,ext_names)
+        rec=residual_features(row,session,external_model,fair_names)
         if rec is None:continue
         records.append(rec);targets.append(float(y))
     names=sorted({k for rec in records for k in rec})
@@ -1019,13 +1043,13 @@ def fit_cell_models(train_rows,session_cache,latency,horizon,ext_names,pm_names,
     return models,receipts
 
 
-def predict_policy(policy,row,session,model,ext_names,pm_names,full_names,external_model,latency,horizon,trades):
+def predict_policy(policy,row,session,model,ext_names,pm_names,full_names,fair_names,external_model,latency,horizon,trades):
     if policy=="A0_BASELINE":return None
     if policy=="A1_EXTERNAL":rec=feature_dict(row,ext_names,include_pm=False,include_signal_age=False)
     elif policy=="A2_PM":rec=feature_dict(row,pm_names,include_pm=True,include_signal_age=False)
     elif policy=="A3_EXTERNAL_PM":rec=feature_dict(row,sorted(set(ext_names)|set(pm_names)),include_pm=True,include_signal_age=True)
     elif policy=="A4_RESIDUAL":
-        rec=residual_features(row,session,external_model,ext_names)
+        rec=residual_features(row,session,external_model,fair_names)
         if rec is None:return None
     elif policy=="A5_FULL_EXECUTION":
         rec=feature_dict(row,full_names,include_pm=True,include_signal_age=True)
@@ -1072,7 +1096,7 @@ def finalize_stats(s):
     }
 
 
-def evaluate_cell(oos_rows,session_cache,trades,models,latency,horizon,ext_names,pm_names,full_names,external_model):
+def evaluate_cell(oos_rows,session_cache,trades,models,latency,horizon,ext_names,pm_names,full_names,fair_names,external_model):
     stats={p:empty_stats() for p in POLICIES}
     cooldown={p:{} for p in POLICIES}
     for row in sorted(oos_rows,key=lambda r:(int(r["decision_ns"]),str(r["decision_id"]))):
@@ -1085,7 +1109,7 @@ def evaluate_cell(oos_rows,session_cache,trades,models,latency,horizon,ext_names
         for p in POLICIES[1:]:
             model=models.get(p)
             predictions[p]=None if model is None else predict_policy(
-                p,row,session,model,ext_names,pm_names,full_names,external_model,latency,horizon,trades)
+                p,row,session,model,ext_names,pm_names,full_names,fair_names,external_model,latency,horizon,trades)
         for p in POLICIES:
             st=stats[p];st["observations"]+=1
             pred=predictions[p]
@@ -1212,12 +1236,13 @@ def run(
     train,oos,cut=split_60_40(rows,start_ns)
     if not train or not oos:
         raise ValueError("EMPTY_60_40_SPLIT")
-    ext_names,pm_names,full_names=prediction_names(train)
+    ext_names,pm_names,full_names,fair_names=prediction_names(train)
     if not ext_names:raise ValueError("NO_EXTERNAL_FEATURES")
     if not pm_names:raise ValueError("NO_PM_FEATURES")
+    if not fair_names:raise ValueError("NO_EXTERNAL_FAIR_FEATURES")
     rich_a5_names=[name for name in full_names if str(name).startswith("tape.")]
     if not rich_a5_names:raise ValueError("NO_RICH_A5_FEATURES")
-    external_model,external_level_names=train_external_fair(train,session_cache,ext_names)
+    external_model,external_level_names=train_external_fair(train,session_cache,fair_names)
     trades,trade_diag=load_trades(root,rows,start_ns,end_ns)
     if not trades:raise ValueError("NO_CAUSAL_MAKER_TRADES")
 
@@ -1225,11 +1250,11 @@ def run(
     for latency in LATENCIES:
         for horizon in EXITS:
             models,receipt=fit_cell_models(
-                train,session_cache,latency,horizon,ext_names,pm_names,full_names,external_model,trades)
+                train,session_cache,latency,horizon,ext_names,pm_names,full_names,fair_names,external_model,trades)
             receipts[f"{latency}::{horizon}"]=receipt
             cell=evaluate_cell(
                 oos,session_cache,trades,models,latency,horizon,
-                ext_names,pm_names,full_names,external_model)
+                ext_names,pm_names,full_names,fair_names,external_model)
             for policy,value in cell.items():grid[policy][f"{latency}::{horizon}"]=value
 
     output.mkdir(parents=True,exist_ok=False)
@@ -1252,8 +1277,9 @@ def run(
         "latencies_ms":list(LATENCIES),"holding_horizons_ms":list(EXITS),
         "feature_sets":{"A1_EXTERNAL":ext_names,"A2_PM":pm_names,
                         "A3_EXTERNAL_PM":sorted(set(ext_names)|set(pm_names)),
-                        "A4_RESIDUAL":["pm_minus_external_fair_residual"],
+                        "A4_RESIDUAL":["residual.pm_minus_external","residual.abs","residual.x_tte_s"],
                         "A5_FULL_EXECUTION":full_names},
+        "external_fair_feature_names":fair_names,
         "a5_rich_feature_names":rich_a5_names,
         "directional_target_semantics":"PM_YES_AT_DECISION_PLUS_HORIZON_MINUS_PM_YES_AT_DECISION;LATENCY_DOES_NOT_SHIFT_LABEL",
         "grid_cell_count":len(POLICIES)*len(LATENCIES)*len(EXITS),
@@ -1266,6 +1292,32 @@ def run(
     atomic_json(output/"02_training_receipts.json",{"schema":SCHEMA+"_training",**SAFETY_PLUS,"cells":receipts})
     mono=monotonicity(grid)
     atomic_json(output/"03_monotonicity.json",{"schema":SCHEMA+"_monotonicity",**SAFETY_PLUS,"policies":mono})
+
+    paired={}
+    paired_metrics=(
+        "net_pnl_per_posted_share","net_pnl_per_fill_share",
+        "fill_probability","toxic_fill_probability","direction_accuracy",
+        "executable_markout_per_fill_share",
+    )
+    for policy in POLICIES[1:]:
+        paired[policy]={}
+        for key,cell in grid[policy].items():
+            base=grid["A0_BASELINE"].get(key) or {}
+            deltas={}
+            for metric in paired_metrics:
+                a=cell.get(metric);b=base.get(metric)
+                deltas[metric]=float(a)-float(b) if finite(a) and finite(b) else None
+            paired[policy][key]={
+                "alpha":{m:cell.get(m) for m in paired_metrics},
+                "a0":{m:base.get(m) for m in paired_metrics},
+                "delta_alpha_minus_a0":deltas,
+            }
+    atomic_json(output/"06_paired_vs_a0.json",{
+        "schema":SCHEMA+"_paired_vs_a0",**SAFETY_PLUS,
+        "comparison":"SAME_LOCKED_OOS_TIMESTAMPS_SAME_LATENCY_SAME_HOLDING_SAME_FROZEN_MAKER_MECHANICS",
+        "normalization_note":"PRIMARY_COMPARISON_IS_NET_PNL_PER_POSTED_SHARE_BECAUSE_A0_QUOTES_BOTH_SIDES_AND_ALPHA_POLICIES_QUOTE_ONE_SIDE",
+        "policies":paired,
+    })
 
     fields=[
         "policy","latency_ms","holding_horizon_ms","observations","selected_quote_episodes",
