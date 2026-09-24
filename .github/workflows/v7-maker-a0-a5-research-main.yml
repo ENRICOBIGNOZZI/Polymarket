@@ -61,6 +61,47 @@ jobs:
           echo "minimum_wall_ns=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["minimum_wall_ns"])')" >> "$GITHUB_OUTPUT"
           echo "output_directory=$(python3 -c 'import json;print(json.load(open("'"$request"'"))["output_directory"])')" >> "$GITHUB_OUTPUT"
 
+      - name: Publish A0-A5 started marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+          MAIN_SHA: ${{ github.sha }}
+          RESULT_BRANCH: research/a0-a5-results
+        run: |
+          python3 - <<'PY'
+          import base64,json,os,urllib.request
+          payload={
+              "schema":"polymarket_v7_maker_a0_a5_result_envelope_v1",
+              "request_id":os.environ["REQUEST_ID"],
+              "source_sha":os.environ["SOURCE_SHA"],
+              "main_request_sha":os.environ["MAIN_SHA"],
+              "job_status":"STARTED",
+              "paper_only":True,
+              "authenticated_execution":False,
+              "real_order_submission":False,
+              "real_capital_at_risk":False,
+              "automatic_promotion":False,
+          }
+          raw=(json.dumps(payload,sort_keys=True,separators=(",",":"))+"\n").encode()
+          repo=os.environ["REPO"]; rid=os.environ["REQUEST_ID"]
+          url=f"https://api.github.com/repos/{repo}/contents/docs/research/a0-a5-results/{rid}.json"
+          body=json.dumps({
+              "message":f"Start A0-A5 result {rid}",
+              "content":base64.b64encode(raw).decode(),
+              "branch":os.environ["RESULT_BRANCH"],
+          }).encode()
+          req=urllib.request.Request(url,data=body,method="PUT",headers={
+              "Authorization":"Bearer "+os.environ["GH_TOKEN"],
+              "Accept":"application/vnd.github+json",
+              "X-GitHub-Api-Version":"2022-11-28",
+              "Content-Type":"application/json",
+          })
+          with urllib.request.urlopen(req,timeout=30) as response:
+              print("RESULT_STARTED_STATUS="+str(response.status))
+          PY
+
       - name: Fetch exact A0-A5 research source
         env:
           SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
