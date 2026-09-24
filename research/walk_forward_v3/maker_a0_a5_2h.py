@@ -607,8 +607,18 @@ def pm_feature(name: str) -> bool:
     n=name.lower()
     if not safe_feature_name(n) or external_feature(n):
         return False
+    # Fail closed against external/derivatives namespaces before matching generic
+    # microstructure words such as "imbalance" or "trade_intensity".
+    if n.startswith(("external.","tape.external.","binance.","coinbase.","bybit.",
+                     "deribit.","oracle.","reference.","perp.")):
+        return False
+    if any(x in n for x in (
+        "funding","open_interest","liquidat","implied_vol","spot_minus",
+        "distance_to_reference","basis_to_",
+    )):
+        return False
     return (
-        n.startswith("tape.pm_")
+        n.startswith(("tape.pm_","pm.","pm_"))
         or any(x in n for x in (
             "pm_yes_mid","pm_no_mid","pm_complete_set","pm_yes_spread","pm_yes_imbalance",
             "depth_imbalance","book_imbalance","short_return_ticks","spread_ticks",
