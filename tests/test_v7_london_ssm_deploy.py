@@ -106,6 +106,8 @@ def test_cutover_command_reuses_canonical_stage_and_cutover():
     assert "authenticated_execution" in command
     assert "real_order_submission" in command
     assert "worktree add --detach" in command
+    assert "fetch --no-tags --prune origin \'+refs/heads/*:refs/remotes/origin/*\'" in command
+    assert "fetch --no-tags origin main" not in command
     assert "apt-get install -y python3-numpy" not in command
     assert 'POLYMARKET_REUSE_EXACT_SHA_CI="$REUSE_EXACT_SHA_CI"' in command
     assert 'STAGE_TMPDIR=/var/tmp/pmv7-' in command
