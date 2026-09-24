@@ -350,7 +350,7 @@ def load_book_anchor_rows(
     }
 
 
-def load_feature_anchor_rows(def load_feature_anchor_rows(
+def load_feature_anchor_rows(
     paths: Iterable[Path], *, minimum_wall_ns: int,
     market_meta: dict[str,dict[str,float]],
     context_meta: dict[tuple[str,str],dict[str,float]],
