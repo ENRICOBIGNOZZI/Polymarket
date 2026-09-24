@@ -43,7 +43,8 @@ import numpy as np
 from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, fee_per_share
 from research.walk_forward_v3 import direct_action as da
 from research.walk_forward_v3.btc_compact_equity import (
-    EXITS, LATENCIES, SIZE, jsonl_sessions, pair_asof_session, side_state, stream_sessions,
+    EXITS, LATENCIES, SIZE, jsonl_sessions, pair_asof_session, side_state,
+    stream_sessions, stream_raw_sessions,
 )
 from research.walk_forward_v3.multi_alpha_2h import (
     WINDOW_NS, attach_rich_state, build_market_session_index, discover_feature_tapes,
@@ -1126,6 +1127,11 @@ def run(
     if not sessions:
         sessions,fallback=jsonl_sessions(root.resolve(),source)
         tape_diag={**tape_diag,**fallback,"fallback":"JSONL_BOOK_OBSERVATIONS"}
+    if not sessions:
+        sessions,raw_diag=stream_raw_sessions(root.resolve(),source)
+        tape_diag={**tape_diag,**raw_diag,"fallback":"RAW_CAUSAL_BOOK_TOKEN_INDEX"}
+    if not sessions:
+        raise ValueError("NO_CAUSAL_PM_BOOK_SESSIONS")
     market_index=build_market_session_index(sessions)
     session_cache={}
     usable=[]
