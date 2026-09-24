@@ -1,0 +1,58 @@
+name: V7 shutdown cause probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-shutdown-cause-probe-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: i-04042ca7da7a23215
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate request
+        run: |
+          python3 - deploy/v7-shutdown-cause-probe-request.json <<'PY'
+          import json,sys
+          assert json.load(open(sys.argv[1]))=={"schema":"polymarket_v7_shutdown_cause_probe_v1","read_only":True}
+          PY
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-shutdown-probe
+          aws-region: eu-west-2
+      - name: Read shutdown cause
+        run: |
+          set -euo pipefail
+          python3 - "$INSTANCE_ID" <<'PY'
+          import sys
+          sys.path.insert(0,'ops')
+          from v7_london_ssm_deploy import run,REGION
+          instance=sys.argv[1]
+          command=r'''set -euo pipefail
+          ROOT=/mnt/polymarket-data/paper_v7_london
+          echo "SUPERVISOR_STATUS"; cat "$ROOT/control/supervisor_status.json" 2>/dev/null || true
+          echo "RUNTIME_STATUS"; cat "$ROOT/control/runtime_status.json" 2>/dev/null || true
+          echo "PORTFOLIO_STATE"; cat "$ROOT/control/portfolio_state.json" 2>/dev/null || true
+          echo "KILL"; if [[ -e "$ROOT/control/KILL" ]]; then stat -c 'bytes=%s mtime=%y' "$ROOT/control/KILL"; cat "$ROOT/control/KILL"; else echo ABSENT; fi
+          echo "PORTFOLIO_GUARD_TAIL"; tail -n 80 "$ROOT/portfolio_guard.log" 2>/dev/null || true
+          echo "LEDGER_ROUTER_TAIL"; tail -n 40 "$ROOT/ledger_router.log" 2>/dev/null || true
+          echo "NATIVE_MANAGER_TAIL"; tail -n 40 "$ROOT/native_engine_manager.log" 2>/dev/null || true
+          echo "JOURNAL";
+          journalctl -u polymarket-v7-paper.service --since '2026-09-24 18:22:00' --until '2026-09-24 18:33:30' --no-pager -o short-iso || true
+          '''
+          stdout,stderr=run(REGION,instance,command,180)
+          print(stdout)
+          if stderr: print(stderr,file=sys.stderr)
+          PY
