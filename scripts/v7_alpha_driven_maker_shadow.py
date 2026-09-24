@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Bounded zero-authority alpha-driven maker shadow over the live causal book.
+"""Bounded zero-authority A0-A5 alpha-driven maker horse race.
 
-This script never writes to the canonical ledger or OMS. It samples the current
-market, labels each quote opportunity by whether the canonical maker bridge
-would emit a MAKE proposal, and replays conservative resting-order fills using
-the same public-print/queue-ahead semantics as the native research adapter.
+Reads the live causal Polymarket book tape, the verified M5/M15 market
+selection, and already-running external crypto market-data status files.
+Every alpha sees the same quote anchors and the same native maker queue replay.
+Alpha only decides whether a quote belongs to its ex-ante cohort.
+
+No canonical ledger writes. No OMS. No authenticated execution. No orders.
 """
 from __future__ import annotations
 
@@ -14,14 +16,26 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import subprocess
 import time
 from typing import Any
 
 from v7_causal_book import BookTimeline
-from v7_maker_opportunity_bridge import build_maker_opportunities
 
-SCHEMA = "polymarket_v7_alpha_driven_maker_shadow_v1"
-STATUS_SCHEMA = "polymarket_v7_alpha_driven_maker_shadow_status_v1"
+SCHEMA = "polymarket_v7_alpha_driven_maker_shadow_v2"
+STATUS_SCHEMA = "polymarket_v7_alpha_driven_maker_shadow_status_v2"
+SELECTION_SCHEMA = "polymarket_v7_multi_crypto_book_selection_v1"
+EXTERNAL_SCHEMA = "polymarket_v7_external_venue_runtime_v1"
+ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB")
+HORIZONS = {"M5", "M15"}
+POLICIES = (
+    "A0_BASELINE",
+    "A1_EXTERNAL_MOMENTUM",
+    "A2_PM_MOMENTUM",
+    "A3_COMBINED_MOMENTUM",
+    "A4_MEAN_REVERSION",
+    "A5_TOXICITY_VETO",
+)
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -36,6 +50,22 @@ def stable_id(*parts: Any) -> str:
     return hashlib.sha256("|".join(str(x) for x in parts).encode()).hexdigest()
 
 
+def finite(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def sign(value: float | None, eps: float = 1e-15) -> int:
+    if value is None or not math.isfinite(value) or abs(value) <= eps:
+        return 0
+    return 1 if value > 0 else -1
+
+
 def make_protocol(ttls_ms: list[int], markouts_ms: list[int]) -> dict[str, Any]:
     arms = []
     for placement in ("JOIN", "IMPROVE1"):
@@ -43,380 +73,507 @@ def make_protocol(ttls_ms: list[int], markouts_ms: list[int]) -> dict[str, Any]:
             arms.append({"id": f"{placement}_{ttl}MS", "placement": placement, "lifetime_ms": ttl})
     return {
         "maker": {
-            "maximum_feature_age_ms": 2_000,
             "markout_horizons_ms": sorted(set(markouts_ms)),
             "arms": arms,
         }
     }
 
 
-def alpha_compact(opportunity: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(opportunity, dict):
-        return None
-    packet = opportunity.get("execution_alpha")
-    plan = opportunity.get("execution_plan") if isinstance(opportunity.get("execution_plan"), dict) else {}
-    leg = (plan.get("legs") or [{}])[0] if isinstance(plan.get("legs"), list) else {}
+def external_path(run_root: Path, asset: str) -> Path:
+    if asset == "BTC":
+        return run_root / "external_fair" / "external_venues.json"
+    return run_root / "external_fair" / "assets" / asset.lower() / "external_venues.json"
+
+
+def external_features(run_root: Path, asset: str, model_sha: str, now_ns: int) -> dict[str, Any]:
+    value = load(external_path(run_root, asset))
+    try:
+        timestamp_ns = int(value.get("timestamp_ns") or 0)
+    except (TypeError, ValueError, OverflowError):
+        timestamp_ns = 0
+    age_ns = now_ns - timestamp_ns if timestamp_ns > 0 else 10**30
+    identity_ok = (
+        value.get("schema") == EXTERNAL_SCHEMA
+        and value.get("asset") == asset
+        and value.get("code_sha") == model_sha
+        and value.get("paper_only") is True
+        and value.get("authenticated_execution") is False
+        and value.get("real_order_submission") is False
+        and value.get("state") in {"OPERATIONAL", "WARMING_OR_DEGRADED"}
+        and value.get("valid") is True
+        and -5_000_000_000 <= age_ns <= 2_000_000_000
+    )
+    names = (
+        "return_50ms", "return_100ms", "return_250ms", "return_1s", "return_5s",
+        "aggregate_ofi", "aggregate_trade_imbalance", "dispersion_bps",
+        "realized_vol_fast", "composite_price", "composite_microprice",
+    )
+    features = {name: finite(value.get(name)) for name in names}
+    vote_names = (
+        "return_100ms", "return_250ms", "return_1s",
+        "aggregate_ofi", "aggregate_trade_imbalance",
+    )
+    votes = [sign(features[name]) for name in vote_names if features[name] is not None]
+    vote = sum(votes)
+    confidence = abs(vote) / len(votes) if votes else 0.0
+    direction = sign(float(vote)) if votes else 0
     return {
-        "replay_key": opportunity.get("deterministic_replay_key"),
-        "conservative_ev": opportunity.get("conservative_expected_wealth_change"),
-        "fair_value": opportunity.get("fair_value"),
-        "execution_alpha": packet if isinstance(packet, dict) else None,
-        "limit_price": leg.get("limit_price") if isinstance(leg, dict) else None,
-        "target_quantity": leg.get("target_quantity") if isinstance(leg, dict) else None,
-        "timeout_ms": plan.get("timeout_ms"),
+        "ready": bool(identity_ok and votes),
+        "age_ms": age_ns / 1_000_000.0 if timestamp_ns else None,
+        "direction": direction,
+        "confidence": confidence,
+        "vote": vote,
+        "vote_count": len(votes),
+        "features": features,
+        "state": value.get("state"),
+        "valid": value.get("valid"),
     }
 
 
-def make_anchor(row: dict[str, Any], *, market_id: str, token_id: str, model_sha: str,
-                quantity: float, opportunity: dict[str, Any] | None) -> dict[str, Any]:
+def pm_features(row: dict[str, Any]) -> dict[str, Any]:
+    placement = row.get("placement_features")
+    placement = placement if isinstance(placement, dict) else {}
+    imbalance = finite(placement.get("imbalance"))
+    ofi = finite(placement.get("ofi"))
+    short_return = finite(placement.get("short_return_ticks"))
+    aggressive_buy = finite(placement.get("aggressive_buy_prints_per_second"))
+    aggressive_sell = finite(placement.get("aggressive_sell_prints_per_second"))
+    flow_delta = (
+        aggressive_buy - aggressive_sell
+        if aggressive_buy is not None and aggressive_sell is not None
+        else None
+    )
+    raw = {
+        "imbalance": imbalance,
+        "ofi": ofi,
+        "short_return_ticks": short_return,
+        "aggressive_buy_prints_per_second": aggressive_buy,
+        "aggressive_sell_prints_per_second": aggressive_sell,
+        "aggressive_flow_delta": flow_delta,
+        "spread_ticks": finite(placement.get("spread_ticks")),
+        "ew_vol_ticks": finite(placement.get("ew_vol_ticks")),
+    }
+    vote_fields = (imbalance, ofi, short_return, flow_delta)
+    votes = [sign(x) for x in vote_fields if x is not None]
+    vote = sum(votes)
+    confidence = abs(vote) / len(votes) if votes else 0.0
+    return {
+        "ready": bool(votes),
+        "direction": sign(float(vote)) if votes else 0,
+        "confidence": confidence,
+        "vote": vote,
+        "vote_count": len(votes),
+        "features": raw,
+    }
+
+
+def policy_flags(*, outcome: str, external: dict[str, Any], pm: dict[str, Any]) -> dict[str, bool]:
+    outcome_sign = 1 if outcome == "YES" else -1
+    ext_support = (
+        outcome_sign * int(external["direction"]) * float(external["confidence"])
+        if external.get("ready") else 0.0
+    )
+    pm_support = (
+        int(pm["direction"]) * float(pm["confidence"])
+        if pm.get("ready") else 0.0
+    )
+    p = pm.get("features") or {}
+    short_return = finite(p.get("short_return_ticks"))
+    imbalance = finite(p.get("imbalance"))
+    ofi = finite(p.get("ofi"))
+
+    ext_momentum = bool(external.get("ready") and ext_support >= 0.60)
+    pm_momentum = bool(pm.get("ready") and pm_support >= 0.50)
+    combined = ext_momentum and pm_momentum
+    mean_reversion = bool(
+        short_return is not None and short_return < 0
+        and (not external.get("ready") or ext_support >= 0.0)
+        and ((imbalance is not None and imbalance > 0) or (ofi is not None and ofi > 0))
+    )
+    toxic = bool(
+        (external.get("ready") and ext_support <= -0.60)
+        or (pm.get("ready") and pm_support <= -0.50)
+    )
+    return {
+        "A0_BASELINE": True,
+        "A1_EXTERNAL_MOMENTUM": ext_momentum,
+        "A2_PM_MOMENTUM": pm_momentum,
+        "A3_COMBINED_MOMENTUM": combined,
+        "A4_MEAN_REVERSION": mean_reversion,
+        "A5_TOXICITY_VETO": not toxic,
+    }
+
+
+def active_markets(selection: dict[str, Any], model_sha: str, now_ms: int) -> list[dict[str, Any]]:
+    if (
+        selection.get("schema") != SELECTION_SCHEMA
+        or selection.get("model_sha") != model_sha
+        or selection.get("paper_only") is not True
+        or selection.get("authenticated_execution") is not False
+        or selection.get("real_order_submission") is not False
+        or selection.get("execution_authority") is not False
+        or selection.get("selection_only") is not True
+    ):
+        return []
+    rows = []
+    for row in selection.get("markets") or []:
+        if not isinstance(row, dict):
+            continue
+        asset = str(row.get("asset") or "").upper()
+        horizon = str(row.get("horizon") or "").upper()
+        try:
+            start = int(row.get("start_timestamp_ms") or 0)
+            end = int(row.get("end_timestamp_ms") or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if (
+            asset in ASSETS and horizon in HORIZONS and start <= now_ms < end
+            and str(row.get("market_id") or "")
+            and str(row.get("yes_token") or "")
+            and str(row.get("no_token") or "")
+        ):
+            rows.append(row)
+    rows.sort(key=lambda r: (str(r["asset"]), str(r["horizon"]), str(r["market_id"])))
+    return rows
+
+
+def make_anchor(row: dict[str, Any], *, market: dict[str, Any], token_id: str,
+                outcome: str, model_sha: str, quantity: float,
+                external: dict[str, Any], pm: dict[str, Any],
+                policies: dict[str, bool]) -> dict[str, Any]:
     bid = float(row["best_bid"])
     receive_ms = int(row["receive_wall_ms"])
     sequence = int(row["observer_sequence"])
-    record_id = stable_id("alpha-maker-shadow", model_sha, market_id, token_id, sequence)
-    envelope = opportunity if isinstance(opportunity, dict) else {
-        "exploration": {"probe_loss_cap": quantity * bid},
-    }
-    order = {
-        "event_type": "ORDER_SUBMITTED",
-        "record_id": record_id,
-        "market_id": market_id,
-        "token_id": token_id,
-        "model_sha": model_sha,
-        "paper_only": True,
-        "authenticated_execution": False,
-        "real_order_submission": False,
-        "receive_ts_ms": receive_ms,
-        "intended_size": quantity,
-        "limit_price": bid,
-        "metadata": {
-            "component": "professional_maker",
-            "counterfactual": True,
-            "excluded_from_portfolio_equity": True,
-            "arrival_receive_monotonic_ns": int(row.get("receive_monotonic_ns") or 0),
-            "arrival_exchange_event_ns": int(row.get("exchange_event_ns") or 0),
-            "opportunity_envelope": envelope,
-        },
-    }
+    record_id = stable_id("alpha-maker-v2", model_sha, market["market_id"], token_id, sequence)
     return {
-        "kind": "MAKER_ANCHOR",
-        "market_id": market_id,
+        "kind": "MAKER_SHADOW_ANCHOR",
+        "market_id": str(market["market_id"]),
         "token_id": token_id,
+        "outcome": outcome,
+        "asset": str(market["asset"]),
+        "horizon": str(market["horizon"]),
         "origin_ms": receive_ms,
-        "order": order,
+        "observer_sequence": sequence,
         "book_gap_counter": None,
         "observer_session_id": None,
         "connection_epoch": None,
+        "external": external,
+        "pm": pm,
+        "policies": policies,
+        "order": {
+            "event_type": "ORDER_SUBMITTED",
+            "record_id": record_id,
+            "market_id": str(market["market_id"]),
+            "token_id": token_id,
+            "model_sha": model_sha,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "receive_ts_ms": receive_ms,
+            "intended_size": quantity,
+            "limit_price": bid,
+            "metadata": {
+                "component": "professional_maker",
+                "counterfactual": True,
+                "excluded_from_portfolio_equity": True,
+                "arrival_receive_monotonic_ns": int(row.get("receive_monotonic_ns") or 0),
+                "arrival_exchange_event_ns": int(row.get("exchange_event_ns") or 0),
+            },
+        },
     }
 
 
+def latest_cut(history: list[dict[str, Any]], target_ns: int) -> dict[str, Any] | None:
+    for row in reversed(history):
+        if int(row.get("receive_monotonic_ns") or 0) <= target_ns:
+            if row.get("valid") is not True or row.get("lineage_continuous") is not True:
+                return None
+            return row
+    return None
 
-def replay_anchor_python(
-    anchor: dict[str, Any],
-    book: BookTimeline,
-    status: dict[str, Any],
-    protocol: dict[str, Any],
-    *,
-    evaluation_ms: int,
-) -> dict[str, Any]:
-    """Deterministic pessimistic BUY-maker replay; no execution authority.
 
-    Mirrors the native research adapter's economically material rules:
-    1ms submission latency is already encoded in the anchor clock, 100ms cancel
-    latency after TTL, strict receive/exchange causality, SELL aggressor only,
-    crossing trade price <= resting BUY price, 1.50x visible queue ahead for the
-    operational/pessimistic fill, and partial fills.
-    """
+def replay_anchor_native(anchor: dict[str, Any], book: BookTimeline, binary: Path,
+                         protocol: dict[str, Any], evaluation_ms: int) -> dict[str, Any]:
     order = anchor["order"]
-    metadata = order["metadata"]
-    start_ms = int(anchor["origin_ms"])
-    market = str(anchor["market_id"])
-    token = str(anchor["token_id"])
-    arrival_receive_ns = int(metadata.get("arrival_receive_monotonic_ns") or 0)
-    arrival_exchange_ns = int(metadata.get("arrival_exchange_event_ns") or 0)
-    history = list(book.history.get((market, token), ()))
-    origin = next(
-        (
-            row for row in reversed(history)
-            if int(row.get("receive_monotonic_ns") or 0) <= arrival_receive_ns
-            and int(row.get("receive_wall_ms") or 0) <= start_ms
-        ),
-        None,
+    meta = order["metadata"]
+    market_id = str(anchor["market_id"])
+    token_id = str(anchor["token_id"])
+    arrival_ns = int(meta.get("arrival_receive_monotonic_ns") or 0)
+    exchange_ns = int(meta.get("arrival_exchange_event_ns") or 0)
+    origin_ms = int(anchor["origin_ms"])
+    history = list(book.history.get((market_id, token_id), ()))
+    continuity_ok = (
+        anchor.get("book_gap_counter") == book.gaps
+        and anchor.get("observer_session_id") == book.session
+        and int(anchor.get("connection_epoch") or 0) == book.epoch
+        and arrival_ns > 0 and exchange_ns > 0
+        and book.watermark_ms >= origin_ms + evaluation_ms
+        and book.watermark_monotonic_ns >= arrival_ns + evaluation_ms * 1_000_000
     )
-
-    reason: str | None = None
-    now_ms = time.time_ns() // 1_000_000
-    try:
-        status_ts = int(status.get("timestamp_ms") or 0)
-        status_written = int(status.get("book_events_written") or 0)
-        status_wall = int(status.get("book_watermark_receive_wall_ms") or 0)
-        status_mono = int(status.get("book_watermark_receive_monotonic_ns") or 0)
-    except (TypeError, ValueError, OverflowError):
-        status_ts = status_written = status_wall = status_mono = 0
-
-    if (
-        origin is None
-        or anchor.get("book_gap_counter") != book.gaps
-        or anchor.get("observer_session_id") != book.session
-        or int(anchor.get("connection_epoch") or 0) != book.epoch
-        or not history
-        or int(history[0].get("receive_wall_ms") or 0) > start_ms
-        or book.watermark_ms < start_ms + evaluation_ms
-        or book.watermark_monotonic_ns < arrival_receive_ns + evaluation_ms * 1_000_000
-        or status.get("evidence_complete") is not True
-        or status.get("model_sha") != book.model_sha
-        or status.get("observer_session_id") != book.session
-        or int(status.get("connection_epoch") or 0) != book.epoch
-        or status.get("state") != "running"
-        or status.get("paper_only") is not True
-        or status.get("authenticated_execution") is not False
-        or status.get("real_order_submission") is not False
-        or status_written > book.sequence
-        or status_wall < start_ms + evaluation_ms
-        or status_mono < arrival_receive_ns + evaluation_ms * 1_000_000
-        or not 0 <= now_ms - status_ts <= 2_000
-    ):
-        reason = "BOOK_CONTINUITY_CENSORED"
-
-    if arrival_receive_ns <= 0 or arrival_exchange_ns <= 0:
-        reason = "MISSING_NATIVE_ARRIVAL_CLOCK"
-    if origin is not None and (
-        origin.get("valid") is not True
-        or origin.get("lineage_continuous") is not True
-        or int(origin.get("receive_monotonic_ns") or 0) <= 0
-    ):
-        reason = "INVALID_ARRIVAL_BOOK"
-
-    path = [
-        row for row in history
-        if arrival_receive_ns <= int(row.get("receive_monotonic_ns") or 0)
-        <= arrival_receive_ns + evaluation_ms * 1_000_000
-    ]
-    if origin is not None and any(row.get("tick_size") != origin.get("tick_size") for row in path):
-        reason = "TICK_REGIME_CHANGED"
-    invalid_books = sum(
-        row.get("valid") is not True or row.get("lineage_continuous") is not True
-        for row in path
-    )
-
-    output: list[dict[str, Any]] = []
-    for arm in protocol["maker"]["arms"]:
-        arm_reason = reason
-        execution_end_ns = (
-            arrival_receive_ns
-            + (int(arm["lifetime_ms"]) + 100) * 1_000_000
-        )
-        execution_path = [
-            row for row in path
-            if int(row.get("receive_monotonic_ns") or 0) <= execution_end_ns
-        ]
-        if any("public_trade" not in row for row in execution_path):
-            arm_reason = "MISSING_TRADE_PAYLOAD_CENSORED"
-        if any(
-            row.get("public_trade")
-            and (row.get("valid") is not True or row.get("lineage_continuous") is not True)
-            for row in execution_path
-        ):
-            arm_reason = "TRADE_LINEAGE_CENSORED"
-
-        row_out: dict[str, Any] = {
-            "arm": arm["id"],
-            "state": arm_reason or "OBSERVED",
-            "operational_filled_shares": None,
-            "fills": [],
-            "counterfactual": True,
-            "intermediate_invalid_book_rows": invalid_books,
-            "replay_input_basis": "CONTINUOUS_TRANSPORT_VALID_PRINTS_AND_VALID_ARRIVAL_BOOK",
-            "queue_model": "VISIBLE_QUEUE_X_1_50_PESSIMISTIC",
-            "cancel_latency_ms": 100,
+    origin = latest_cut(history, arrival_ns)
+    if not continuity_ok or origin is None:
+        return {
+            "arms": [
+                {"arm": a["id"], "state": "LOCAL_TAPE_CONTINUITY_CENSORED",
+                 "fills": [], "operational_filled_shares": None}
+                for a in protocol["maker"]["arms"]
+            ],
+            "replay_engine": "NATIVE_MAKER_PAPER_VIA_RESEARCH_ADAPTER",
         }
-        if arm_reason or origin is None:
-            output.append(row_out)
-            continue
 
-        quantity = float(order["intended_size"])
-        tick = float(origin["tick_size"])
-        bid = float(origin["best_bid"])
-        ask = float(origin["best_ask"])
-        price = bid + (tick if arm["placement"] == "IMPROVE1" else 0.0)
+    output = []
+    for arm in protocol["maker"]["arms"]:
+        arm_id = str(arm["id"])
+        try:
+            tick = float(origin["tick_size"])
+            bid = float(origin["best_bid"])
+            ask = float(origin["best_ask"])
+            quantity = float(order["intended_size"])
+            price = bid + (tick if arm["placement"] == "IMPROVE1" else 0.0)
+            price = round(price / tick) * tick
+            queue_ahead = float(origin.get("bid_depth_l1") or 0.0) if arm["placement"] == "JOIN" else 0.0
+        except (KeyError, TypeError, ValueError, OverflowError):
+            output.append({"arm": arm_id, "state": "INPUT_INVALID", "fills": [],
+                           "operational_filled_shares": None})
+            continue
         if not (
-            math.isfinite(quantity) and quantity > 0
-            and math.isfinite(tick) and 0 < tick < 1
-            and math.isfinite(price) and 0 < price < ask < 1
+            0 < tick < 1 and 0 < bid < ask < 1 and 0 < price < ask
+            and quantity > 0 and queue_ahead >= 0
         ):
-            row_out["state"] = "POST_ONLY_OR_INPUT_INELIGIBLE"
-            output.append(row_out)
+            output.append({"arm": arm_id, "state": "POST_ONLY_OR_INPUT_INELIGIBLE", "fills": [],
+                           "operational_filled_shares": 0.0})
             continue
 
-        visible_ahead = float(origin.get("bid_depth_l1") or 0.0) if arm["placement"] == "JOIN" else 0.0
-        if not math.isfinite(visible_ahead) or visible_ahead < 0:
-            row_out["state"] = "QUEUE_AHEAD_INVALID"
-            output.append(row_out)
-            continue
-
-        queue_ahead = math.ceil(visible_ahead * 1.50 * 1_000_000.0) / 1_000_000.0
-        remaining = quantity
-        cancel_request_ns = arrival_receive_ns + int(arm["lifetime_ms"]) * 1_000_000
-        cancel_effective_ns = cancel_request_ns + 100_000_000
-        fills: list[dict[str, Any]] = []
-        funnel = Counter()
-
-        for book_row in execution_path:
-            trade = book_row.get("public_trade")
+        start_ns = arrival_ns - 1_000_000
+        trade_end_ns = start_ns + (int(arm["lifetime_ms"]) + 101) * 1_000_000
+        trades = []
+        trade_lineage_bad = False
+        for row in history:
+            receive_ns = int(row.get("receive_monotonic_ns") or 0)
+            if not start_ns <= receive_ns <= trade_end_ns:
+                continue
+            trade = row.get("public_trade")
             if not isinstance(trade, dict):
                 continue
-            receive_ns = int(book_row.get("receive_monotonic_ns") or 0)
-            exchange_ns = int(trade.get("exchange_event_ns") or book_row.get("exchange_event_ns") or 0)
-            if receive_ns <= arrival_receive_ns or exchange_ns <= arrival_exchange_ns:
-                funnel["causally_pre_arrival"] += 1
-                continue
-            if receive_ns >= cancel_effective_ns:
-                funnel["cancel_effective_before_trade"] += 1
-                continue
-            if str(trade.get("aggressor_side") or "").upper() != "SELL":
-                funnel["wrong_aggressor_side"] += 1
-                continue
-            try:
-                trade_price = float(trade["price"])
-                trade_size = float(trade["size"])
-            except (KeyError, TypeError, ValueError, OverflowError):
-                funnel["invalid_trade"] += 1
-                continue
-            if not math.isfinite(trade_price) or not math.isfinite(trade_size) or trade_size <= 0:
-                funnel["invalid_trade"] += 1
-                continue
-            if trade_price > price + 1e-12:
-                funnel["price_not_crossing"] += 1
-                continue
-
-            funnel["eligible_prints"] += 1
-            available = trade_size
-            if queue_ahead > 0:
-                consumed = min(queue_ahead, available)
-                queue_ahead -= consumed
-                available -= consumed
-            if available <= 0 or remaining <= 0:
-                funnel["queue_not_depleted"] += 1
-                continue
-
-            fill_qty = min(remaining, available)
-            if fill_qty <= 0:
-                continue
-            remaining -= fill_qty
-            fill = {
-                "receive_monotonic_ns": receive_ns,
-                "quantity": fill_qty,
-                "price": price,
-                "trade_id": int(book_row.get("observer_sequence") or 0),
-                "after_cancel_request": receive_ns >= cancel_request_ns,
-                "markouts": {},
-            }
-            for horizon in protocol["maker"]["markout_horizons_ms"]:
-                target_ns = receive_ns + int(horizon) * 1_000_000
-                cut = next(
-                    (
-                        candidate for candidate in reversed(history)
-                        if int(candidate.get("receive_monotonic_ns") or 0) <= target_ns
-                    ),
-                    None,
-                )
-                if (
-                    cut is not None
-                    and cut.get("valid") is True
-                    and cut.get("lineage_continuous") is True
-                ):
-                    try:
-                        cut_bid = float(cut["best_bid"])
-                        cut_ask = float(cut["best_ask"])
-                        cut_depth = float(cut.get("bid_depth_l1") or 0.0)
-                    except (KeyError, TypeError, ValueError, OverflowError):
-                        cut = None
-                if cut is not None and 0 < cut_bid < cut_ask < 1:
-                    fill["markouts"][str(horizon)] = {
-                        "mid_minus_fill": 0.5 * (cut_bid + cut_ask) - price,
-                        "best_bid_minus_fill": cut_bid - price,
-                        "bid_depth_l1": cut_depth,
-                        "liquidation_depth_sufficient": cut_depth >= fill_qty,
-                    }
-                else:
-                    fill["markouts"][str(horizon)] = None
-            fills.append(fill)
-            funnel["fill_events"] += 1
-            if remaining <= 1e-12:
-                remaining = 0.0
+            if row.get("valid") is not True or row.get("lineage_continuous") is not True:
+                trade_lineage_bad = True
                 break
+            try:
+                trades.append({
+                    "observer_sequence": int(row["observer_sequence"]),
+                    "aggressor_side": str(trade.get("aggressor_side") or ""),
+                    "price": float(trade["price"]),
+                    "size": float(trade["size"]),
+                    "exchange_event_ns": int(trade.get("exchange_event_ns") or row["exchange_event_ns"]),
+                    "receive_monotonic_ns": receive_ns,
+                })
+            except (KeyError, TypeError, ValueError, OverflowError):
+                trade_lineage_bad = True
+                break
+        if trade_lineage_bad:
+            output.append({"arm": arm_id, "state": "TRADE_LINEAGE_CENSORED", "fills": [],
+                           "operational_filled_shares": None})
+            continue
 
-        row_out.update(
-            state="OBSERVED",
-            research_request={
-                "arrival_receive_ns": arrival_receive_ns,
-                "arrival_exchange_ns": arrival_exchange_ns,
-                "tick": tick,
-                "price": price,
-                "quantity": quantity,
-                "best_ask": ask,
-                "visible_queue_ahead": visible_ahead,
-                "pessimistic_queue_ahead": math.ceil(visible_ahead * 1.50 * 1_000_000.0) / 1_000_000.0,
-                "lifetime_ms": int(arm["lifetime_ms"]),
-            },
-            simulation_fill_events=len(fills),
-            operational_filled_shares=quantity - remaining,
-            fills=fills,
-            execution_outcome=(
-                "FILLED" if remaining == 0
-                else "PARTIAL_FILL" if remaining < quantity
-                else "QUEUE_NOT_DEPLETED"
-            ),
-            execution_funnel=dict(funnel),
-        )
-        output.append(row_out)
+        request = {
+            "start_ns": start_ns,
+            "exchange_ns": exchange_ns,
+            "tick": tick,
+            "price": price,
+            "quantity": quantity,
+            "best_ask": ask,
+            "queue_ahead": queue_ahead,
+            "lifetime_ms": int(arm["lifetime_ms"]),
+            "trades": trades,
+        }
+        try:
+            completed = subprocess.run(
+                [str(binary)], input=json.dumps(request), text=True,
+                capture_output=True, timeout=5, check=True,
+            )
+            native = json.loads(completed.stdout)
+            if (
+                native.get("schema") != "polymarket_v7_maker_research_replay_v1"
+                or native.get("paper_only") is not True
+                or native.get("authenticated_execution") is not False
+                or native.get("real_order_submission") is not False
+            ):
+                raise ValueError("native replay safety contract")
+        except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError) as exc:
+            output.append({
+                "arm": arm_id, "state": "NATIVE_REPLAY_CENSORED", "fills": [],
+                "operational_filled_shares": None, "error": f"{type(exc).__name__}:{exc}",
+            })
+            continue
 
+        fills = native.get("fills") if isinstance(native.get("fills"), list) else []
+        for fill in fills:
+            if not isinstance(fill, dict):
+                continue
+            fill["markouts"] = {}
+            fill_ns = int(fill.get("receive_monotonic_ns") or 0)
+            fill_qty = float(fill.get("quantity") or 0.0)
+            for horizon in protocol["maker"]["markout_horizons_ms"]:
+                cut = latest_cut(history, fill_ns + int(horizon) * 1_000_000)
+                value = None
+                if cut is not None:
+                    try:
+                        future_bid = float(cut["best_bid"])
+                        future_ask = float(cut["best_ask"])
+                        future_depth = float(cut.get("bid_depth_l1") or 0.0)
+                        if 0 < future_bid < future_ask < 1:
+                            value = {
+                                "mid_minus_fill": 0.5 * (future_bid + future_ask) - price,
+                                "best_bid_minus_fill": future_bid - price,
+                                "bid_depth_l1": future_depth,
+                                "liquidation_depth_sufficient": future_depth >= fill_qty,
+                            }
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        value = None
+                fill["markouts"][str(horizon)] = value
+
+        output.append({
+            **native,
+            "arm": arm_id,
+            "state": "OBSERVED",
+            "research_request": request,
+            "fills": fills,
+        })
     return {
         "arms": output,
+        "replay_engine": "NATIVE_MAKER_PAPER_VIA_RESEARCH_ADAPTER",
         "book_scope": "L1_PLUS_PUBLIC_PRINTS_CAUSAL_REPLAY",
-        "comparison_semantics": "PAIRED_RESEARCH_COUNTERFACTUAL_NOT_ADDITIONAL_CANONICAL_FILLS",
-        "replay_engine": "PYTHON_PESSIMISTIC_QUEUE_PARITY_CANDIDATE_V1",
+        "comparison_semantics": "SAME_ANCHOR_SAME_REPLAY_ALPHA_FILTER_ONLY",
     }
+
+
+def new_stat() -> dict[str, Any]:
+    return {
+        "eligible_anchors": 0,
+        "evaluated": 0,
+        "observed": 0,
+        "censored_or_ineligible": 0,
+        "filled_anchors": 0,
+        "fill_events": 0,
+        "filled_shares": 0.0,
+        "mid_markout": defaultdict(lambda: {"dollars": 0.0, "shares": 0.0, "observations": 0}),
+        "executable_markout": defaultdict(
+            lambda: {"dollars": 0.0, "shares": 0.0, "observations": 0,
+                     "adverse_dollars": 0.0, "favorable_dollars": 0.0}
+        ),
+    }
+
+
+def add_result(stat: dict[str, Any], arm: dict[str, Any]) -> None:
+    stat["evaluated"] += 1
+    if arm.get("state") != "OBSERVED":
+        stat["censored_or_ineligible"] += 1
+        return
+    stat["observed"] += 1
+    fills = arm.get("fills") if isinstance(arm.get("fills"), list) else []
+    if fills:
+        stat["filled_anchors"] += 1
+        stat["fill_events"] += len(fills)
+    for fill in fills:
+        if not isinstance(fill, dict):
+            continue
+        quantity = float(fill.get("quantity") or 0.0)
+        if not math.isfinite(quantity) or quantity <= 0:
+            continue
+        stat["filled_shares"] += quantity
+        marks = fill.get("markouts") if isinstance(fill.get("markouts"), dict) else {}
+        for horizon, value in marks.items():
+            if not isinstance(value, dict):
+                continue
+            mid = finite(value.get("mid_minus_fill"))
+            executable = finite(value.get("best_bid_minus_fill"))
+            if mid is not None:
+                row = stat["mid_markout"][str(horizon)]
+                row["dollars"] += mid * quantity
+                row["shares"] += quantity
+                row["observations"] += 1
+            if executable is not None:
+                dollars = executable * quantity
+                row = stat["executable_markout"][str(horizon)]
+                row["dollars"] += dollars
+                row["shares"] += quantity
+                row["observations"] += 1
+                if dollars < 0:
+                    row["adverse_dollars"] += -dollars
+                elif dollars > 0:
+                    row["favorable_dollars"] += dollars
+
+
+def serialize_stat(stat: dict[str, Any]) -> dict[str, Any]:
+    out = {k: v for k, v in stat.items() if k not in {"mid_markout", "executable_markout"}}
+    out["fill_anchor_rate"] = (
+        stat["filled_anchors"] / stat["observed"] if stat["observed"] else None
+    )
+    out["mean_filled_shares_per_observed"] = (
+        stat["filled_shares"] / stat["observed"] if stat["observed"] else None
+    )
+    out["mid_markout"] = {}
+    for horizon, row in stat["mid_markout"].items():
+        out["mid_markout"][horizon] = {
+            **row,
+            "per_share": row["dollars"] / row["shares"] if row["shares"] else None,
+        }
+    out["executable_markout"] = {}
+    for horizon, row in stat["executable_markout"].items():
+        out["executable_markout"][horizon] = {
+            **row,
+            "per_share": row["dollars"] / row["shares"] if row["shares"] else None,
+        }
+    return out
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--run-root", type=Path, required=True)
     ap.add_argument("--book-tape", type=Path, required=True)
-    ap.add_argument("--book-status", type=Path, required=True)
+    ap.add_argument("--book-status", type=Path, required=False)
+    ap.add_argument("--selection", type=Path)
+    ap.add_argument("--binary", type=Path, required=True)
     ap.add_argument("--model-sha", required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--status", type=Path, required=True)
     ap.add_argument("--duration-seconds", type=float, default=30.0)
-    ap.add_argument("--sample-ms", type=int, default=1000)
+    ap.add_argument("--sample-ms", type=int, default=2000)
     ap.add_argument("--quantity-shares", type=float, default=5.0)
     ap.add_argument("--ttl-arms-ms", default="250,500,1000")
     ap.add_argument("--markout-horizons-ms", default="250,500,1000,2000,5000")
+    ap.add_argument("--maximum-active-markets", type=int, default=24)
     args = ap.parse_args()
 
     if len(args.model_sha) != 40 or any(c not in "0123456789abcdef" for c in args.model_sha):
         raise SystemExit("invalid model sha")
-    if args.duration_seconds <= 0 or args.sample_ms < 100 or args.quantity_shares <= 0:
-        raise SystemExit("invalid bounded-run arguments")
+    if args.duration_seconds <= 0 or not 100 <= args.sample_ms <= 10_000:
+        raise SystemExit("invalid bounded run")
+    if not 0 < args.quantity_shares <= 20 or not args.binary.is_file():
+        raise SystemExit("invalid quantity or native replay binary")
+    selection_path = args.selection or (args.run_root / "universe" / "book_selection.json")
 
     ttls = [int(x) for x in args.ttl_arms_ms.split(",") if x.strip()]
     markouts = [int(x) for x in args.markout_horizons_ms.split(",") if x.strip()]
     if not ttls or not markouts or min(ttls + markouts) <= 0:
         raise SystemExit("invalid horizon grid")
-
     protocol = make_protocol(ttls, markouts)
-    evaluation_ms = max(ttls) + max(markouts) + 250
-    book = BookTimeline(args.book_tape, args.model_sha, retention_ms=evaluation_ms + 5_000)
+    evaluation_ms = max(max(ttls) + 101, max(markouts) + 50)
+    book = BookTimeline(args.book_tape, args.model_sha, retention_ms=evaluation_ms + 15_000)
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.status.parent.mkdir(parents=True, exist_ok=True)
-
     seen: set[str] = set()
     pending: dict[str, dict[str, Any]] = {}
     counts: Counter[str] = Counter()
-    by_arm: dict[str, Counter[str]] = defaultdict(Counter)
-    bridge_states: Counter[str] = Counter()
-    markout_dollars: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    policy_stats: dict[str, dict[str, dict[str, Any]]] = {
+        policy: {arm["id"]: new_stat() for arm in protocol["maker"]["arms"]}
+        for policy in POLICIES
+    }
+    slice_stats: dict[str, Counter[str]] = defaultdict(Counter)
+    external_states: dict[str, Counter[str]] = {asset: Counter() for asset in ASSETS}
     sampling_end = time.monotonic() + args.duration_seconds
-    drain_end = sampling_end + evaluation_ms / 1000.0 + 3.0
+    drain_end = sampling_end + evaluation_ms / 1000.0 + 5.0
     next_sample = 0.0
 
     def publish(state: str) -> None:
@@ -425,139 +582,169 @@ def main() -> int:
             "paper_only": True,
             "authenticated_execution": False,
             "real_order_submission": False,
+            "real_capital_at_risk": False,
+            "automatic_promotion": False,
             "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
             "excluded_from_portfolio_equity": True,
             "model_sha": args.model_sha,
             "state": state,
+            "policies": list(POLICIES),
             "counts": dict(counts),
-            "bridge_states": dict(bridge_states),
-            "by_arm": {k: dict(v) for k, v in by_arm.items()},
-            "markout_dollars": {k: dict(v) for k, v in markout_dollars.items()},
+            "external_states": {k: dict(v) for k, v in external_states.items()},
+            "policy_arm": {
+                policy: {arm: serialize_stat(stat) for arm, stat in arms.items()}
+                for policy, arms in policy_stats.items()
+            },
+            "asset_horizon": {k: dict(v) for k, v in slice_stats.items()},
             "pending": len(pending),
             "timestamp_ns": time.time_ns(),
+            "semantics": {
+                "alpha_role": "EX_ANTE_QUOTE_FILTER_ONLY",
+                "execution": "SAME_NATIVE_REPLAY_FOR_ALL_POLICIES",
+                "queue": "CANONICAL_MAKER_PAPER_ENGINE",
+                "continuity": "LOCALLY_CONSUMED_CAUSAL_TAPE_RESEARCH_ONLY",
+                "selection": "ACTIVE_M5_M15_FROM_VERIFIED_LIVE_SELECTION",
+                "threshold_tuning": "NONE_PNL_BLIND_FIXED_SIGN_MAJORITIES",
+            },
         }
         args.status.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+    def write_record(out, item: dict[str, Any], result: dict[str, Any], state: str) -> None:
+        record = {
+            "schema": SCHEMA,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "real_capital_at_risk": False,
+            "automatic_promotion": False,
+            "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
+            "excluded_from_portfolio_equity": True,
+            "model_sha": args.model_sha,
+            "state": state,
+            "anchor": item["anchor"],
+            "result": result,
+            "timestamp_ns": time.time_ns(),
+        }
+        out.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+        out.flush()
 
     with args.output.open("a", encoding="utf-8") as out:
         while time.monotonic() < drain_end:
             book.poll()
-            now_mono = time.monotonic()
-            status = load(args.book_status)
+            mono = time.monotonic()
+            now_ns = time.time_ns()
+            now_ms = now_ns // 1_000_000
 
-            if now_mono < sampling_end and now_mono >= next_sample:
-                next_sample = now_mono + args.sample_ms / 1000.0
-                opportunities, bridge = build_maker_opportunities(
-                    args.run_root, now_ns=time.time_ns(), repository_root=Path.cwd()
-                )
-                bridge_states[str(bridge.get("state") or "UNKNOWN")] += 1
-                opp_by_token: dict[str, dict[str, Any]] = {}
-                for opp in opportunities:
-                    plan = opp.get("execution_plan") if isinstance(opp.get("execution_plan"), dict) else {}
-                    legs = plan.get("legs") if isinstance(plan.get("legs"), list) else []
-                    if legs and isinstance(legs[0], dict):
-                        opp_by_token[str(legs[0].get("token_id") or "")] = opp
+            if mono < sampling_end and mono >= next_sample:
+                next_sample = mono + args.sample_ms / 1000.0
+                selection = load(selection_path)
+                markets = active_markets(selection, args.model_sha, now_ms)
+                if len(markets) > args.maximum_active_markets:
+                    markets = markets[:args.maximum_active_markets]
+                counts["sampling_ticks"] += 1
+                counts["active_markets_seen"] += len(markets)
+                external_by_asset = {
+                    asset: external_features(args.run_root, asset, args.model_sha, now_ns)
+                    for asset in ASSETS
+                }
+                for asset, ext in external_by_asset.items():
+                    external_states[asset]["ready" if ext["ready"] else "unavailable"] += 1
 
-                fair = load(args.run_root / "external_fair" / "status.json")
-                market = fair.get("market") if isinstance(fair.get("market"), dict) else {}
-                market_id = str(market.get("market_id") or "")
-                tokens = [str(market.get("yes_token") or ""), str(market.get("no_token") or "")]
-                now_ms = time.time_ns() // 1_000_000
-                if not market_id or any(not token for token in tokens):
-                    counts["samples_without_active_market"] += 1
-                else:
-                    for token in tokens:
-                        row = book.asof(market_id, token, now_ms)
+                for market in markets:
+                    asset = str(market["asset"])
+                    horizon = str(market["horizon"])
+                    ext = external_by_asset[asset]
+                    for outcome, token in (
+                        ("YES", str(market["yes_token"])),
+                        ("NO", str(market["no_token"])),
+                    ):
+                        row = book.asof(str(market["market_id"]), token, now_ms)
                         if row is None:
-                            counts["anchors_missing_book"] += 1
+                            counts["missing_book"] += 1
                             continue
-                        if now_ms - int(row["receive_wall_ms"]) > 1_000:
-                            counts["anchors_stale_book"] += 1
+                        age_ms = now_ms - int(row["receive_wall_ms"])
+                        if not 0 <= age_ms <= 2_000:
+                            counts["stale_book"] += 1
                             continue
                         if not isinstance(row.get("placement_features"), dict):
-                            counts["anchors_missing_placement_features"] += 1
+                            counts["missing_pm_features"] += 1
                             continue
-                        key = stable_id(market_id, token, row["observer_sequence"])
+                        key = stable_id(market["market_id"], token, row["observer_sequence"])
                         if key in seen:
                             continue
                         seen.add(key)
-                        opp = opp_by_token.get(token)
+                        pm = pm_features(row)
+                        flags = policy_flags(outcome=outcome, external=ext, pm=pm)
                         anchor = make_anchor(
-                            row, market_id=market_id, token_id=token, model_sha=args.model_sha,
-                            quantity=args.quantity_shares, opportunity=opp,
+                            row, market=market, token_id=token, outcome=outcome,
+                            model_sha=args.model_sha, quantity=args.quantity_shares,
+                            external=ext, pm=pm, policies=flags,
                         )
                         anchor["book_gap_counter"] = book.gaps
                         anchor["observer_session_id"] = book.session
                         anchor["connection_epoch"] = book.epoch
-                        pending[key] = {
-                            "anchor": anchor,
-                            "alpha_active": opp is not None,
-                            "alpha": alpha_compact(opp),
-                            "bridge": bridge,
-                        }
+                        pending[key] = {"anchor": anchor}
                         counts["anchors_total"] += 1
-                        counts["anchors_alpha_active" if opp is not None else "anchors_alpha_inactive"] += 1
+                        slice_stats[f"{asset}:{horizon}"]["anchors"] += 1
+                        for policy, active in flags.items():
+                            if active:
+                                counts[f"eligible:{policy}"] += 1
+                                for stat in policy_stats[policy].values():
+                                    stat["eligible_anchors"] += 1
 
             for key, item in list(pending.items()):
                 anchor = item["anchor"]
-                if book.watermark_ms < int(anchor["origin_ms"]) + evaluation_ms:
+                continuity_changed = (
+                    anchor["book_gap_counter"] != book.gaps
+                    or anchor["observer_session_id"] != book.session
+                    or anchor["connection_epoch"] != book.epoch
+                )
+                matured = (
+                    book.watermark_monotonic_ns
+                    >= int(anchor["order"]["metadata"]["arrival_receive_monotonic_ns"])
+                    + evaluation_ms * 1_000_000
+                )
+                if not continuity_changed and not matured:
                     continue
-                try:
-                    result = replay_anchor_python(
-                        anchor, book, status, protocol,
-                        evaluation_ms=evaluation_ms,
-                    )
-                except Exception as exc:
-                    counts["replay_exception"] += 1
-                    result = {"arms": [], "error": f"{type(exc).__name__}:{exc}"}
-                cohort = "ALPHA_ACTIVE" if item["alpha_active"] else "ALPHA_INACTIVE"
+                result = replay_anchor_native(anchor, book, args.binary, protocol, evaluation_ms)
                 counts["anchors_evaluated"] += 1
-                record = {
-                    "schema": SCHEMA,
-                    "paper_only": True,
-                    "authenticated_execution": False,
-                    "real_order_submission": False,
-                    "execution_authority": "ZERO_AUTHORITY_RESEARCH_ONLY",
-                    "excluded_from_portfolio_equity": True,
-                    "model_sha": args.model_sha,
-                    "cohort": cohort,
-                    "alpha": item["alpha"],
-                    "bridge_state": item["bridge"].get("state"),
-                    "anchor": anchor,
-                    "result": result,
-                    "timestamp_ns": time.time_ns(),
-                }
-                for arm in result.get("arms") or []:
-                    arm_id = str(arm.get("arm") or "UNKNOWN")
-                    by_arm[arm_id]["evaluated"] += 1
-                    if arm.get("state") != "OBSERVED":
-                        by_arm[arm_id]["censored_or_ineligible"] += 1
+                asset_horizon = f"{anchor['asset']}:{anchor['horizon']}"
+                slice_stats[asset_horizon]["evaluated"] += 1
+                flags = anchor["policies"]
+                for policy, active in flags.items():
+                    if not active:
                         continue
-                    by_arm[arm_id]["observed"] += 1
-                    fills = arm.get("fills") if isinstance(arm.get("fills"), list) else []
-                    filled_shares = sum(float(f.get("quantity") or 0.0) for f in fills if isinstance(f, dict))
-                    if fills:
-                        by_arm[arm_id]["filled_anchors"] += 1
-                        by_arm[arm_id]["fill_events"] += len(fills)
-                        by_arm[arm_id]["filled_millishares"] += int(round(1000 * filled_shares))
-                    for fill in fills:
-                        if not isinstance(fill, dict):
-                            continue
-                        quantity = float(fill.get("quantity") or 0.0)
-                        marks = fill.get("markouts") if isinstance(fill.get("markouts"), dict) else {}
-                        for horizon, value in marks.items():
-                            if isinstance(value, dict):
-                                mark = value.get("mid_minus_fill")
-                                if isinstance(mark, (int, float)) and math.isfinite(float(mark)):
-                                    markout_dollars[f"{cohort}:{arm_id}"][str(horizon)] += float(mark) * quantity
-                out.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
-                out.flush()
+                    for arm in result.get("arms") or []:
+                        arm_id = str(arm.get("arm") or "")
+                        if arm_id in policy_stats[policy]:
+                            add_result(policy_stats[policy][arm_id], arm)
+                write_record(out, item, result, "EVALUATED")
                 del pending[key]
-            publish("SAMPLING" if now_mono < sampling_end else "DRAINING")
+
+            publish("SAMPLING" if mono < sampling_end else "DRAINING")
             time.sleep(0.05)
 
+        for key, item in list(pending.items()):
+            counts["anchors_end_censored"] += 1
+            censored = {
+                "arms": [
+                    {"arm": arm["id"], "state": "RUN_END_BEFORE_MATURITY",
+                     "fills": [], "operational_filled_shares": None}
+                    for arm in protocol["maker"]["arms"]
+                ],
+                "replay_engine": "NATIVE_MAKER_PAPER_VIA_RESEARCH_ADAPTER",
+            }
+            flags = item["anchor"]["policies"]
+            for policy, active in flags.items():
+                if not active:
+                    continue
+                for arm in censored["arms"]:
+                    add_result(policy_stats[policy][arm["arm"]], arm)
+            write_record(out, item, censored, "CENSORED")
+            del pending[key]
+
     publish("COMPLETE")
-    final = load(args.status)
-    print("FINAL_SUMMARY=" + json.dumps(final, sort_keys=True, separators=(",", ":")))
+    print("FINAL_SUMMARY=" + json.dumps(load(args.status), sort_keys=True, separators=(",", ":")))
     return 0
 
 
