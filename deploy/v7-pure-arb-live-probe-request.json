@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_pure_arb_live_probe_request_v1",
   "version": 1,
-  "request_id": "exact-arb-live-94dbbd4d-20260924",
+  "request_id": "exact-arb-live-94dbbd4d-coldstart-aware-20260924",
   "expected_sha": "94dbbd4d26c88e894a8a883ee7b86aa4c890c3a0",
   "paper_only": true,
   "authenticated_execution": false,
