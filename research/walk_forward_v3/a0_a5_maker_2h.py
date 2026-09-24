@@ -166,17 +166,17 @@ def _feature_values(row,predicates):
 
 
 def _raw_book_paths(root:Path):
+    # The pre-registered current-window experiment must use the current London
+    # run-root. Do not silently widen into historical archives, which is both
+    # expensive and changes the evidence population.
     found=set()
-    for base in (root,root.parent):
-        for pattern in (
-            "research/repricing_book/book_observations/*.jsonl*",
-            "micro_maker/book_observations/*.jsonl*",
-            "paper_v7_london_archives/**/research/repricing_book/book_observations/*.jsonl*",
-            "paper_v7_london_archives/**/micro_maker/book_observations/*.jsonl*",
-        ):
-            for path in base.glob(pattern):
-                if path.is_file() and not path.is_symlink():
-                    found.add(path.resolve())
+    for pattern in (
+        "research/repricing_book/book_observations/*.jsonl*",
+        "micro_maker/book_observations/*.jsonl*",
+    ):
+        for path in root.glob(pattern):
+            if path.is_file() and not path.is_symlink():
+                found.add(path.resolve())
     return sorted(found)
 
 
