@@ -24,6 +24,10 @@ PATHS=(
     "research/walk_forward_v2/__init__.py",
     "research/walk_forward_v2/core.py",
     "research/economic/causal_replay.py",
+    "research/tools/v7_external_event_export.cpp",
+    "include/pm/v7_external_tape.hpp",
+    "include/pm/v7_external_fair.hpp",
+    "include/pm/v7_spsc.hpp",
     "scripts/v7_multi_crypto_compact_pm_tape.py",
     "research/requirements-learning.txt",
 )
@@ -62,11 +66,53 @@ mkdir -p {remote}/src {remote}/output
 tar -xzf {remote}/source.tgz -C {remote}/src
 python3 -m venv {remote}/venv
 {remote}/venv/bin/pip install --disable-pip-version-check --quiet -r {remote}/src/research/requirements-learning.txt
-PYTHONPATH={remote}/src:{context['app_dir']} nice -n 18 {remote}/venv/bin/python -m research.walk_forward_v3.maker_a0_a5_2h \
-  --root {context['run_root']} \
-  --minimum-wall-ns {a.minimum_wall_ns} \
-  --code-sha {a.expected_sha} \
-  --output-dir {remote}/output/a0-a5
+c++ -std=c++20 -O2 -I{remote}/src/include \
+  {remote}/src/research/tools/v7_external_event_export.cpp \
+  -o {remote}/v7_external_event_export
+END_WALL_NS="$(python3 -c 'import time; print(time.time_ns())')"
+python3 - {context['run_root']} {remote} {a.minimum_wall_ns} "$END_WALL_NS" {remote}/v7_external_event_export <<'PYEXT'
+import subprocess,sys
+from pathlib import Path
+run_root=Path(sys.argv[1]); remote=Path(sys.argv[2])
+start=int(sys.argv[3]); end=int(sys.argv[4]); exporter=sys.argv[5]
+lines=[]
+for asset in ("BTC","ETH","SOL","XRP","DOGE","BNB"):
+    base=run_root/"external_fair" if asset=="BTC" else run_root/"external_fair"/"assets"/asset.lower()
+    directory=base/"normalized_events"
+    paths=[]
+    if directory.is_dir():
+        paths=sorted(
+            p for p in directory.iterdir()
+            if p.is_file() and (p.name.endswith(".bin") or p.name.endswith(".bin.open"))
+        )
+    if not paths:
+        continue
+    csv=remote/("external_"+asset.lower()+".csv")
+    cmd=[exporter,"--start-wall-ns",str(start),"--end-wall-ns",str(end)]
+    for tape in paths:
+        cmd.extend(["--tape",str(tape)])
+    with csv.open("wb") as out:
+        subprocess.run(cmd,stdout=out,check=True)
+    if csv.stat().st_size>0:
+        lines.append(asset+"="+str(csv))
+if len(lines)!=6:
+    raise SystemExit("EXTERNAL_VENUE_EXPORT_INCOMPLETE:"+",".join(lines))
+(remote/"external_specs.txt").write_text("\n".join(lines)+"\n",encoding="utf-8")
+PYEXT
+{remote}/venv/bin/python - {remote}/venv/bin/python {remote}/src {context['app_dir']} {context['run_root']} {a.minimum_wall_ns} {a.expected_sha} {remote}/output/a0-a5 {remote}/external_specs.txt <<'PYRUN'
+import os,subprocess,sys
+from pathlib import Path
+venv,src,app,run_root,minwall,sha,output,specfile=sys.argv[1:]
+cmd=[venv,"-m","research.walk_forward_v3.maker_a0_a5_2h",
+     "--root",run_root,"--minimum-wall-ns",minwall,
+     "--code-sha",sha,"--output-dir",output]
+for spec in Path(specfile).read_text(encoding="utf-8").splitlines():
+    if spec.strip():
+        cmd.extend(["--external-venue-csv",spec.strip()])
+env=os.environ.copy()
+env["PYTHONPATH"]=src+":"+app
+subprocess.run(cmd,check=True,env=env)
+PYRUN
 python3 - {remote}/output/a0-a5 {a.expected_sha} <<'PY'
 import csv,json,sys
 from pathlib import Path
@@ -94,10 +140,15 @@ policies=set(("A0_BASELINE","A1_EXTERNAL","A2_PM","A3_EXTERNAL_PM","A4_RESIDUAL"
 assert set(g["policies"])==policies
 rows=list(csv.DictReader(open(root/"04_grid.csv",newline="")))
 assert rows
+series=set(((m.get("external_venue_tape") or dict()).get("load") or dict()).get("series") or [])
+for asset in m["selection"].get("assets") or []:
+    ready=sum(1 for venue in ("binance","coinbase","bybit") if asset+":"+venue in series)
+    assert ready>=2,(asset,ready,sorted(series))
 feature_counts=dict((k,len(v)) for k,v in m["feature_sets"].items())
 compact=dict(
   split=m["split"],
   feature_sets=feature_counts,
+  external_series=sorted(series),
   summary=s["policies"],
   grid_rows=len(rows),
 )
