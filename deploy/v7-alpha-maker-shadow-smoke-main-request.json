@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_alpha_maker_shadow_smoke_main_request_v1",
   "version": 1,
-  "request_id": "alpha-maker-a0-a5-smoke-20260924-b",
+  "request_id": "alpha-maker-a0-a5-compact-20260924-c",
   "instance_id": "i-04042ca7da7a23215",
   "expected_research_sha": "08a87fbffa8dbd1b0daff6ee8a05a69b1c604282",
   "research_branch": "research/alpha-driven-maker-shadow",
