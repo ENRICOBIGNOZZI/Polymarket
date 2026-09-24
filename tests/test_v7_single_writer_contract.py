@@ -40,7 +40,9 @@ class V7SingleWriterContractTest(unittest.TestCase):
         push_start = workflow.index("  push:\n")
         pr_start = workflow.index("  pull_request:\n", push_start)
         push_block = workflow[push_start:pr_start]
-        self.assertIn("branches: [main]", push_block)
+        push_branches = next(line.strip() for line in push_block.splitlines() if line.strip().startswith("branches:"))
+        self.assertIn("main", push_branches)
+        self.assertIn("research/unified-exact-arb-graph", push_branches)
         self.assertNotIn("paths:", push_block)
         pr_block = workflow[pr_start:workflow.index("\npermissions:", pr_start)]
         self.assertIn("branches: [main]", pr_block)
