@@ -106,6 +106,7 @@ def test_cutover_command_reuses_canonical_stage_and_cutover():
     assert "authenticated_execution" in command
     assert "real_order_submission" in command
     assert "worktree add --detach" in command
+    assert 'rm -rf -- "$RUNTIME_ROOT/by-sha/$SHA"' not in command
     assert "fetch --no-tags --prune origin \'+refs/heads/*:refs/remotes/origin/*\'" in command
     assert "fetch --no-tags origin main" not in command
     assert "apt-get install -y python3-numpy" not in command
@@ -133,6 +134,41 @@ def test_cutover_command_rejects_unsafe_run_root(run_root):
     selected = probe("i-1", active=True, user="enrico", run_root=run_root)
     with pytest.raises(m.SsmDeployError, match="unsafe run root"):
         m.cutover_command(SHA, selected)
+
+
+def test_same_sha_live_requires_fresh_running_exact_generation():
+    p = probe("i-1", active=True)
+    p.update({
+        "runtime_state": "running",
+        "runtime_sha": SHA,
+        "release_sha": SHA,
+        "runtime_pid": 123,
+        "runtime_pid_alive": True,
+        "runtime_fresh": True,
+        "paper_only": True,
+        "authenticated_execution": False,
+        "real_order_submission": False,
+    })
+    assert m.same_sha_live(p, SHA) is True
+    for key, bad in (
+        ("runtime_state", "stopping"),
+        ("runtime_sha", "b" * 40),
+        ("release_sha", "b" * 40),
+        ("runtime_pid_alive", False),
+        ("runtime_fresh", False),
+        ("unit_active", False),
+    ):
+        q = dict(p)
+        q[key] = bad
+        assert m.same_sha_live(q, SHA) is False
+
+
+def test_artifact_upload_never_overwrites_existing_exact_sha_generation():
+    source = (ROOT / "ops/v7_london_ssm_deploy.py").read_text()
+    assert "V7_ARTIFACT_REUSED=1" not in source
+    assert 'printf \'V7_ARTIFACT_REUSED=%s\\n\' "$REUSED"' in source
+    assert 'rm -rf "$TARGET"' not in source
+    assert "existing exact-SHA artifact target is unsafe" in source
 
 
 def test_artifact_validation_hashes_and_bounds(tmp_path):
