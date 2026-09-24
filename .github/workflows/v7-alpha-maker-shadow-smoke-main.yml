@@ -109,17 +109,21 @@ jobs:
           echo "PRECHECK_SHA=$SHA"
           if ! test -d "$APP"; then echo "PRECHECK_FAIL=APP_DIR_MISSING"; exit 31; fi
           if ! test -d "$ROOT"; then echo "PRECHECK_FAIL=RUN_ROOT_MISSING"; exit 32; fi
-          if [[ ! -x "$APP/build/polymarket_v7_maker_research_replay" ]]; then
-            echo "PRECHECK_FAIL=MAKER_REPLAY_BINARY_MISSING"
-            find "$APP" -maxdepth 3 -type f -name '*maker*replay*' -o -name '*maker*paper*' 2>/dev/null | head -n 30 || true
-            exit 33
-          fi
-          if ! test -s "$ROOT/research/repricing_book/book_observations/current.jsonl"; then echo "PRECHECK_FAIL=BOOK_TAPE_MISSING"; exit 34; fi
-          if ! test -s "$ROOT/research/repricing_book/fillability_ws_status.json"; then echo "PRECHECK_FAIL=BOOK_STATUS_MISSING"; exit 35; fi
-          echo "PRECHECK_OK=1"
           OUT="/tmp/{request_id}"
           rm -rf "$OUT"
           mkdir -p "$OUT"
+          BINARY="$APP/build/polymarket_v7_maker_research_replay"
+          if [[ ! -x "$BINARY" ]]; then
+            echo "PRECHECK_NOTE=BUILDING_EPHEMERAL_MAKER_REPLAY"
+            cmake -S "$APP" -B "$OUT/build" -DCMAKE_BUILD_TYPE=Release >"$OUT/cmake-configure.log" 2>&1
+            cmake --build "$OUT/build" --target polymarket_v7_maker_research_replay -j2 >"$OUT/cmake-build.log" 2>&1
+            BINARY="$OUT/build/polymarket_v7_maker_research_replay"
+          fi
+          if ! test -x "$BINARY"; then echo "PRECHECK_FAIL=MAKER_REPLAY_BUILD_MISSING"; tail -n 100 "$OUT/cmake-build.log" 2>/dev/null || true; exit 33; fi
+          echo "PRECHECK_BINARY=$BINARY"
+          if ! test -s "$ROOT/research/repricing_book/book_observations/current.jsonl"; then echo "PRECHECK_FAIL=BOOK_TAPE_MISSING"; exit 34; fi
+          if ! test -s "$ROOT/research/repricing_book/fillability_ws_status.json"; then echo "PRECHECK_FAIL=BOOK_STATUS_MISSING"; exit 35; fi
+          echo "PRECHECK_OK=1"
           printf '%s' {shlex.quote(payload)} | base64 -d > "$OUT/v7_alpha_driven_maker_shadow.py"
           printf '%s\n' {shlex.quote(source_sha)} > "$OUT/research_sha.txt"
           cd "$APP"
@@ -127,7 +131,7 @@ jobs:
             --run-root "$ROOT" \
             --book-tape "$ROOT/research/repricing_book/book_observations/current.jsonl" \
             --book-status "$ROOT/research/repricing_book/fillability_ws_status.json" \
-            --binary "$APP/build/polymarket_v7_maker_research_replay" \
+            --binary "$BINARY" \
             --model-sha "$SHA" \
             --output "$OUT/shadow.jsonl" \
             --status "$OUT/status.json" \
