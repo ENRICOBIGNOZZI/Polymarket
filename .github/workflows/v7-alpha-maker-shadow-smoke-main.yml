@@ -191,8 +191,8 @@ jobs:
           print("MAKER_STATE="+json.dumps({{
               "selection_present":bool(maker_selection),
               "model_state":maker_model.get("model_state"),
-              "model_orders":((maker_model.get("groups") or {}).get("GLOBAL") or {}).get("orders"),
-              "model_filled_orders":((maker_model.get("groups") or {}).get("GLOBAL") or {}).get("filled_orders"),
+              "model_orders":((maker_model.get("groups") or {{}}).get("GLOBAL") or {{}}).get("orders"),
+              "model_filled_orders":((maker_model.get("groups") or {{}}).get("GLOBAL") or {{}}).get("filled_orders"),
               "fair_state":fair_status.get("state"),
               "fair_blockers":fair_status.get("blockers"),
           }},sort_keys=True,separators=(",",":")))
@@ -252,10 +252,10 @@ jobs:
           import json,sys
           v=json.load(open(sys.argv[1]))
           out={{"state":v.get("state"),"counts":v.get("counts"),"asset_horizon":v.get("asset_horizon"),"policies":{{}}}}
-          for policy,arms in (v.get("policy_arm") or {}).items():
+          for policy,arms in (v.get("policy_arm") or {{}}).items():
               p={{"eligible_anchors":0,"evaluated":0,"observed":0,"filled_anchors":0,"fill_events":0,"filled_shares":0.0,"arms":{{}}}}
               seen_eligible=[]
-              for arm,s in (arms or {}).items():
+              for arm,s in (arms or {{}}).items():
                   p["evaluated"]+=int(s.get("evaluated") or 0)
                   p["observed"]+=int(s.get("observed") or 0)
                   p["filled_anchors"]+=int(s.get("filled_anchors") or 0)
