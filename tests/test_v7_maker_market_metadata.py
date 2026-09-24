@@ -49,6 +49,27 @@ class MakerMarketMetadataTests(unittest.TestCase):
             self.assertEqual(found["m1"]["tokens_seen"],["t1"])
             self.assertEqual(diag["source"],"RAW_CAUSAL_BOOK")
 
+    def test_raw_causal_book_fallback_reads_gzip_segment(self):
+        import gzip,json,tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)/"paper"
+            books=root/"research"/"repricing_book"/"book_observations"
+            books.mkdir(parents=True)
+            row={
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "paper_only":True,"authenticated_execution":False,
+                "real_order_submission":False,
+                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "receive_wall_ms":2000,
+                "market_id":"m-gz","token_id":"t-gz",
+            }
+            with gzip.open(books/"segment.jsonl.gz","wt",encoding="utf-8") as handle:
+                handle.write(json.dumps(row)+"\n")
+            found,diag=observed_markets(root,1_000_000_000)
+            self.assertIn("m-gz",found)
+            self.assertEqual(found["m-gz"]["tokens_seen"],["t-gz"])
+            self.assertEqual(diag["source"],"RAW_CAUSAL_BOOK")
+
     def test_hourly_and_daily_context_use_static_horizon(self):
         ctx,start,end=identify_context(
             "bitcoin-up-or-down-september-24-2026-5pm-et",self.registry(),
