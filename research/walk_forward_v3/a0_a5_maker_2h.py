@@ -17,6 +17,7 @@ identifies alpha horizon and latency using common executable economics.
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
 from collections import Counter
 import csv
 import json
@@ -162,6 +163,128 @@ def _feature_values(row,predicates):
         if any(p(lk) for p in predicates) and finite(value):
             out.append(float(value))
     return out
+
+
+def _raw_book_paths(root:Path):
+    found=set()
+    for base in (root,root.parent):
+        for pattern in (
+            "research/repricing_book/book_observations/*.jsonl*",
+            "micro_maker/book_observations/*.jsonl*",
+            "paper_v7_london_archives/**/research/repricing_book/book_observations/*.jsonl*",
+            "paper_v7_london_archives/**/micro_maker/book_observations/*.jsonl*",
+        ):
+            for path in base.glob(pattern):
+                if path.is_file() and not path.is_symlink():
+                    found.add(path.resolve())
+    return sorted(found)
+
+
+def attach_raw_pm_features(rows,root:Path,start_ns:int,end_ns:int):
+    required={}
+    markets=set()
+    for row in rows:
+        market=str(row["market_id"]); markets.add(market)
+        required.setdefault(market,set()).update(
+            str(x) for x in (row.get("yes_token_id"),row.get("no_token_id")) if x
+        )
+    index={}
+    counts=Counter()
+    lo_ms=start_ns//1_000_000-2_000
+    hi_ms=end_ns//1_000_000+1_000
+    for path in _raw_book_paths(root):
+        for raw in m.robust_json_lines(path):
+            if raw.get("schema")!="polymarket_v7_causal_book_observation_v1":
+                continue
+            counts["schema_rows"]+=1
+            try:
+                market=str(raw["market_id"]); token=str(raw["token_id"])
+                wall=int(raw["receive_wall_ms"])
+            except (KeyError,TypeError,ValueError,OverflowError):
+                continue
+            if market not in markets or token not in required.get(market,set()):
+                continue
+            if wall<lo_ms or wall>hi_ms:
+                continue
+            if raw.get("valid") is not True or raw.get("lineage_continuous") is not True:
+                counts["invalid_or_gap"]+=1; continue
+            placement=raw.get("placement_features")
+            if not isinstance(placement,dict):
+                counts["missing_placement"]+=1; continue
+            try:
+                bid=float(raw["best_bid"]); ask=float(raw["best_ask"])
+                bid_depth=float(raw.get("bid_depth_l1") or 0.0)
+                ask_depth=float(raw.get("ask_depth_l1") or 0.0)
+            except (KeyError,TypeError,ValueError,OverflowError):
+                continue
+            if not (0<bid<ask<1 and bid_depth>=0 and ask_depth>=0):
+                continue
+            item={
+                "wall_ms":wall,"receive_ns":wall*1_000_000,
+                "best_bid":bid,"best_ask":ask,"bid_depth_l1":bid_depth,
+                "ask_depth_l1":ask_depth,"placement":placement,
+            }
+            index.setdefault((market,token),[]).append(item)
+            counts["accepted_rows"]+=1
+    packed={}
+    for key,seq in index.items():
+        seq.sort(key=lambda x:x["receive_ns"])
+        packed[key]={"rows":seq,"stamps":[x["receive_ns"] for x in seq]}
+
+    out=[]; joined=0; ages=[]
+    for original in rows:
+        row=dict(original); row["features"]=dict(original.get("features") or {})
+        market=str(row["market_id"]); decision=int(row["decision_ns"])
+        selected={}
+        for outcome,token_key in (("yes","yes_token_id"),("no","no_token_id")):
+            token=str(row.get(token_key) or "")
+            idx=packed.get((market,token))
+            if not idx: continue
+            pos=bisect_right(idx["stamps"],decision)-1
+            if pos<0: continue
+            cut=idx["rows"][pos]
+            age_ms=(decision-cut["receive_ns"])/1e6
+            if not 0<=age_ms<=1000: continue
+            selected[outcome]=cut
+            p=cut["placement"]
+            prefix=f"research.pm_{outcome}_"
+            for source,target in (
+                ("spread_ticks","spread_ticks"),
+                ("imbalance","imbalance"),
+                ("ofi","ofi"),
+                ("ew_vol_ticks","ew_vol_ticks"),
+                ("short_return_ticks","short_return_ticks"),
+                ("trade_intensity","trade_intensity"),
+                ("cancel_intensity","cancel_intensity"),
+                ("aggressive_buy_prints_per_second","aggressive_buy_prints_per_second"),
+                ("aggressive_sell_prints_per_second","aggressive_sell_prints_per_second"),
+                ("local_latency_ms","local_latency_ms"),
+                ("microstructure_shadow_delta_250ms","microstructure_shadow_delta_250ms"),
+            ):
+                value=p.get(source)
+                if finite(value): row["features"][prefix+target]=float(value)
+            row["features"][f"research.pm_{outcome}_mid"]=.5*(cut["best_bid"]+cut["best_ask"])
+            row["features"][f"research.pm_{outcome}_spread"]=cut["best_ask"]-cut["best_bid"]
+            row["features"][f"research.maker_queue_{outcome}_queue_ahead"]=cut["bid_depth_l1"]
+            row["features"][f"research.maker_queue_{outcome}_depth_l1"]=cut["bid_depth_l1"]
+            row["features"][f"research.pm_{outcome}_book_depth_imbalance"]=(
+                (cut["bid_depth_l1"]-cut["ask_depth_l1"])/
+                max(1e-12,cut["bid_depth_l1"]+cut["ask_depth_l1"])
+            )
+            ages.append(age_ms)
+        if "yes" in selected and "no" in selected:
+            joined+=1
+            row["features"]["research.pm_complete_set_mid"]=(
+                .5*(selected["yes"]["best_bid"]+selected["yes"]["best_ask"])
+                +.5*(selected["no"]["best_bid"]+selected["no"]["best_ask"])
+            )
+        out.append(row)
+    return out,{
+        "files":len(_raw_book_paths(root)),"counts":dict(counts),
+        "rows":len(rows),"dual_token_joined":joined,
+        "dual_token_join_rate":joined/len(rows) if rows else None,
+        "age_ms_p50":statistics.median(ages) if ages else None,
+    }
 
 
 def residual_components(row):
@@ -356,6 +479,7 @@ def run(root:Path,output:Path,code_sha:str,minimum_wall_ns:int):
     feature_paths=m.discover_feature_tapes(root)
     feature_index,feature_diag=m.load_feature_tape(feature_paths,start_ns=start,end_ns=end)
     rich,join_diag=m.attach_rich_state(rows,feature_index,delay_ms=0)
+    rich,pm_join_diag=attach_raw_pm_features(rich,root,start,end)
     by_id={str(r["decision_id"]):r for r in rich}
     train_r=[by_id[str(r["decision_id"])] for r in train]
     oos_r=[by_id[str(r["decision_id"])] for r in oos]
@@ -429,8 +553,8 @@ def run(root:Path,output:Path,code_sha:str,minimum_wall_ns:int):
                  "locked_oos_40":{"start_ns":cut,"end_ns":end,"rows":len(oos)}},
         "selection":window,"latencies_ms":list(LATENCIES),"horizons_ms":list(EXITS),
         "size_shares":SIZE,"data_sha256":data.get("data_sha256"),
-        "feature_join":join_diag,"continuous_pm_tape":tape_diag,
-        "feature_inventory":inventory,
+        "feature_join":join_diag,"raw_pm_feature_join":pm_join_diag,
+        "continuous_pm_tape":tape_diag,"feature_inventory":inventory,
         "oos_lock_semantics":"NO_FIT_THRESHOLD_SCALER_OR_FEATURE_SELECTION_ON_FINAL_40_PERCENT",
     }
     atomic_json(output/"01_manifest.json",manifest)
@@ -458,6 +582,7 @@ def run(root:Path,output:Path,code_sha:str,minimum_wall_ns:int):
         "window":{"start_ns":start,"end_ns":end,"train_rows":len(train),"locked_oos_rows":len(oos)},
         "policies":by_policy,"residual_rule":residual,
         "feature_family_counts":{k:len(v or []) for k,v in inventory.get("families",{}).items()},
+        "raw_pm_feature_join":pm_join_diag,
         "interpretation":"A0-A5_FIXED_HORSE_RACE;FINAL_40_PERCENT_LOCKED_OOS;NO_AUTOMATIC_PROMOTION",
     }
     atomic_json(output/"00_summary.json",summary)
