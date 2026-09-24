@@ -15,6 +15,7 @@ from collections import Counter, defaultdict
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -64,6 +65,98 @@ def sign(value: float | None, eps: float = 1e-15) -> int:
     if value is None or not math.isfinite(value) or abs(value) <= eps:
         return 0
     return 1 if value > 0 else -1
+
+
+class RotatingBookTimeline(BookTimeline):
+    """Follow the freshest live uncompressed causal-book inode across rotations."""
+
+    def __init__(self, directory: Path, model_sha: str, retention_ms: int,
+                 bootstrap_bytes: int = 64 * 1024 * 1024):
+        super().__init__(directory / "current.jsonl", model_sha, retention_ms=retention_ms)
+        self.directory = directory
+        self.bootstrap_bytes = bootstrap_bytes
+        self.active_identity: tuple[int, int] | None = None
+        self.active_source: Path | None = None
+
+    def _candidate(self) -> Path | None:
+        candidates: list[tuple[int, int, Path]] = []
+        try:
+            paths = [self.directory / "current.jsonl", *self.directory.glob("*.segment-*.jsonl")]
+        except OSError:
+            return None
+        for path in paths:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if stat.st_size <= 0:
+                continue
+            candidates.append((stat.st_mtime_ns, stat.st_size, path))
+        return max(candidates, default=(0, 0, None), key=lambda x: (x[0], x[1]))[2]
+
+    def _drain(self) -> None:
+        if self.handle is None:
+            return
+        while True:
+            offset = self.handle.tell()
+            raw = self.handle.readline()
+            if not raw or not raw.endswith(b"\n"):
+                self.handle.seek(offset)
+                return
+            try:
+                self.ingest(json.loads(raw))
+            except (ValueError, UnicodeDecodeError):
+                self.invalidate()
+
+    def _open_candidate(self, path: Path) -> None:
+        self.close()
+        try:
+            handle = path.open("rb")
+            stat = os.fstat(handle.fileno())
+        except OSError:
+            return
+        if stat.st_size > self.bootstrap_bytes:
+            handle.seek(stat.st_size - self.bootstrap_bytes)
+            handle.readline()
+        self.handle = handle
+        self.path = path
+        self.active_source = path
+        self.active_identity = (stat.st_dev, stat.st_ino)
+        self._drain()
+
+    def poll(self) -> None:
+        candidate = self._candidate()
+        if candidate is None:
+            return
+        try:
+            candidate_stat = candidate.stat()
+            candidate_identity = (candidate_stat.st_dev, candidate_stat.st_ino)
+        except OSError:
+            return
+        if self.handle is None:
+            self._open_candidate(candidate)
+            return
+
+        self._drain()
+        try:
+            active_stat = os.fstat(self.handle.fileno())
+            active_identity = (active_stat.st_dev, active_stat.st_ino)
+        except OSError:
+            self._open_candidate(candidate)
+            return
+
+        if candidate_identity == active_identity:
+            self.path = candidate
+            self.active_source = candidate
+            self.active_identity = active_identity
+            return
+
+        try:
+            active_mtime = active_stat.st_mtime_ns
+        except AttributeError:
+            active_mtime = 0
+        if candidate_stat.st_mtime_ns >= active_mtime:
+            self._open_candidate(candidate)
 
 
 def make_protocol(ttls_ms: list[int], markouts_ms: list[int]) -> dict[str, Any]:
@@ -559,7 +652,9 @@ def main() -> int:
         raise SystemExit("invalid horizon grid")
     protocol = make_protocol(ttls, markouts)
     evaluation_ms = max(max(ttls) + 101, max(markouts) + 50)
-    book = BookTimeline(args.book_tape, args.model_sha, retention_ms=evaluation_ms + 15_000)
+    book = RotatingBookTimeline(
+        args.book_tape.parent, args.model_sha, retention_ms=evaluation_ms + 15_000
+    )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.status.parent.mkdir(parents=True, exist_ok=True)
