@@ -1,8 +1,8 @@
 {
   "schema": "polymarket_v7_pure_arb_exact_deploy_request_v1",
   "version": 1,
-  "request_id": "exact-arb-shadow-paper-923ab0dc-euw2az1-pr-trigger-20260924",
-  "target_sha": "923ab0dcaea6ad21e12b6e78149adba998fd39dc",
+  "request_id": "exact-arb-shadow-paper-a7fdd40a-euw2az1-execfix-20260924",
+  "target_sha": "a7fdd40a889c64e38910c989a247de1a13e5c289",
   "paper_only": true,
   "authenticated_execution": false,
   "real_order_submission": false,
