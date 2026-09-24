@@ -79,6 +79,9 @@ jobs:
           python3 -m py_compile \
             research/walk_forward_v3/maker_a0_a5_2h.py \
             ops/v7_maker_a0_a5_ssm.py
+          c++ -std=c++20 -O2 -Iinclude \
+            research/tools/v7_external_event_export.cpp \
+            -o /tmp/v7_external_event_export
 
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
