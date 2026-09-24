@@ -429,7 +429,7 @@ def train_external_fair(train_rows,session_cache,ext_names):
 def residual_features(row,session,external_model,external_names):
     pair=current_pair(row,session)
     if pair is None:return None
-    base=feature_dict(row,external_names)
+    base=feature_dict(row,external_names,include_pm=False,include_signal_age=False)
     fair=min(1.0,max(0.0,external_model.predict(base)))
     residual=float(pair["pm_yes"])-fair
     return {
