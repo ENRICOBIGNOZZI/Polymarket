@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
 from research.walk_forward_v3.maker_a0_a5_2h import (
-    Ridge, external_feature, pm_feature, full_execution_feature, split_60_40,
+    Ridge, external_feature, pm_feature, full_execution_feature, feature_dict, split_60_40,
     WINDOW_NS,
 )
 
@@ -21,6 +21,25 @@ class MakerA0A5Tests(unittest.TestCase):
         self.assertTrue(full_execution_feature("queue_ahead"))
         self.assertTrue(full_execution_feature("distance_to_reference_bp"))
         self.assertFalse(full_execution_feature("realized_markout_1s"))
+
+    def test_external_feature_view_excludes_pm_context(self):
+        row={
+            "pair":{"pm_yes":0.73},
+            "tte_ns":60_000_000_000,
+            "signal_age_ns":12_000_000,
+            "asset":"BTC","horizon":"M5",
+            "features":{"binance_return_100ms_bp":1.2,"tape.pm_yes_imbalance":0.4},
+        }
+        external=feature_dict(
+            row,["binance_return_100ms_bp"],
+            include_pm=False,include_signal_age=False)
+        pm=feature_dict(
+            row,["tape.pm_yes_imbalance"],
+            include_pm=True,include_signal_age=False)
+        self.assertNotIn("ctx.pm_yes",external)
+        self.assertNotIn("ctx.signal_age_ms",external)
+        self.assertEqual(external["binance_return_100ms_bp"],1.2)
+        self.assertAlmostEqual(pm["ctx.pm_yes"],0.73)
 
     def test_ridge_fits_simple_relation(self):
         rows=[{"x":float(i)} for i in range(100)]
