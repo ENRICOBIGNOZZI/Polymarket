@@ -86,7 +86,7 @@ jobs:
           }
           raw=(json.dumps(payload,sort_keys=True,separators=(",",":"))+"\n").encode()
           repo=os.environ["REPO"]; rid=os.environ["REQUEST_ID"]
-          url=f"https://api.github.com/repos/{repo}/contents/docs/research/a0-a5-results/{rid}.json"
+          url=f"https://api.github.com/repos/{repo}/contents/docs/research/a0-a5-results/{rid}.started.json"
           body=json.dumps({
               "message":f"Start A0-A5 result {rid}",
               "content":base64.b64encode(raw).decode(),
