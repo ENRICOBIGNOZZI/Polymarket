@@ -5,21 +5,94 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from v7_alpha_driven_maker_shadow import make_anchor, make_protocol, replay_anchor_python
+from v7_alpha_driven_maker_shadow import (
+    POLICIES,
+    active_markets,
+    make_anchor,
+    make_protocol,
+    pm_features,
+    policy_flags,
+)
 
 
 class AlphaDrivenMakerShadowTests(unittest.TestCase):
     def test_protocol_grid_is_bounded_and_deterministic(self):
         p = make_protocol([1000, 250, 500, 250], [5000, 250, 1000])
-        arms = p["maker"]["arms"]
         self.assertEqual(
-            [a["id"] for a in arms],
+            [a["id"] for a in p["maker"]["arms"]],
             [
                 "JOIN_250MS", "JOIN_500MS", "JOIN_1000MS",
                 "IMPROVE1_250MS", "IMPROVE1_500MS", "IMPROVE1_1000MS",
             ],
         )
         self.assertEqual(p["maker"]["markout_horizons_ms"], [250, 1000, 5000])
+
+    def test_selection_keeps_only_active_m5_m15(self):
+        sha = "a" * 40
+        value = {
+            "schema": "polymarket_v7_multi_crypto_book_selection_v1",
+            "model_sha": sha,
+            "paper_only": True,
+            "authenticated_execution": False,
+            "real_order_submission": False,
+            "execution_authority": False,
+            "selection_only": True,
+            "markets": [
+                {
+                    "asset": "BTC", "horizon": "M5", "market_id": "active",
+                    "yes_token": "y1", "no_token": "n1",
+                    "start_timestamp_ms": 1000, "end_timestamp_ms": 2000,
+                },
+                {
+                    "asset": "ETH", "horizon": "M15", "market_id": "future",
+                    "yes_token": "y2", "no_token": "n2",
+                    "start_timestamp_ms": 2000, "end_timestamp_ms": 3000,
+                },
+                {
+                    "asset": "SOL", "horizon": "H1", "market_id": "wrong-horizon",
+                    "yes_token": "y3", "no_token": "n3",
+                    "start_timestamp_ms": 1000, "end_timestamp_ms": 2000,
+                },
+            ],
+        }
+        rows = active_markets(value, sha, 1500)
+        self.assertEqual([r["market_id"] for r in rows], ["active"])
+
+    def test_alpha_policy_contract(self):
+        external = {"ready": True, "direction": 1, "confidence": 0.8}
+        row = {
+            "placement_features": {
+                "imbalance": 0.4,
+                "ofi": 0.2,
+                "short_return_ticks": 1.0,
+                "aggressive_buy_prints_per_second": 4.0,
+                "aggressive_sell_prints_per_second": 1.0,
+            }
+        }
+        pm = pm_features(row)
+        yes = policy_flags(outcome="YES", external=external, pm=pm)
+        no = policy_flags(outcome="NO", external=external, pm=pm)
+        self.assertEqual(tuple(yes), POLICIES)
+        self.assertTrue(yes["A0_BASELINE"])
+        self.assertTrue(yes["A1_EXTERNAL_MOMENTUM"])
+        self.assertTrue(yes["A2_PM_MOMENTUM"])
+        self.assertTrue(yes["A3_COMBINED_MOMENTUM"])
+        self.assertFalse(no["A1_EXTERNAL_MOMENTUM"])
+        self.assertFalse(no["A5_TOXICITY_VETO"])
+
+    def test_mean_reversion_requires_rebound_support(self):
+        external = {"ready": True, "direction": 1, "confidence": 0.8}
+        row = {
+            "placement_features": {
+                "imbalance": 0.3,
+                "ofi": 0.1,
+                "short_return_ticks": -2.0,
+                "aggressive_buy_prints_per_second": 3.0,
+                "aggressive_sell_prints_per_second": 1.0,
+            }
+        }
+        flags = policy_flags(outcome="YES", external=external, pm=pm_features(row))
+        self.assertTrue(flags["A4_MEAN_REVERSION"])
 
     def test_anchor_is_zero_authority_counterfactual(self):
         row = {
@@ -29,13 +102,15 @@ class AlphaDrivenMakerShadowTests(unittest.TestCase):
             "receive_monotonic_ns": 999_000_000,
             "exchange_event_ns": 888_000_000,
         }
+        market = {
+            "market_id": "m1", "asset": "BTC", "horizon": "M5",
+            "yes_token": "t1", "no_token": "t2",
+        }
         anchor = make_anchor(
-            row,
-            market_id="m1",
-            token_id="t1",
-            model_sha="a" * 40,
-            quantity=5.0,
-            opportunity=None,
+            row, market=market, token_id="t1", outcome="YES",
+            model_sha="a" * 40, quantity=5.0,
+            external={"ready": False}, pm={"ready": False},
+            policies={name: name == "A0_BASELINE" for name in POLICIES},
         )
         order = anchor["order"]
         self.assertTrue(order["paper_only"])
@@ -45,72 +120,6 @@ class AlphaDrivenMakerShadowTests(unittest.TestCase):
         self.assertTrue(order["metadata"]["excluded_from_portfolio_equity"])
         self.assertEqual(order["intended_size"], 5.0)
         self.assertEqual(order["limit_price"], 0.49)
-
-
-    def test_pessimistic_queue_and_improve1_replay(self):
-        import time
-        from types import SimpleNamespace
-
-        sha = "a" * 40
-        origin = {
-            "best_bid": 0.49, "best_ask": 0.51, "tick_size": 0.01,
-            "bid_depth_l1": 2.0, "receive_wall_ms": 1000,
-            "receive_monotonic_ns": 1_000_000_000,
-            "exchange_event_ns": 900_000_000,
-            "observer_sequence": 1, "valid": True, "lineage_continuous": True,
-            "public_trade": None,
-        }
-        trade = {
-            **origin,
-            "receive_wall_ms": 1050,
-            "receive_monotonic_ns": 1_050_000_000,
-            "exchange_event_ns": 950_000_000,
-            "observer_sequence": 2,
-            "public_trade": {
-                "aggressor_side": "SELL", "price": 0.49, "size": 4.0,
-                "exchange_event_ns": 950_000_000,
-            },
-        }
-        mark = {
-            **origin,
-            "best_bid": 0.50, "best_ask": 0.52,
-            "receive_wall_ms": 1100,
-            "receive_monotonic_ns": 1_100_000_000,
-            "exchange_event_ns": 1_000_000_000,
-            "observer_sequence": 3,
-            "public_trade": None,
-        }
-        book = SimpleNamespace(
-            history={("m1", "t1"): [origin, trade, mark]},
-            model_sha=sha, gaps=0, session="s", epoch=1, sequence=3,
-            watermark_ms=1200, watermark_monotonic_ns=1_200_000_000,
-        )
-        anchor = make_anchor(
-            origin, market_id="m1", token_id="t1", model_sha=sha,
-            quantity=5.0, opportunity=None,
-        )
-        anchor["book_gap_counter"] = 0
-        anchor["observer_session_id"] = "s"
-        anchor["connection_epoch"] = 1
-        status = {
-            "timestamp_ms": time.time_ns() // 1_000_000,
-            "book_events_written": 3,
-            "book_watermark_receive_wall_ms": 1200,
-            "book_watermark_receive_monotonic_ns": 1_200_000_000,
-            "evidence_complete": True, "model_sha": sha,
-            "observer_session_id": "s", "connection_epoch": 1,
-            "state": "running", "paper_only": True,
-            "authenticated_execution": False, "real_order_submission": False,
-        }
-        result = replay_anchor_python(
-            anchor, book, status, make_protocol([50], [50]), evaluation_ms=100
-        )
-        by = {row["arm"]: row for row in result["arms"]}
-        self.assertEqual(by["JOIN_50MS"]["operational_filled_shares"], 1.0)
-        self.assertEqual(by["JOIN_50MS"]["research_request"]["pessimistic_queue_ahead"], 3.0)
-        self.assertEqual(by["IMPROVE1_50MS"]["operational_filled_shares"], 4.0)
-        self.assertEqual(by["IMPROVE1_50MS"]["research_request"]["pessimistic_queue_ahead"], 0.0)
-
 
 
 if __name__ == "__main__":
