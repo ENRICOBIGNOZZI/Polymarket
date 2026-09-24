@@ -9,7 +9,7 @@ import shlex
 
 from v7_london_ssm_deploy import REGION, SsmDeployError, run
 
-INSTANCE="i-0fba2bac9fdc5cbeb"
+INSTANCE="i-04042ca7da7a23215"
 
 REMOTE=r"""
 import json,shlex,subprocess,time
