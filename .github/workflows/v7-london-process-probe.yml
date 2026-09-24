@@ -93,8 +93,24 @@ jobs:
           fi
           echo "--- retention journal compact ---"
           journalctl -u polymarket-v7-retention.service -n 100 --no-pager 2>/dev/null \
-            | grep -Ei 'systemd\[1\]|traceback|error|failed|permission denied|no such file|chdir|exec' \
-            | tail -50 || true
+            | grep -E 'systemd\[1\]' | tail -40 || true
+          echo "=== PAPER SERVICE EARLY ==="
+          systemctl show polymarket-v7-paper.service -p ActiveState -p SubState -p MainPID -p Result -p ExecMainCode -p ExecMainStatus --no-pager 2>/dev/null || true
+          if [[ -n "$ROOT_EARLY" ]]; then
+            python3 - "$ROOT_EARLY/control/runtime_status.json" "$ROOT_EARLY/control/supervisor_status.json" "$ROOT_EARLY/control/native_engine_manager_status.json" <<'PYE'
+          import json,sys
+          def load(p):
+              try:return json.load(open(p,encoding="utf-8"))
+              except Exception:return {}
+          r,s,n=map(load,sys.argv[1:4])
+          out={
+              "runtime":{k:r.get(k) for k in ("model_sha","state","readiness","pid","timestamp","economic_new_risk_ready")},
+              "supervisor":{k:s.get(k) for k in ("state","readiness","reasons","child_pid","supervisor_pid","timestamp")},
+              "native":{k:n.get(k) for k in ("state","blocker","active_worker_count","target_context_count","native_observations_written","native_observations_dropped","timestamp_ms")},
+          }
+          print("PAPER_EARLY="+json.dumps(out,sort_keys=True,separators=(",",":")))
+          PYE
+          fi
           echo "=== CPU VISIBILITY ==="
           echo "nproc=$(nproc 2>/dev/null || true) nproc_all=$(nproc --all 2>/dev/null || true)"
           lscpu -e=CPU,ONLINE,NODE,CORE,SOCKET 2>/dev/null || true
