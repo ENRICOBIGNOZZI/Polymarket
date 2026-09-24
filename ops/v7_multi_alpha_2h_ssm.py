@@ -48,6 +48,7 @@ REQUIRED = (
     "17_shortlist.json",
     "18_rejected_features.json",
     "19_next_stage_plan.md",
+    "20_monotonicity.json",
 )
 
 
@@ -110,7 +111,7 @@ assert manifest['window_end_ns']-manifest['window_start_ns']==7_200_000_000_000
 assert manifest['selection']['profitability_used_for_selection'] is False
 assert baseline['baseline_code_sha']==sha
 assert baseline['latencies_ms']==[5,10,25,50,100,250]
-assert baseline['exit_horizons_ms']==[500,750,1000,1500,2000,3000,4000,5000,7500,10000]
+assert baseline['exit_horizons_ms']==[100,250,500,750,1000,1500,2000,3000,4000,5000,7500,10000]
 assert baseline['size_shares']==5.0
 assert len(summary['candidates'])<=4
 print('MULTI_ALPHA_2H_READY')
