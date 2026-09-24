@@ -762,7 +762,7 @@ def maker_fill(row,session,trades,side,latency_ms):
     token=str((row.get("yes_token_id") if side=="YES" else row.get("no_token_id")) or "")
     if not token:return None,"TOKEN_ID_UNAVAILABLE"
     price=float(state["bid"])
-    tick=float(pair.get("yes_tick_size") if side=="YES" else pair.get("no_tick_size") or 0.01)
+    tick=float((pair.get("yes_tick_size") if side=="YES" else pair.get("no_tick_size")) or row.get("tick") or 0.01)
     if TARGET_SHARES+1e-12<float(row.get("minimum") or 0.0):
         return None,"VENUE_MINIMUM_ABOVE_TARGET_SIZE"
     ahead=max(0.0,float(state["bid_depth"])*QUEUE_AHEAD_MULTIPLIER)
