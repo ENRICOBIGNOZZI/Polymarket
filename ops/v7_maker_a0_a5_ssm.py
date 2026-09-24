@@ -37,6 +37,7 @@ PATHS=(
 REQUIRED=(
     "00_manifest.json","01_grid.json","02_training_receipts.json",
     "03_monotonicity.json","04_grid.csv","05_summary.json",
+    "06_paired_vs_a0.json",
 )
 
 
@@ -132,6 +133,7 @@ assert not missing,missing
 m=json.load(open(root/"00_manifest.json"))
 g=json.load(open(root/"01_grid.json"))
 s=json.load(open(root/"05_summary.json"))
+paired=json.load(open(root/"06_paired_vs_a0.json"))
 assert m["paper_only"] is True
 assert m["authenticated_execution"] is False
 assert m["real_order_submission"] is False
@@ -148,7 +150,13 @@ assert abs(float(m["maker_mechanics"]["queue_ahead_multiplier"])-1.25)<1e-12
 policies=set(("A0_BASELINE","A1_EXTERNAL","A2_PM","A3_EXTERNAL_PM","A4_RESIDUAL","A5_FULL_EXECUTION"))
 assert set(g["policies"])==policies
 rows=list(csv.DictReader(open(root/"04_grid.csv",newline="")))
-assert rows
+assert len(rows)==6*6*12
+assert m["grid_cell_count"]==6*6*12
+assert m["directional_target_semantics"]=="PM_YES_AT_DECISION_PLUS_HORIZON_MINUS_PM_YES_AT_DECISION;LATENCY_DOES_NOT_SHIFT_LABEL"
+assert "EXACT_500MS_GRID" in m["anchor_source"]["timing_selection"]
+assert int(m["feature_join"]["joined_rows"])>0
+assert m["a5_rich_feature_names"]
+assert set(paired["policies"])==policies-{"A0_BASELINE"}
 series=set(((m.get("external_venue_tape") or dict()).get("load") or dict()).get("series") or [])
 for asset in m["selection"].get("assets") or []:
     ready=sum(1 for venue in ("binance","coinbase","bybit") if asset+":"+venue in series)
