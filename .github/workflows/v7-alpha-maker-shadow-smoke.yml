@@ -53,7 +53,7 @@ jobs:
 
       - name: Unit test shadow safety
         run: |
-          PYTHONPATH=scripts python3 -m pytest -q tests/test_v7_alpha_driven_maker_shadow.py
+          PYTHONPATH=scripts python3 tests/test_v7_alpha_driven_maker_shadow.py
           python3 -m py_compile scripts/v7_alpha_driven_maker_shadow.py
 
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
