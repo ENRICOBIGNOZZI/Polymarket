@@ -1,11 +1,11 @@
 {
   "schema": "polymarket_v7_a0_a5_maker_2h_request_v1",
   "version": 1,
-  "request_id": "a0-a5-maker-2h-postdeploy-20260924-a",
+  "request_id": "a0-a5-maker-2h-current-20260924-b",
   "instance_id": "i-04042ca7da7a23215",
   "expected_research_sha": "0d8bff3fca0c56e373e83e917d2209802952993f",
   "research_branch": "research/a0-a5-maker-horse-race-20260924",
-  "minimum_wall_ns": 1790278818146000000,
+  "minimum_wall_ns": 1790276400000000000,
   "output_directory": "docs/research/a0-a5-maker-2h-2026-09-24",
   "paper_only": true,
   "authenticated_execution": false,
