@@ -89,24 +89,26 @@ assert m["holding_horizons_ms"]==[100,250,500,750,1000,1500,2000,3000,4000,5000,
 assert m["maker_mechanics"]["placement"]=="JOIN"
 assert m["maker_mechanics"]["quote_ttl_ms"]==500
 assert abs(float(m["maker_mechanics"]["queue_ahead_multiplier"])-1.25)<1e-12
-assert set(g["policies"])=={"A0_BASELINE","A1_EXTERNAL","A2_PM","A3_EXTERNAL_PM","A4_RESIDUAL","A5_FULL_EXECUTION"}
+policies=set(("A0_BASELINE","A1_EXTERNAL","A2_PM","A3_EXTERNAL_PM","A4_RESIDUAL","A5_FULL_EXECUTION"))
+assert set(g["policies"])==policies
 rows=list(csv.DictReader(open(root/"04_grid.csv",newline="")))
 assert rows
-print("A0_A5_COMPACT="+json.dumps({
-  "split":m["split"],
-  "feature_sets":{k:len(v) for k,v in m["feature_sets"].items()},
-  "summary":s["policies"],
-  "grid_rows":len(rows),
-},sort_keys=True,separators=(",",":")))
+feature_counts=dict((k,len(v)) for k,v in m["feature_sets"].items())
+compact=dict(
+  split=m["split"],
+  feature_sets=feature_counts,
+  summary=s["policies"],
+  grid_rows=len(rows),
+)
+print("A0_A5_COMPACT="+json.dumps(compact,sort_keys=True,separators=(",",":")))
 PY
 tar -C {remote}/output/a0-a5 -czf {remote}/results.tgz .
 python3 - {remote}/results.tgz <<'PY'
 from pathlib import Path
 import hashlib,json,sys
 p=Path(sys.argv[1])
-print("A0_A5_RESULT="+json.dumps({
- "bytes":p.stat().st_size,"sha256":hashlib.sha256(p.read_bytes()).hexdigest()
-},sort_keys=True))
+result=dict(bytes=p.stat().st_size,sha256=hashlib.sha256(p.read_bytes()).hexdigest())
+print("A0_A5_RESULT="+json.dumps(result,sort_keys=True))
 PY"""
     stdout,_=run(REGION,a.instance_id,command,5400)
     marker=next(line for line in stdout.splitlines() if line.startswith("A0_A5_RESULT="))
