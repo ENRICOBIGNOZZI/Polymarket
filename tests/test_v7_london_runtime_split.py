@@ -90,6 +90,12 @@ def test_research_cycle_has_no_execution_authority_and_midnight_guard():
     assert '<key>RunAtLoad</key>' in plist
 
 
+def test_portfolio_guard_uses_absolute_runtime_path():
+    s=(ROOT/'scripts/paper_v7_execution_loop.sh').read_text()
+    assert 'python3 "$ROOT/scripts/v7_portfolio_guard.py"' in s
+    assert 'python3 scripts/v7_portfolio_guard.py' not in s
+
+
 def test_shells_parse():
     for rel in ['ops/v7_london_stage_release.sh','ops/v7_london_bootstrap.sh','ops/v7_london_cutover.sh','research/run_research_cycle.sh','research/install_macos_scheduler.sh']:
         r=subprocess.run(['bash','-n',str(ROOT/rel)],capture_output=True,text=True)
