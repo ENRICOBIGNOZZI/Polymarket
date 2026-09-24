@@ -69,9 +69,6 @@ jobs:
           test -s "$EVID/book_observations/current.jsonl"
           test -e "$EVID/pure_arb_trades.jsonl"
           test -e "$EVID/pure_arb_deep_book_snapshots.jsonl"
-          for f in pure_arb_arrival_survival_status.json exchange_execution_status.json capital_allocator_status.json; do
-            test -s "$EVID/$f"
-          done
           pgrep -af 'v7_pure_arb_arrival_survival_shadow.py' | grep -F -- '--delay-arms-ms 1,2,5,10,25,50,100,200,250,275,300,400,500,750,1000'
           pgrep -af 'v7_pure_arb_exchange_execution_shadow.py' | grep -F -- '--inter-leg-skew-ms 0,1,2,5,10'
           pgrep -af 'v7_pure_arb_exchange_execution_shadow.py' | grep -F -- '--transport-modes SEQUENTIAL,PARALLEL,BATCH'
@@ -118,6 +115,15 @@ jobs:
           out['contexts_with_activity']=active
           print('PURE_ARB_STATUS='+json.dumps(out,sort_keys=True,separators=(',',':')))
           PYSTAT
+          trade_bytes="$(stat -c %s "$EVID/pure_arb_trades.jsonl" 2>/dev/null || echo 0)"
+          if [[ "$trade_bytes" =~ ^[0-9]+$ ]] && (( trade_bytes > 0 )); then
+            for f in pure_arb_arrival_survival_status.json exchange_execution_status.json capital_allocator_status.json; do
+              test -s "$EVID/$f"
+            done
+            echo "downstream_candidate_status=ready"
+          else
+            echo "downstream_candidate_status=cold_start_no_candidates"
+          fi
           for i in $(seq 1 30); do
             prom="$(curl -fsS --get --data-urlencode 'query=polymarket_pure_arb_up' http://127.0.0.1:9090/api/v1/query || true)"
             if python3 - "$prom" <<'PYPROM' >/dev/null 2>&1
