@@ -5,7 +5,7 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
-from research.walk_forward_v3.maker_market_metadata import identify_context
+from research.walk_forward_v3.maker_market_metadata import identify_context, observed_markets
 
 
 class MakerMarketMetadataTests(unittest.TestCase):
@@ -28,6 +28,26 @@ class MakerMarketMetadataTests(unittest.TestCase):
         self.assertEqual((ctx["asset"],ctx["horizon"]),("BTC","M5"))
         self.assertEqual(start,1790285100)
         self.assertEqual(end-start,300)
+
+    def test_raw_causal_book_fallback_discovers_market(self):
+        import json,tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)/"paper"
+            books=root/"research"/"repricing_book"/"book_observations"
+            books.mkdir(parents=True)
+            row={
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "paper_only":True,"authenticated_execution":False,
+                "real_order_submission":False,
+                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "receive_wall_ms":2000,
+                "market_id":"m1","token_id":"t1",
+            }
+            (books/"current.jsonl").write_text(json.dumps(row)+"\n",encoding="utf-8")
+            found,diag=observed_markets(root,1_000_000_000)
+            self.assertIn("m1",found)
+            self.assertEqual(found["m1"]["tokens_seen"],["t1"])
+            self.assertEqual(diag["source"],"RAW_CAUSAL_BOOK")
 
     def test_hourly_and_daily_context_use_static_horizon(self):
         ctx,start,end=identify_context(
