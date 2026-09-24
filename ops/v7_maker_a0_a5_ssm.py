@@ -85,7 +85,7 @@ from pathlib import Path
 run_root=Path(sys.argv[1]); remote=Path(sys.argv[2])
 start=int(sys.argv[3]); end=int(sys.argv[4]); exporter=sys.argv[5]
 metadata=json.loads((remote/"market_metadata.json").read_text(encoding="utf-8"))
-assets=sorted({str(row.get("asset") or "").upper() for row in metadata.get("markets") or [] if row.get("asset")})
+assets=sorted({{str(row.get("asset") or "").upper() for row in metadata.get("markets") or [] if row.get("asset")}})
 if not assets:
     raise SystemExit("NO_METADATA_ASSETS")
 lines=[]
@@ -160,7 +160,7 @@ assert m["directional_target_semantics"]=="PM_YES_AT_DECISION_PLUS_HORIZON_MINUS
 assert "EXACT_500MS_GRID" in m["anchor_source"]["timing_selection"]
 assert int(m["feature_join"]["joined_rows"])>0
 assert m["a5_rich_feature_names"]
-assert set(paired["policies"])==policies-{"A0_BASELINE"}
+assert set(paired["policies"])==policies-{{"A0_BASELINE"}}
 series=set(((m.get("external_venue_tape") or dict()).get("load") or dict()).get("series") or [])
 for asset in m["selection"].get("assets") or []:
     ready=sum(1 for venue in ("binance","coinbase","bybit") if asset+":"+venue in series)
