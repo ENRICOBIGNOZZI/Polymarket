@@ -188,6 +188,26 @@ jobs:
           for rel in ("micro_maker/reward_selection.json","micro_maker/execution_model.json","external_fair/status.json"):
               value=load(rel)
               print("STATE_"+rel.replace("/","_")+"="+json.dumps(value,sort_keys=True,separators=(",",":"))[:30000])
+          selection=load("universe/book_selection.json")
+          selection_compact={{
+              "schema":selection.get("schema"),"model_sha":selection.get("model_sha"),
+              "market_count":selection.get("market_count"),"token_count":selection.get("token_count"),
+              "markets":[{{k:row.get(k) for k in ("asset","horizon","market_id","yes_token","no_token","start_timestamp_ms","end_timestamp_ms")}}
+                         for row in (selection.get("markets") or []) if isinstance(row,dict)]
+          }}
+          print("BOOK_SELECTION="+json.dumps(selection_compact,sort_keys=True,separators=(",",":"))[:30000])
+          external_keys=("schema","asset","code_sha","state","valid","timestamp_ns","age_ns",
+                         "composite_price","composite_microprice","dispersion_bps",
+                         "aggregate_ofi","aggregate_trade_imbalance","realized_vol_fast",
+                         "return_50ms","return_100ms","return_250ms","return_1s","return_5s",
+                         "return_history_available")
+          for asset in ("BTC","ETH","SOL","XRP","DOGE","BNB"):
+              rel="external_fair/external_venues.json" if asset=="BTC" else f"external_fair/assets/{{asset.lower()}}/external_venues.json"
+              value=load(rel)
+              compact_external={{k:value.get(k) for k in external_keys}}
+              compact_external["path"]=rel
+              compact_external["now_age_ms"]=(time.time_ns()-int(value.get("timestamp_ns") or 0))/1e6 if value.get("timestamp_ns") else None
+              print("EXTERNAL_"+asset+"="+json.dumps(compact_external,sort_keys=True,separators=(",",":")))
           try: book=json.loads(status_path.read_text())
           except Exception as exc: book={{"_load_error":f"{{type(exc).__name__}}:{{exc}}"}}
           now_ms=time.time_ns()//1_000_000
