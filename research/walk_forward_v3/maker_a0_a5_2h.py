@@ -470,7 +470,9 @@ def maker_fill(row,session,trades,side,latency_ms):
     token=str((row.get("yes_token_id") if side=="YES" else row.get("no_token_id")) or "")
     if not token:return None,"TOKEN_ID_UNAVAILABLE"
     price=float(state["bid"])
-    tick=float(row.get("tick") or 0.01)
+    tick=float(pair.get("yes_tick_size") if side=="YES" else pair.get("no_tick_size") or 0.01)
+    if TARGET_SHARES+1e-12<float(row.get("minimum") or 0.0):
+        return None,"VENUE_MINIMUM_ABOVE_TARGET_SIZE"
     ahead=max(0.0,float(state["bid_depth"])*QUEUE_AHEAD_MULTIPLIER)
     idx=trades.get((str(row["market_id"]),token))
     end_ms=arrival_ms+QUOTE_TTL_MS
@@ -760,23 +762,59 @@ def monotonicity(grid):
 
 
 def run(root: Path, output: Path, code_sha: str, minimum_wall_ns: int):
+    # Native lead-lag decisions are used only as an authoritative source for
+    # static fee/minimum terms. Quote timing comes exclusively from the
+    # continuous alpha-neutral feature tape below.
     data=build_dataset(root,minimum_wall_ns=minimum_wall_ns,include_settlement_labels=False,use_compact_window_index=True)
-    if data.get("input_state")!="READY":raise ValueError("CAUSAL_DATASET_NOT_READY:"+str(data.get("input_state")))
-    source=[r for r in data["decisions"] if da._valid_state(r)]
+    if data.get("input_state")!="READY":
+        raise ValueError("CAUSAL_DATASET_NOT_READY:"+str(data.get("input_state")))
+    native_terms=[r for r in data["decisions"] if da._valid_state(r)]
+    market_meta,context_meta=build_static_market_metadata(native_terms)
+    paths=discover_feature_tapes(root)
+    source,feature_diag=load_feature_anchor_rows(
+        paths,minimum_wall_ns=minimum_wall_ns,
+        market_meta=market_meta,context_meta=context_meta)
+    if not source:
+        raise ValueError("NO_ALPHA_NEUTRAL_FEATURE_ANCHORS")
+
     sessions,tape_diag=stream_sessions(root.resolve().parent,source)
     if not sessions:
         sessions,fallback=jsonl_sessions(root.resolve(),source)
         tape_diag={**tape_diag,**fallback,"fallback":"JSONL_BOOK_OBSERVATIONS"}
     market_index=build_market_session_index(sessions)
-    session_cache={str(r["decision_id"]):resolve_session(r,market_index) for r in source}
-    window=select_two_hour_window(source,session_cache)
+    session_cache={}
+    usable=[]
+    for original in source:
+        row=dict(original)
+        session,reason=resolve_session(row,market_index)
+        if session is None:
+            session_cache[str(row["decision_id"])]=(None,reason)
+            continue
+        pair=current_pair(row,session)
+        if pair is None:
+            session_cache[str(row["decision_id"])]=(None,"PM_PAIR_AT_ANCHOR_UNAVAILABLE")
+            continue
+        row["pair"]=pair
+        row["epoch"]=int(pair.get("connection_epoch") or 0)
+        row["tick"]=max(float(pair.get("yes_tick_size") or 0.0),
+                         float(pair.get("no_tick_size") or 0.0))
+        session_cache[str(row["decision_id"])]=(session,None)
+        usable.append(row)
+    if not usable:
+        raise ValueError("NO_CONTINUOUS_PM_FEATURE_ANCHORS")
+
+    window=select_two_hour_window(usable,session_cache)
     start_ns,end_ns=int(window["start_ns"]),int(window["end_ns"])
-    rows=[r for r in source if start_ns<=int(r["decision_ns"])<end_ns]
-    paths=discover_feature_tapes(root)
-    feature_index,feature_diag=load_feature_tape(paths,start_ns=start_ns,end_ns=end_ns)
-    rich,join_diag=attach_rich_state(rows,feature_index,delay_ms=0)
-    train,oos,cut=split_60_40(rich,start_ns)
-    if not train or not oos:raise ValueError("EMPTY_60_40_SPLIT")
+    rows=[r for r in usable if start_ns<=int(r["decision_ns"])<end_ns]
+    # Features are already backward-causal snapshots at each anchor. No second
+    # as-of join is allowed here.
+    join_diag={
+        "rows":len(rows),"joined_rows":len(rows),"join_rate":1.0,
+        "semantics":"QUOTE_ANCHOR_IS_CAUSAL_FEATURE_TAPE_RECORD;NO_TAKER_SIGNAL_TIMING",
+    }
+    train,oos,cut=split_60_40(rows,start_ns)
+    if not train or not oos:
+        raise ValueError("EMPTY_60_40_SPLIT")
     ext_names,pm_names,full_names=prediction_names(train)
     if not ext_names:raise ValueError("NO_EXTERNAL_FEATURES")
     if not pm_names:raise ValueError("NO_PM_FEATURES")
