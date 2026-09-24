@@ -45,6 +45,7 @@ jobs:
           assert re.fullmatch(r"i-[0-9a-f]+",v["instance_id"])
           assert re.fullmatch(r"[0-9a-f]{40}",v["expected_research_sha"])
           assert v["research_branch"]=="research/alpha-driven-maker-shadow"
+          assert isinstance(v["live_source_pr"],int) and 1 <= v["live_source_pr"] <= 1000000
           assert 5 <= int(v["duration_seconds"]) <= 120
           assert 100 <= int(v["sample_ms"]) <= 5000
           assert 0 < float(v["quantity_shares"]) <= 20
@@ -97,6 +98,7 @@ jobs:
           request_id=req["request_id"]
           ttls=",".join(map(str,req["ttl_arms_ms"]))
           marks=",".join(map(str,req["markout_horizons_ms"]))
+          live_source_pr=int(req["live_source_pr"])
           remote=f"""set -euo pipefail
           UNIT=polymarket-v7-paper.service
           systemctl is-active --quiet "$UNIT"
@@ -121,6 +123,10 @@ jobs:
             if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^commit" 2>/dev/null; then
               echo "PRECHECK_NOTE=FETCHING_ALL_SOURCE_HEADS"
               sudo -u ubuntu -H git -C "$SOURCE_REPO" fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+            fi
+            if ! sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^commit" 2>/dev/null; then
+              echo "PRECHECK_NOTE=FETCHING_LIVE_SOURCE_PR"
+              sudo -u ubuntu -H git -C "$SOURCE_REPO" fetch --no-tags origin refs/pull/{live_source_pr}/head:refs/remotes/origin/live-source-pr-{live_source_pr}
             fi
             sudo -u ubuntu -H git -C "$SOURCE_REPO" cat-file -e "$SHA^commit"
             sudo -u ubuntu -H git -C "$SOURCE_REPO" worktree remove --force "$SOURCE" >/dev/null 2>&1 || true
