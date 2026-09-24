@@ -60,6 +60,10 @@ jobs:
           echo "--- prometheus up query ---"
           curl -sS --get --data-urlencode 'query=up{job="polymarket-v7"}' http://127.0.0.1:9090/api/v1/query 2>/dev/null || true
           echo
+          echo "=== GRAFANA HEALTH ==="
+          curl -sS -w '\nHTTP_HEALTH=%{http_code}\n' http://127.0.0.1:3000/api/health || true
+          curl -sS -w '\nHTTP_SEARCH=%{http_code}\n' 'http://127.0.0.1:3000/api/search?query=Pure%20Arbitrage' || true
+          curl -sS -w '\nHTTP_UID=%{http_code}\n' 'http://127.0.0.1:3000/api/dashboards/uid/polymarket-v7-pure-arb' || true
           echo "=== CPU VISIBILITY ==="
           echo "nproc=$(nproc 2>/dev/null || true) nproc_all=$(nproc --all 2>/dev/null || true)"
           lscpu -e=CPU,ONLINE,NODE,CORE,SOCKET 2>/dev/null || true
@@ -145,6 +149,20 @@ jobs:
             stat -c 'bytes=%s mtime=%y mode=%a owner=%U group=%G' "$p" 2>/dev/null || echo MISSING
             case "$name" in *.json) cat "$p" 2>/dev/null || true;; *.log) tail -30 "$p" 2>/dev/null || true;; esac
           done
+          echo "=== PURE ARB COMPACT STATUS ==="
+          python3 - "$ROOT/research/repricing_book/pure_arb_status.json" <<'PYPURE'
+          import json,sys
+          try:
+              v=json.load(open(sys.argv[1],encoding="utf-8"))
+          except Exception:
+              v={}
+          keys=("schema","model_sha","state","expected_contexts","fee_ready_contexts","evaluations",
+                "fee_blocked_evaluations","cycles_total","paper_locked_pnl_pre_gas_total",
+                "conservative_locked_pnl_after_reserve_total","deep_candidates_total",
+                "deep_evaluations_total","deep_queue_drops_total","last_decision_compute_ns",
+                "max_decision_compute_ns","last_receive_to_decision_ns","max_receive_to_decision_ns")
+          print("PURE_ARB_COMPACT="+json.dumps({k:v.get(k) for k in keys},sort_keys=True,separators=(",",":")))
+          PYPURE
           echo "=== RETENTION DIAGNOSTICS ==="
           systemctl is-enabled polymarket-v7-retention.timer 2>/dev/null || true
           systemctl is-active polymarket-v7-retention.timer 2>/dev/null || true
