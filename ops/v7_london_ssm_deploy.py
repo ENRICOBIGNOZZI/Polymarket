@@ -537,7 +537,10 @@ ARTIFACT_ROOT={shlex.quote(artifact_root)}
 RUN_ROOT={shlex.quote(run_root)}
 ARCHIVE_ROOT={shlex.quote(archive_root)}
 [[ -d "$APP/.git" ]]
-sudo -u "$SERVICE_USER" git -C "$APP" fetch --no-tags origin main
+# Exact deployment can target a reviewed commit that is not merged into main.
+# Fetch all advertised branch heads so every branch-reachable exact SHA is
+# present locally; the next line still verifies the immutable SHA fail-closed.
+sudo -u "$SERVICE_USER" git -C "$APP" fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
 sudo -u "$SERVICE_USER" git -C "$APP" cat-file -e "$SHA^{{commit}}"
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$WORKTREE_PARENT"
