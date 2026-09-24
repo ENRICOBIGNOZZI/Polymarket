@@ -8,7 +8,8 @@ sys.path.insert(0,str(ROOT))
 from research.walk_forward_v3.maker_a0_a5_2h import (
     Ridge, external_feature, pm_feature, full_execution_feature, feature_dict, split_60_40,
     load_external_venue_csvs, external_venue_features, oriented_pm_anchor_features,
-    load_feature_anchor_rows, build_static_market_metadata, WINDOW_NS,
+    load_feature_anchor_rows, load_book_anchor_rows, recent_trade_flow,
+    build_static_market_metadata, WINDOW_NS,
 )
 
 
@@ -120,6 +121,68 @@ class MakerA0A5Tests(unittest.TestCase):
         self.assertEqual(anchors[0]["fee_rate"],0.07)
         self.assertIn("tape.external.return_100ms_bp",anchors[0]["features"])
         self.assertEqual(diag["anchor_cadence_ms"],500)
+
+    def test_book_anchor_clock_is_exact_grid_not_event_time(self):
+        import json,tempfile
+        metadata={
+            "m1":{
+                "market_id":"m1","asset":"BTC","horizon":"M5",
+                "yes_token":"y","no_token":"n",
+                "start_timestamp_ms":1000,"end_timestamp_ms":3000,
+                "fee_rate":0.07,"fee_exponent":1.0,"minimum":5.0,
+            }
+        }
+        def record(ms,seq):
+            return {
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "paper_only":True,"authenticated_execution":False,
+                "real_order_submission":False,
+                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "valid":True,"lineage_continuous":True,
+                "model_sha":"a"*40,"receive_wall_ms":ms,
+                "market_id":"m1","token_id":"y","connection_epoch":1,
+                "observer_session_id":"s","observer_sequence":seq,
+                "placement_features":{"imbalance":0.2},
+                "bid_depth_l1":10.0,"ask_depth_l1":8.0,
+            }
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            book=root/"research"/"repricing_book"/"book_observations"
+            book.mkdir(parents=True)
+            rows=[record(1100,1),record(1600,2),record(2100,3)]
+            (book/"current.jsonl").write_text(
+                "".join(json.dumps(r)+"\n" for r in rows),encoding="utf-8")
+            anchors,diag=load_book_anchor_rows(
+                root,minimum_wall_ns=1_000_000_000,metadata=metadata,
+                market_meta={},context_meta={})
+        self.assertEqual(
+            [r["decision_ns"] for r in anchors],
+            [1_500_000_000,2_000_000_000])
+        self.assertEqual(
+            [r["information_end_ns"] for r in anchors],
+            [1_100_000_000,1_600_000_000])
+        self.assertEqual(
+            [r["signal_age_ns"] for r in anchors],
+            [400_000_000,400_000_000])
+        self.assertIn("EXACT_500MS_GRID",diag["timing_selection"])
+
+    def test_recent_trade_flow_excludes_same_millisecond(self):
+        row={
+            "decision_ns":1_000_000_000,
+            "market_id":"m1","yes_token_id":"y","no_token_id":"n",
+        }
+        trades={
+            ("m1","y"):{
+                "stamps":[999,1000],
+                "rows":[
+                    (999,1,"BUY",0.5,2.0),
+                    (1000,1,"SELL",0.5,7.0),
+                ],
+            }
+        }
+        flow=recent_trade_flow(row,trades,window_ms=1000)
+        self.assertEqual(flow["pm.yes_aggressive_buy_shares_1s"],2.0)
+        self.assertEqual(flow["pm.yes_aggressive_sell_shares_1s"],0.0)
 
     def test_split_is_exact_time_60_40(self):
         start=1_000_000_000_000
