@@ -268,7 +268,9 @@ def load_external_venue_csvs(specs: Iterable[str]):
         seq.sort(key=lambda x:(x[0],x[1],x[2]))
         indexed[key]={"rows":seq,"stamps":[x[0] for x in seq]}
     counts["asset_venue_series"]=len(indexed)
-    return indexed,dict(counts)
+    diagnostics=dict(counts)
+    diagnostics["series"]=[asset+":"+venue for asset,venue in sorted(indexed)]
+    return indexed,diagnostics
 
 
 def _venue_asof(index, asset: str, venue: str, target_ns: int):
