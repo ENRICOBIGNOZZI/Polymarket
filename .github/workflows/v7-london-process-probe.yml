@@ -33,6 +33,72 @@ jobs:
           role-to-assume: ${{ env.ROLE_ARN }}
           role-session-name: polymarket-v7-process-probe
           aws-region: eu-west-2
+      - name: Inspect kill cause only
+        run: |
+          set -euo pipefail
+          payload="$(cat <<'SH'
+          set -u
+          UNIT=polymarket-v7-paper.service
+          ROOT="$(systemctl show "$UNIT" -p Environment --value | python3 -c 'import shlex,sys; print(next((v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")), ""))')"
+          echo "=== COMPACT_RUNTIME_CAUSE ==="
+          echo "service=$(systemctl is-active "$UNIT" 2>/dev/null || true)"
+          systemctl show "$UNIT" -p MainPID -p ExecMainStatus -p Result -p ActiveEnterTimestamp --no-pager || true
+          echo "root=$ROOT"
+          echo "--- KILL_META ---"
+          ls -l "$ROOT/control/KILL" 2>&1 || true
+          echo "--- KILL_JSON ---"
+          cat "$ROOT/control/KILL" 2>&1 || true
+          echo
+          echo "--- RUNTIME ---"
+          cat "$ROOT/control/runtime_status.json" 2>&1 || true
+          echo
+          echo "--- SUPERVISOR ---"
+          cat "$ROOT/control/supervisor_status.json" 2>&1 || true
+          echo
+          DEAD="$(python3 - "$ROOT/control/KILL" <<'PY'
+          import json,sys
+          try:
+              v=json.load(open(sys.argv[1],encoding='utf-8'))
+              print(int(v.get('dead_pid') or 0))
+          except Exception:
+              print(0)
+          PY
+          )"
+          echo "dead_pid=$DEAD"
+          if [[ "$DEAD" =~ ^[1-9][0-9]*$ ]]; then
+            echo "--- DEAD_PID_PS ---"
+            ps -fp "$DEAD" 2>&1 || true
+          fi
+          echo "--- NATIVE_MANAGER_TAIL ---"
+          tail -60 "$ROOT/native_engine_manager.log" 2>&1 || true
+          echo "--- NATIVE_ENGINE_TAIL ---"
+          tail -60 "$ROOT/native_crypto_settlement_engine.log" 2>&1 || true
+          echo "--- LEDGER_ROUTER_TAIL ---"
+          tail -40 "$ROOT/ledger_router.log" 2>&1 || true
+          echo "--- PORTFOLIO_GUARD ---"
+          cat "$ROOT/portfolio_guard.log" 2>&1 || true
+          echo "--- JOURNAL_RECENT ---"
+          journalctl -u "$UNIT" --since '10 minutes ago' -n 100 --no-pager 2>&1 || true
+          SH
+          )"
+          encoded="$(printf '%s' "$payload" | base64 -w0)"
+          wrapped="printf '%s' '$encoded' | base64 -d | bash"
+          params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]],"executionTimeout":["60"]},separators=(",",":")))' "$wrapped")"
+          cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript --parameters "$params" --comment "Polymarket V7 compact kill-cause probe" --region "$AWS_REGION" --query 'Command.CommandId' --output text)"
+          for i in $(seq 1 45); do
+            status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query Status --output text 2>/dev/null || true)"
+            case "$status" in
+              Success)
+                aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardOutputContent --output text
+                exit 0;;
+              Failed|Cancelled|TimedOut)
+                aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardOutputContent --output text || true
+                aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" --region "$AWS_REGION" --query StandardErrorContent --output text >&2 || true
+                exit 1;;
+            esac
+            sleep 1
+          done
+          exit 1
       - name: Inspect London runtime and quarantine
         run: |
           set -euo pipefail
