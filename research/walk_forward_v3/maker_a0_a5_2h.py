@@ -324,7 +324,7 @@ def maker_fill(row,session,trades,side,latency_ms):
         return None,"ARRIVAL_EPOCH_MISMATCH"
     state=side_state(pair,side)
     if state is None:return None,"ARRIVAL_SIDE_UNAVAILABLE"
-    token=str(row.get("yes_token_id") if side=="YES" else row.get("no_token_id") or "")
+    token=str((row.get("yes_token_id") if side=="YES" else row.get("no_token_id")) or "")
     if not token:return None,"TOKEN_ID_UNAVAILABLE"
     price=float(state["bid"])
     tick=float(row.get("tick") or 0.01)
