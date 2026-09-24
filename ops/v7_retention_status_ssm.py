@@ -155,6 +155,9 @@ def main(argv=None):
     print("retention_status_age_seconds="+str(value.get("retention_status_age_seconds")))
     print("retention_timer_active="+str((value.get("timer") or {}).get("ActiveState")))
     print("retention_service_result="+str((value.get("service") or {}).get("Result")))
+    print("retention_service_active="+str((value.get("service") or {}).get("ActiveState")))
+    print("retention_service_start="+str((value.get("service") or {}).get("ExecMainStartTimestamp")))
+    print("retention_service_exit="+str((value.get("service") or {}).get("ExecMainExitTimestamp")))
     print("rolling_failures="+json.dumps(value.get("rolling_failures") or [],sort_keys=True))
     print("rolling_failure_details="+json.dumps(value.get("rolling_failure_details") or [],sort_keys=True))
     return 0
