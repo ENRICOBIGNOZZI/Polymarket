@@ -7,7 +7,7 @@ sys.path.insert(0,str(ROOT))
 
 from research.walk_forward_v3.maker_a0_a5_2h import (
     Ridge, external_feature, pm_feature, full_execution_feature, feature_dict, split_60_40,
-    load_external_venue_csvs, external_venue_features,
+    load_external_venue_csvs, external_venue_features, oriented_pm_anchor_features,
     load_feature_anchor_rows, build_static_market_metadata, WINDOW_NS,
 )
 
@@ -61,6 +61,27 @@ class MakerA0A5Tests(unittest.TestCase):
             self.assertLess(features["external.bybit_return_100ms_bp"],0)
             self.assertIn("external.cross_venue_agreement_100ms",features)
             self.assertEqual(diag["accepted"],6)
+
+    def test_pm_anchor_features_orient_no_toward_yes_probability(self):
+        raw={
+            "placement_features":{
+                "imbalance":0.5,"ofi":2.0,"short_return_ticks":1.0,
+                "spread_ticks":1.0,"ew_vol_ticks":2.0,
+                "aggressive_buy_prints_per_second":4.0,
+                "aggressive_sell_prints_per_second":1.0,
+            },
+            "bid_depth_l1":12.0,"ask_depth_l1":4.0,
+            "bid_levels_l10":[{"size":2.0} for _ in range(5)],
+            "ask_levels_l10":[{"size":1.0} for _ in range(5)],
+        }
+        yes=oriented_pm_anchor_features(raw,outcome="YES")
+        no=oriented_pm_anchor_features(raw,outcome="NO")
+        self.assertAlmostEqual(yes["pm.anchor_imbalance"],0.5)
+        self.assertAlmostEqual(no["pm.anchor_imbalance"],-0.5)
+        self.assertAlmostEqual(no["pm.anchor_ofi"],-2.0)
+        self.assertGreater(yes["pm.anchor_l5_depth_imbalance"],0)
+        self.assertLess(no["pm.anchor_l5_depth_imbalance"],0)
+        self.assertEqual(yes["pm.anchor_spread_ticks"],no["pm.anchor_spread_ticks"])
 
     def test_ridge_fits_simple_relation(self):
         rows=[{"x":float(i)} for i in range(100)]
