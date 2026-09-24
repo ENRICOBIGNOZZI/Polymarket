@@ -84,8 +84,12 @@ import subprocess,sys
 from pathlib import Path
 run_root=Path(sys.argv[1]); remote=Path(sys.argv[2])
 start=int(sys.argv[3]); end=int(sys.argv[4]); exporter=sys.argv[5]
+metadata=json.loads((remote/"market_metadata.json").read_text(encoding="utf-8"))
+assets=sorted({str(row.get("asset") or "").upper() for row in metadata.get("markets") or [] if row.get("asset")})
+if not assets:
+    raise SystemExit("NO_METADATA_ASSETS")
 lines=[]
-for asset in ("BTC","ETH","SOL","XRP","DOGE","BNB"):
+for asset in assets:
     base=run_root/"external_fair" if asset=="BTC" else run_root/"external_fair"/"assets"/asset.lower()
     directory=base/"normalized_events"
     paths=[]
@@ -104,8 +108,8 @@ for asset in ("BTC","ETH","SOL","XRP","DOGE","BNB"):
         subprocess.run(cmd,stdout=out,check=True)
     if csv.stat().st_size>0:
         lines.append(asset+"="+str(csv))
-if len(lines)!=6:
-    raise SystemExit("EXTERNAL_VENUE_EXPORT_INCOMPLETE:"+",".join(lines))
+if len(lines)!=len(assets):
+    raise SystemExit("EXTERNAL_VENUE_EXPORT_INCOMPLETE:required="+",".join(assets)+";ready="+",".join(lines))
 (remote/"external_specs.txt").write_text("\n".join(lines)+"\n",encoding="utf-8")
 PYEXT
 {remote}/venv/bin/python - {remote}/venv/bin/python {remote}/src {context['app_dir']} {context['run_root']} {a.minimum_wall_ns} {a.expected_sha} {remote}/output/a0-a5 {remote}/external_specs.txt <<'PYRUN'
