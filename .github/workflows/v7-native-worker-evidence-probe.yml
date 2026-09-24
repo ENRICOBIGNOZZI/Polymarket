@@ -1,0 +1,82 @@
+name: V7 native worker evidence probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/v7-native-worker-evidence-probe-request.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      ROLE_ARN: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+      INSTANCE_ID: i-04042ca7da7a23215
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate request
+        run: |
+          python3 - deploy/v7-native-worker-evidence-probe-request.json <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v=={"schema":"polymarket_v7_native_worker_evidence_probe_v1","read_only":True}
+          PY
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: polymarket-v7-native-worker-probe
+          aws-region: eu-west-2
+      - name: Read native worker evidence
+        run: |
+          set -euo pipefail
+          python3 - "$INSTANCE_ID" <<'PY'
+          import json,re,sys
+          sys.path.insert(0,'ops')
+          from v7_london_ssm_deploy import run,REGION
+          instance=sys.argv[1]
+          command=r'''set -euo pipefail
+          ROOT=/mnt/polymarket-data/paper_v7_london
+          python3 - "$ROOT" <<'PYREMOTE'
+          import json,re,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          def load(p):
+              try:return json.loads(p.read_text(encoding="utf-8"))
+              except Exception:return {}
+          status=load(root/"control/native_engine_manager_status.json")
+          keys=("schema","model_sha","state","blocker","expected_context_count","target_context_count",
+                "active_worker_count","managed_context_count","launch_retry_count","launch_retry_contexts",
+                "target_contexts","partitioned_native_workers","single_native_portfolio_owner",
+                "global_budget_microdollars","partition_total_microdollars","timestamp_ms")
+          out={k:status.get(k) for k in keys}
+          out["workers"]=[{k:w.get(k) for k in ("context","market_id","state","engine_pid","settlement_pid",
+              "budget_microdollars","last_error","blocker","launch_attempts")} for w in status.get("workers") or [] if isinstance(w,dict)]
+          print("NATIVE_STATUS="+json.dumps(out,sort_keys=True,separators=(",",":")))
+          pat=re.compile(r"error|fatal|fail|invalid|not found|blocked|timeout|reject|exception|terminate|exit|usage",re.I)
+          for p in sorted(root.glob("native_crypto_settlement_engine_*.log")):
+              try:
+                  lines=p.read_text(encoding="utf-8",errors="replace").splitlines()
+                  st=p.stat()
+              except OSError:
+                  continue
+              tail=lines[-160:]
+              bad=[x for x in tail if pat.search(x)]
+              print("WORKER_LOG="+json.dumps({"file":p.name,"bytes":st.st_size,"bad":bad[-8:],"last":tail[-4:]},sort_keys=True,separators=(",",":")))
+          for rel in ("native_engine_manager.log","universe/collector.log"):
+              p=root/rel
+              try: rows=p.read_text(encoding="utf-8",errors="replace").splitlines()[-12:]
+              except OSError: rows=[]
+              print("TAIL="+json.dumps({"file":rel,"lines":rows},sort_keys=True,separators=(",",":")))
+          PYREMOTE
+          '''
+          stdout,stderr=run(REGION,instance,command,180)
+          print(stdout)
+          if stderr: print(stderr,file=sys.stderr)
+          PY
