@@ -30,10 +30,14 @@ def sample_tape(current, *, generation=None, rows_written=None, maximum_files=40
                         "prefix_length":len(prefix),"prefix_hex":prefix.hex(),
                         "prefix_sha256":hashlib.sha256(prefix).hexdigest()}
         except OSError:missing.append(path.name)
+    total_bytes=sum(f["bytes"] for f in files.values())
     if type(rows_written) is not int or rows_written<0:rows_written=None
+    # A populated tape with a zero writer counter is not evidence of zero rows;
+    # treat that counter as unavailable instead of overriding byte-level liveness.
+    if rows_written==0 and total_bytes>0:rows_written=None
     return {"state":"OBSERVED" if files else "UNAVAILABLE","files":files,"generation":generation,
             "rows_written":rows_written,"missing":missing,"timestamp_ns":time.time_ns(),
-            "current_and_retained_segment_bytes":sum(f["bytes"] for f in files.values())}
+            "current_and_retained_segment_bytes":total_bytes}
 
 
 def tape_growth(before,after):
