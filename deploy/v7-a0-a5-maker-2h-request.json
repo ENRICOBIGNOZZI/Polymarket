@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_a0_a5_maker_2h_request_v1",
   "version": 1,
-  "request_id": "a0-a5-maker-2h-current-20260924-b",
+  "request_id": "a0-a5-maker-2h-current-20260924-c",
   "instance_id": "i-04042ca7da7a23215",
-  "expected_research_sha": "0d8bff3fca0c56e373e83e917d2209802952993f",
+  "expected_research_sha": "6586bcf5734cdb0f73eeadfbc61341a09b6c26bc",
   "research_branch": "research/a0-a5-maker-horse-race-20260924",
   "minimum_wall_ns": 1790276400000000000,
   "output_directory": "docs/research/a0-a5-maker-2h-2026-09-24",
