@@ -148,8 +148,8 @@ jobs:
           stat -Lc 'mode=%A octal=%a owner=%U group=%G type=%F path=%n' "$ENTRY" 2>&1 || true
           namei -l "$ENTRY" 2>&1 || true
           findmnt -T "$ENTRY" -o TARGET,SOURCE,FSTYPE,OPTIONS -n 2>&1 || true
-          sudo -u ubuntu test -r "$ENTRY"; echo "ubuntu_readable=$?" || true
-          sudo -u ubuntu test -x "$ENTRY"; echo "ubuntu_executable=$?" || true
+          if sudo -u ubuntu test -r "$ENTRY"; then echo "ubuntu_readable=0"; else echo "ubuntu_readable=1"; fi
+          if sudo -u ubuntu test -x "$ENTRY"; then echo "ubuntu_executable=0"; else echo "ubuntu_executable=1"; fi
           head -1 "$ENTRY" 2>&1 || true
           echo "=== SUPERVISOR CONTROL ==="
           ROOT="$(systemctl show polymarket-v7-paper.service -p Environment --value | python3 -c 'import shlex,sys; print(next(v.split("=",1)[1] for v in shlex.split(sys.stdin.read()) if v.startswith("PM_V7_RUN_ROOT=")))')"
