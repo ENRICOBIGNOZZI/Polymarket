@@ -9,6 +9,7 @@ contract times and fee/minimum terms.
 from __future__ import annotations
 
 import argparse
+import gzip
 from datetime import datetime
 import json
 import math
@@ -29,6 +30,29 @@ def load(path: Path) -> dict[str,Any]:
     value=json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value,dict):raise ValueError("JSON_OBJECT_REQUIRED")
     return value
+
+
+def json_lines(path: Path):
+    """Read newline-delimited JSON from plain or gzip segments by file magic."""
+    try:
+        with path.open("rb") as handle:
+            magic=handle.read(2)
+    except OSError:
+        return
+    opener=gzip.open if magic==b"\x1f\x8b" else open
+    try:
+        with opener(path,"rt",encoding="utf-8") as handle:
+            for line in handle:
+                if not line.endswith("\n"):
+                    continue
+                try:
+                    value=json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value,dict):
+                    yield value
+    except (OSError,UnicodeDecodeError):
+        return
 
 
 def finite(value):
@@ -169,33 +193,25 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
         return found,counts
     for path in sorted(p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()):
         counts["raw_files"]+=1
-        try:
-            handle=path.open("r",encoding="utf-8")
-        except OSError:
-            continue
-        with handle:
-            for line in handle:
-                if not line.endswith("\n"):continue
-                counts["raw_rows"]+=1
-                try:raw=json.loads(line)
-                except json.JSONDecodeError:continue
-                if not isinstance(raw,dict) or raw.get("schema")!="polymarket_v7_causal_book_observation_v1":continue
-                try:wall=int(raw.get("receive_wall_ms") or 0)
-                except (TypeError,ValueError,OverflowError):continue
-                if wall*1_000_000<minimum_wall_ns:continue
-                if (
-                    raw.get("paper_only") is not True
-                    or raw.get("authenticated_execution") is not False
-                    or raw.get("real_order_submission") is not False
-                    or raw.get("execution_authority")!="ZERO_AUTHORITY_RESEARCH_ONLY"
-                ):
-                    continue
-                market=str(raw.get("market_id") or "")
-                token=str(raw.get("token_id") or "")
-                if not market or not token:continue
-                state=found.setdefault(market,{"market_id":market,"tokens_seen":set(),"tokens":{}})
-                state["tokens_seen"].add(token)
-                counts["raw_accepted"]+=1
+        for raw in json_lines(path):
+            counts["raw_rows"]+=1
+            if raw.get("schema")!="polymarket_v7_causal_book_observation_v1":continue
+            try:wall=int(raw.get("receive_wall_ms") or 0)
+            except (TypeError,ValueError,OverflowError):continue
+            if wall*1_000_000<minimum_wall_ns:continue
+            if (
+                raw.get("paper_only") is not True
+                or raw.get("authenticated_execution") is not False
+                or raw.get("real_order_submission") is not False
+                or raw.get("execution_authority")!="ZERO_AUTHORITY_RESEARCH_ONLY"
+            ):
+                continue
+            market=str(raw.get("market_id") or "")
+            token=str(raw.get("token_id") or "")
+            if not market or not token:continue
+            state=found.setdefault(market,{"market_id":market,"tokens_seen":set(),"tokens":{}})
+            state["tokens_seen"].add(token)
+            counts["raw_accepted"]+=1
     for state in found.values():
         state["tokens_seen"]=sorted(state.get("tokens_seen") or ())
     counts["source"]="RAW_CAUSAL_BOOK"
