@@ -3,7 +3,6 @@
   "compression_failures": [],
   "compression_failures_count": 0,
   "journal_tail": [
-    "{\"after_bytes\": 52808569889, \"after_compression_bytes\": 22548926043, \"authenticated_execution\": false, \"before_bytes\": 52808569889, \"deleted\": [], \"dry_run\": false, \"hft_opportunity_preservation\": {\"decisions\": 0, \"failures\": [], \"pending_markets\": [], \"records\": 0, \"scan_complete\": true, \"total_markets\": 3120, \"total_opportunities\": 1732220}, \"hft_storage\": {\"compression_manifest_errors\": 0, \"estimated_compressed_gb_per_hour\": 0.15460680337241123, \"estimated_compressed_raw_hours\": 175.920642822",
     "polymarket-v7-retention.service: Deactivated successfully.",
     "Finished polymarket-v7-retention.service - Polymarket V7 London verified-offload buffer retention.",
     "polymarket-v7-retention.service: Consumed 37.793s CPU time.",
@@ -32,7 +31,8 @@
     "polymarket-v7-retention.service: Main process exited, code=exited, status=2/INVALIDARGUMENT",
     "polymarket-v7-retention.service: Failed with result 'exit-code'.",
     "Failed to start polymarket-v7-retention.service - Polymarket V7 London verified-offload buffer retention.",
-    "polymarket-v7-retention.service: Consumed 47.683s CPU time."
+    "polymarket-v7-retention.service: Consumed 47.683s CPU time.",
+    "Starting polymarket-v7-retention.service - Polymarket V7 London verified-offload buffer retention..."
   ],
   "paper_only": true,
   "real_order_submission": false,
@@ -40,10 +40,24 @@
   "retention_before_bytes": 55053556809,
   "retention_managed_files": 73598,
   "retention_state": "RETENTION_PARTIAL_FAILURE",
-  "retention_status_age_seconds": 249.60633158683777,
+  "retention_status_age_seconds": 409.7717795372009,
   "retention_status_present": true,
   "retention_timestamp": 1790278002,
   "retention_verified_offload_receipt": false,
+  "rolling_failure_details": [
+    {
+      "closure_present": false,
+      "reason": "UNHEALTHY_NATIVE_CAPTURE_PINNED",
+      "source": "research/native_observations/6e98335a4621-1790175305-455349/4841525-493529496417579.jsonl.gz",
+      "source_stat_error": "FileNotFoundError"
+    },
+    {
+      "closure_present": false,
+      "reason": "UNHEALTHY_NATIVE_CAPTURE_PINNED",
+      "source": "research/native_observations/6e98335a4621-1790175305-455349/4841531-493526099096463.jsonl.gz",
+      "source_stat_error": "FileNotFoundError"
+    }
+  ],
   "rolling_failures": [
     {
       "reason": "UNHEALTHY_NATIVE_CAPTURE_PINNED",
@@ -60,25 +74,25 @@
   "runtime_sha": "94dbbd4d26c88e894a8a883ee7b86aa4c890c3a0",
   "schema": "polymarket_v7_retention_readonly_audit_v1",
   "service": {
-    "ActiveState": "failed",
-    "ExecMainCode": "1",
-    "ExecMainExitTimestamp": "Thu 2026-09-24 19:27:32 UTC",
-    "ExecMainStartTimestamp": "Thu 2026-09-24 19:26:42 UTC",
-    "ExecMainStatus": "2",
+    "ActiveState": "activating",
+    "ExecMainCode": "0",
+    "ExecMainExitTimestamp": "",
+    "ExecMainStartTimestamp": "Thu 2026-09-24 19:31:52 UTC",
+    "ExecMainStatus": "0",
     "FragmentPath": "/etc/systemd/system/polymarket-v7-retention.service",
     "LoadState": "loaded",
-    "Result": "exit-code",
-    "SubState": "failed",
+    "Result": "success",
+    "SubState": "start",
     "UnitFileState": "static",
     "WorkingDirectory": "/home/ubuntu/polymarket-runtime/current"
   },
   "timer": {
     "ActiveState": "active",
-    "LastTriggerUSec": "Thu 2026-09-24 19:26:42 UTC",
+    "LastTriggerUSec": "Thu 2026-09-24 19:31:52 UTC",
     "LoadState": "loaded",
     "NextElapseUSecRealtime": "",
     "Result": "success",
-    "SubState": "waiting",
+    "SubState": "running",
     "UnitFileState": "enabled"
   }
 }
