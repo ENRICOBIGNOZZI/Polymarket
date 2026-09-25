@@ -508,7 +508,7 @@ EXTERNAL_RETURN_WINDOWS_MS=(50,100,250,1000)
 MAX_EXTERNAL_ASOF_AGE_NS=1_000_000_000
 
 
-def load_external_venue_csvs(specs: Iterable[str]):
+def load_external_venue_csvs(specs: Iterable[str], *, lower_ns: int|None=None, upper_ns: int|None=None):
     """Load normalized venue events using London local receive wall time only."""
     series=defaultdict(list)
     counts=Counter()
@@ -534,6 +534,10 @@ def load_external_venue_csvs(specs: Iterable[str]):
                 venue=VENUE_ID_TO_NAME.get(venue_id)
                 if venue is None or wall<=0 or epoch<=0 or event_type not in (1,2) or not math.isfinite(price) or price<=0:
                     counts["invalid_rows"]+=1;continue
+                if lower_ns is not None and wall<int(lower_ns):
+                    counts["before_window"]+=1;continue
+                if upper_ns is not None and wall>int(upper_ns):
+                    counts["after_window"]+=1;continue
                 series[(asset,venue)].append((wall,epoch,price))
                 counts["accepted"]+=1
     indexed={}
@@ -1268,7 +1272,10 @@ def run(
         root,minimum_wall_ns=minimum_wall_ns,metadata=metadata,
         market_meta=market_meta,context_meta=context_meta)
 
-    external_venue_index,external_venue_load_diag=load_external_venue_csvs(external_venue_csv_specs)
+    external_lower_ns=min(int(r["decision_ns"]) for r in source)-2_000_000_000
+    external_upper_ns=max(int(r["decision_ns"]) for r in source)+2_000_000_000
+    external_venue_index,external_venue_load_diag=load_external_venue_csvs(
+        external_venue_csv_specs,lower_ns=external_lower_ns,upper_ns=external_upper_ns)
     if not external_venue_index:
         raise ValueError("NO_RECEIVE_TIME_EXTERNAL_VENUE_TAPE")
     source,external_venue_join_diag=attach_external_venue_features(source,external_venue_index)
