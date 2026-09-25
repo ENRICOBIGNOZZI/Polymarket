@@ -1,7 +1,7 @@
 {
   "schema": "polymarket_v7_maker_a0_a5_research_request_v1",
   "version": 1,
-  "request_id": "maker-a0-a5-2h-wall-span-probe-20260925-al",
+  "request_id": "maker-a0-a5-2h-wall-span-probe-20260925-am",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "expected_research_sha": "1448c4ded6e3bceeee60e2abf1c909ced9a135e9",
   "research_branch": "research/full-feature-maker-20260924",
