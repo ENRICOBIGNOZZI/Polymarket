@@ -5,6 +5,8 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
+from research.walk_forward_v3.btc_compact_equity import stream_raw_sessions
+
 from research.walk_forward_v3.maker_a0_a5_2h import (
     Ridge, external_feature, external_fair_feature, pm_feature, full_execution_feature, feature_dict, split_60_40,
     load_external_venue_csvs, external_venue_features, oriented_pm_anchor_features,
@@ -193,6 +195,32 @@ class MakerA0A5Tests(unittest.TestCase):
         flow=recent_trade_flow(row,trades,window_ms=1000)
         self.assertEqual(flow["pm.yes_aggressive_buy_shares_1s"],2.0)
         self.assertEqual(flow["pm.yes_aggressive_sell_shares_1s"],0.0)
+
+    def test_raw_session_fallback_uses_robust_gzip_reader(self):
+        import gzip,json,tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            book=root/"research"/"repricing_book"/"book_observations"
+            book.mkdir(parents=True)
+            row={
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "observer_session_id":"s","connection_epoch":1,
+                "observer_sequence":1,"receive_wall_ms":1000,
+                "market_id":"m1","token_id":"y",
+                "lineage_continuous":True,"valid":True,
+                "best_bid":0.49,"best_ask":0.51,"tick_size":0.01,
+                "bid_depth_l1":10.0,"ask_depth_l1":12.0,
+            }
+            with gzip.open(book/"segment.jsonl.gz","wt",encoding="utf-8") as handle:
+                handle.write(json.dumps(row)+"\n")
+            anchors=[{
+                "market_id":"m1","yes_token_id":"y","no_token_id":"n",
+                "token_id":"y","decision_ns":1_000_000_000,
+            }]
+            sessions,diag=stream_raw_sessions(root,anchors)
+        self.assertEqual(diag["rows_seen"],1)
+        self.assertEqual(diag["rows_retained"],1)
+        self.assertEqual(len(sessions),1)
 
     def test_split_is_exact_time_60_40(self):
         start=1_000_000_000_000
