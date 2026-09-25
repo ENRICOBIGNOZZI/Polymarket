@@ -188,10 +188,18 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
     # Current London runtime does not enable compact-label output on the
     # repricing observer. Raw causal book rows remain the authoritative source
     # for observed market membership.
-    book_root=run_root/"research"/"repricing_book"/"book_observations"
-    if not book_root.is_dir():
+    candidates=[]
+    for base,pattern in (
+        (run_root,"research/repricing_book/book_observations/*.jsonl*"),
+        (run_root.parent,"paper_v7_london_archives/**/research/repricing_book/book_observations/*.jsonl*"),
+    ):
+        if base.exists():
+            candidates.extend(base.glob(pattern))
+    paths=sorted({p.resolve() for p in candidates if p.is_file() and not p.is_symlink()})
+    if not paths:
         return found,counts
-    for path in sorted(p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()):
+    seen=set()
+    for path in paths:
         counts["raw_files"]+=1
         for raw in json_lines(path):
             counts["raw_rows"]+=1
@@ -209,6 +217,17 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
             market=str(raw.get("market_id") or "")
             token=str(raw.get("token_id") or "")
             if not market or not token:continue
+            event_key=(
+                str(raw.get("model_sha") or ""),
+                str(raw.get("observer_session_id") or ""),
+                int(raw.get("connection_epoch") or 0),
+                int(raw.get("observer_sequence") or 0),
+                market,token,wall,
+            )
+            if event_key in seen:
+                counts["raw_duplicates"] = counts.get("raw_duplicates",0)+1
+                continue
+            seen.add(event_key)
             state=found.setdefault(market,{"market_id":market,"tokens_seen":set(),"tokens":{}})
             state["tokens_seen"].add(token)
             counts["raw_accepted"]+=1
