@@ -1,9 +1,9 @@
 {
   "schema": "polymarket_v7_maker_a0_a5_research_request_v1",
   "version": 1,
-  "request_id": "maker-a0-a5-2h-data-window-20260925-an",
+  "request_id": "maker-a0-a5-2h-bounded-loader-20260925-ao",
   "instance_id": "i-0fba2bac9fdc5cbeb",
-  "expected_research_sha": "1448c4ded6e3bceeee60e2abf1c909ced9a135e9",
+  "expected_research_sha": "b12172324e375ec1daaad66cc0a7231abdb9d8d6",
   "research_branch": "research/full-feature-maker-20260924",
   "minimum_wall_ns": 1790031602186000000,
   "output_directory": "docs/research/maker-a0-a5-2026-09-24",
