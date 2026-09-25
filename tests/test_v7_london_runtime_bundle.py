@@ -7,6 +7,10 @@ def test_bundle_manifest_is_minimal_and_forbids_research():
     m=json.loads((ROOT/'deploy/london/runtime_manifest.json').read_text())
     assert m['paper_only'] is True and m['authenticated_execution'] is False and m['real_order_submission'] is False
     assert 'polymarket_v7_external_venue_runtime' in m['binaries']
+    assert 'polymarket_v7_pure_arb_multi_runtime' in m['binaries']
+    assert 'polymarket_v7_crypto_settlement_engine' not in m['binaries']
+    assert 'scripts/v7_pure_arb_multi_manager.py' in m['python_entrypoints']
+    assert 'scripts/v7_native_crypto_engine_manager.py' not in m['python_entrypoints']
     assert all(not x.startswith('research/') for x in m['support_files']+m['python_entrypoints'])
     assert 'v7_maker_durable_learning.py' in m['forbidden_path_fragments']
     assert 'tests/' in m['forbidden_path_fragments']

@@ -32,7 +32,12 @@
       "yes_inventory_microunits": 0,
       "no_inventory_microunits": 0,
       "yes_collateral_basis_microdollars": 0,
-      "no_collateral_basis_microdollars": 0
+      "no_collateral_basis_microdollars": 0,
+      "market_id": "validate-market-0",
+      "event_id": "validate-event-0",
+      "asset": "BTC",
+      "horizon": "M5",
+      "fee_source": "GAMMA_FEES_DISABLED_EXPLICIT"
     },
     {
       "market_handle": 101,
@@ -54,7 +59,17 @@
       "yes_inventory_microunits": 0,
       "no_inventory_microunits": 0,
       "yes_collateral_basis_microdollars": 0,
-      "no_collateral_basis_microdollars": 0
+      "no_collateral_basis_microdollars": 0,
+      "market_id": "validate-market-1",
+      "event_id": "validate-event-1",
+      "asset": "ETH",
+      "horizon": "M5",
+      "fee_source": "GAMMA_FEES_DISABLED_EXPLICIT"
     }
-  ]
+  ],
+  "run_root": "/tmp/polymarket-v7-pure-arb-multi-validate",
+  "model_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "run_id": "validate-run",
+  "server_id": "validate-server",
+  "risk_policy_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 }
