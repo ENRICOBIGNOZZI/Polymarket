@@ -138,6 +138,30 @@ class MakerMarketMetadataTests(unittest.TestCase):
             self.assertEqual(found["m-root-archive"]["tokens_seen"],["t-root-archive"])
             self.assertIn(diag["source"],("RAW_CAUSAL_BOOK","COMPACT_MANIFEST_PLUS_RAW_CAUSAL_BOOK"))
 
+    def test_truncated_gzip_segment_is_censored(self):
+        import gzip,json,tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)/"paper_v7_london"
+            books=root/"research"/"repricing_book"/"book_observations"
+            books.mkdir(parents=True)
+            row={
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "paper_only":True,"authenticated_execution":False,
+                "real_order_submission":False,
+                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "receive_wall_ms":2000,"market_id":"m1","token_id":"t1",
+            }
+            good=books/"good.jsonl"
+            good.write_text(json.dumps(row)+"\n",encoding="utf-8")
+            bad=books/"bad.jsonl.gz"
+            with gzip.open(bad,"wt",encoding="utf-8") as handle:
+                handle.write(json.dumps(row)+"\n")
+            payload=bad.read_bytes()
+            bad.write_bytes(payload[:-8])
+            found,diag=observed_markets(root,1_000_000_000)
+            self.assertIn("m1",found)
+            self.assertGreaterEqual(diag["raw_files"],2)
+
     def test_hourly_and_daily_context_use_static_horizon(self):
         ctx,start,end=identify_context(
             "bitcoin-up-or-down-september-24-2026-5pm-et",self.registry(),
