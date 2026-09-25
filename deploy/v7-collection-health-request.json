@@ -1,6 +1,6 @@
 {
   "schema": "polymarket_v7_collection_health_request_v1",
-  "request_id": "collection-health-diagnostic-20260921T2014CEST",
+  "request_id": "collection-health-a0a5-20260925-1125",
   "operation": "READ_ONLY_HEALTH",
   "paper_only": true,
   "authenticated_execution": false,
