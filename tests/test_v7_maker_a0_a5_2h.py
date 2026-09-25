@@ -251,6 +251,68 @@ class MakerA0A5Tests(unittest.TestCase):
         self.assertGreaterEqual(len(anchors),3)
         self.assertEqual(diag["counts"]["files"],1)
 
+    def test_book_anchor_reads_run_root_repricing_archive(self):
+        import gzip,json,tempfile
+        metadata={
+            "m-arch-root":{
+                "market_id":"m-arch-root","asset":"BTC","horizon":"M5",
+                "yes_token":"y","no_token":"n",
+                "start_timestamp_ms":1000,"end_timestamp_ms":4000,
+                "fee_rate":0.07,"fee_exponent":1.0,"minimum":5.0,
+            }
+        }
+        def record(ms,seq):
+            return {
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "paper_only":True,"authenticated_execution":False,
+                "real_order_submission":False,
+                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "valid":True,"lineage_continuous":True,
+                "model_sha":"d"*40,"receive_wall_ms":ms,
+                "market_id":"m-arch-root","token_id":"y","connection_epoch":1,
+                "observer_session_id":"arch-root","observer_sequence":seq,
+                "placement_features":{"imbalance":0.1},
+                "bid_depth_l1":5.0,"ask_depth_l1":6.0,
+            }
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)/"paper_v7_london"
+            archive=root/"archive"/"repricing-book"
+            archive.mkdir(parents=True)
+            with gzip.open(archive/"abc-segment-000001.jsonl.gz","wt",encoding="utf-8") as handle:
+                for i,ms in enumerate((1100,1600,2100,2600)):
+                    handle.write(json.dumps(record(ms,i+1))+"\n")
+            anchors,diag=load_book_anchor_rows(
+                root,minimum_wall_ns=1_000_000_000,metadata=metadata,
+                market_meta={},context_meta={})
+        self.assertGreaterEqual(len(anchors),3)
+        self.assertEqual(diag["counts"]["files"],1)
+
+    def test_raw_session_reads_run_root_repricing_archive(self):
+        import gzip,json,tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)/"paper_v7_london"
+            archive=root/"archive"/"repricing-book"
+            archive.mkdir(parents=True)
+            row={
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "observer_session_id":"s","connection_epoch":1,
+                "observer_sequence":1,"receive_wall_ms":1000,
+                "market_id":"m1","token_id":"y",
+                "lineage_continuous":True,"valid":True,
+                "best_bid":0.49,"best_ask":0.51,"tick_size":0.01,
+                "bid_depth_l1":10.0,"ask_depth_l1":12.0,
+            }
+            with gzip.open(archive/"abc-segment-000001.jsonl.gz","wt",encoding="utf-8") as handle:
+                handle.write(json.dumps(row)+"\n")
+            anchors=[{
+                "market_id":"m1","yes_token_id":"y","no_token_id":"n",
+                "token_id":"y","decision_ns":1_000_000_000,
+            }]
+            sessions,diag=stream_raw_sessions(root,anchors)
+        self.assertEqual(diag["rows_seen"],1)
+        self.assertEqual(diag["rows_retained"],1)
+        self.assertEqual(len(sessions),1)
+
     def test_recent_trade_flow_excludes_same_millisecond(self):
         row={
             "decision_ns":1_000_000_000,
