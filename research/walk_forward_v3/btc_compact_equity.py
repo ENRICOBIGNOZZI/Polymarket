@@ -95,6 +95,8 @@ def jsonl_sessions(root, rows):
         for pattern in (
             "micro_maker/book_observations/*.jsonl*",
             "research/repricing_book/book_observations/*.jsonl*",
+            "archive/repricing-book/*.jsonl*",
+            "archive/repricing-book/*.gz",
             "paper_v7_london_archives/**/micro_maker/book_observations/*.jsonl*",
             "paper_v7_london_archives/**/research/repricing_book/book_observations/*.jsonl*",
         ):
@@ -262,8 +264,12 @@ def stream_raw_sessions(root, rows):
         decision_ms=int(row["decision_ns"])//1_000_000
         lo,hi=windows.get(market,(decision_ms,decision_ms))
         windows[market]=(min(lo,decision_ms),max(hi,decision_ms))
-    paths=[p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()]
-    paths.sort(key=lambda p:(p.name=="current.jsonl",p.name))
+    candidates=[p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()]
+    archive_root=Path(root)/"archive"/"repricing-book"
+    if archive_root.is_dir() and not archive_root.is_symlink():
+        candidates.extend(p for p in archive_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink())
+        candidates.extend(p for p in archive_root.glob("*.gz") if p.is_file() and not p.is_symlink())
+    paths=sorted({p.resolve() for p in candidates},key=lambda p:(p.name=="current.jsonl",str(p)))
     sessions={}
     for path in paths:
         diagnostics["files_seen"]+=1
