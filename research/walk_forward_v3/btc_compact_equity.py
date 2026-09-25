@@ -71,7 +71,7 @@ def robust_json_lines(path):
     try:
         with opener(path,"rt",encoding="utf-8") as stream:
             for line in stream:
-                if not line.endswith("\\n"):
+                if not line.endswith("\n"):
                     continue
                 try:
                     value=json.loads(line)
