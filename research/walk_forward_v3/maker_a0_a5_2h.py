@@ -1273,13 +1273,22 @@ def run(
         raise ValueError("NO_RECEIVE_TIME_EXTERNAL_VENUE_TAPE")
     source,external_venue_join_diag=attach_external_venue_features(source,external_venue_index)
 
-    sessions,tape_diag=stream_sessions(root.resolve().parent,source)
-    if not sessions:
-        sessions,fallback=jsonl_sessions(root.resolve(),source)
-        tape_diag={**tape_diag,**fallback,"fallback":"JSONL_BOOK_OBSERVATIONS"}
-    if not sessions:
+    if root.resolve().name=="polymarket_v7_collection":
+        # The independent collection plane's canonical PM source is the raw
+        # causal book. Avoid recursively scanning sibling trading runtimes and
+        # archives for compact/session fallbacks: that is both unnecessary and
+        # can exceed memory on the multi-hundred-GB evidence volume.
         sessions,raw_diag=stream_raw_sessions(root.resolve(),source)
-        tape_diag={**tape_diag,**raw_diag,"fallback":"RAW_CAUSAL_BOOK_TOKEN_INDEX"}
+        tape_diag={**raw_diag,"fallback":"RAW_CAUSAL_BOOK_TOKEN_INDEX",
+                   "collection_direct_raw_replay":True}
+    else:
+        sessions,tape_diag=stream_sessions(root.resolve().parent,source)
+        if not sessions:
+            sessions,fallback=jsonl_sessions(root.resolve(),source)
+            tape_diag={**tape_diag,**fallback,"fallback":"JSONL_BOOK_OBSERVATIONS"}
+        if not sessions:
+            sessions,raw_diag=stream_raw_sessions(root.resolve(),source)
+            tape_diag={**tape_diag,**raw_diag,"fallback":"RAW_CAUSAL_BOOK_TOKEN_INDEX"}
     if not sessions:
         raise ValueError("NO_CAUSAL_PM_BOOK_SESSIONS")
     market_index=build_market_session_index(sessions)
