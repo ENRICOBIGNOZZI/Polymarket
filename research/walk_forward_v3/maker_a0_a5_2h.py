@@ -1247,6 +1247,19 @@ def run(
         usable.append(row)
     if not usable:
         raise ValueError("NO_CONTINUOUS_PM_FEATURE_ANCHORS")
+    usable_first=min(int(r["decision_ns"]) for r in usable)
+    usable_last=max(int(r["decision_ns"]) for r in usable)
+    usable_span=usable_last-usable_first
+    if usable_span<WINDOW_NS:
+        counts=(feature_diag.get("counts") or {})
+        raise ValueError(
+            "LESS_THAN_TWO_HOURS_OF_CAUSAL_DECISIONS:"
+            f"anchors={len(usable)}:"
+            f"span_seconds={usable_span/1e9:.3f}:"
+            f"first_ns={usable_first}:last_ns={usable_last}:"
+            f"book_files={counts.get('files',0)}:"
+            f"schema_rows={counts.get('schema_rows',0)}"
+        )
 
     window=select_two_hour_window(usable,session_cache)
     start_ns,end_ns=int(window["start_ns"]),int(window["end_ns"])
