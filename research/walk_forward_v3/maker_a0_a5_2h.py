@@ -34,6 +34,7 @@ import gzip
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 import statistics
 from typing import Any, Iterable
@@ -211,6 +212,25 @@ def oriented_pm_anchor_features(raw: dict[str,Any], *, outcome: str) -> dict[str
     return out
 
 
+_WALL_PREFIX_RE=re.compile(r"^(\d{13})(?:-|_)")
+
+
+def prune_paths_by_wall_prefix(paths: Iterable[Path], minimum_wall_ns: int) -> list[Path]:
+    """Keep one segment before the cutoff plus all timestamped/new unparsed files."""
+    minimum_ms=int(minimum_wall_ns)//1_000_000
+    parsed=[];unparsed=[]
+    for path in sorted({Path(p).resolve() for p in paths}):
+        match=_WALL_PREFIX_RE.match(path.name)
+        if match is None:
+            unparsed.append(path);continue
+        parsed.append((int(match.group(1)),path))
+    parsed.sort(key=lambda x:(x[0],str(x[1])))
+    starts=[x[0] for x in parsed]
+    pos=bisect_left(starts,minimum_ms)
+    kept=parsed[max(0,pos-1):] if parsed else []
+    return [p for _,p in kept]+unparsed
+
+
 def load_book_anchor_rows(
     root: Path, *, minimum_wall_ns: int,
     metadata: dict[str,dict[str,Any]],
@@ -241,10 +261,11 @@ def load_book_anchor_rows(
     if archive_root.is_dir() and not archive_root.is_symlink():
         candidates.extend(archive_root.glob("*.jsonl*"))
         candidates.extend(archive_root.glob("*.gz"))
-    paths=sorted(
-        {p.resolve() for p in candidates if p.is_file() and not p.is_symlink()},
-        key=lambda p:(p.name=="current.jsonl",str(p)),
+    paths=prune_paths_by_wall_prefix(
+        (p for p in candidates if p.is_file() and not p.is_symlink()),
+        minimum_wall_ns,
     )
+    paths.sort(key=lambda p:(p.name=="current.jsonl",str(p)))
     if not paths:
         raise ValueError("PM_BOOK_OBSERVATION_DIR_MISSING")
     events=defaultdict(list)
