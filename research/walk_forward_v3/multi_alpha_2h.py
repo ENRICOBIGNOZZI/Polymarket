@@ -163,6 +163,9 @@ def discover_feature_tapes(root: Path) -> list[Path]:
         bases.append(root.parent)
     elif (root / "research" / "hft_permanent").is_dir():
         bases.append(root / "research")
+    archive_root = root.parent / "paper_v7_london_archives"
+    if archive_root.is_dir():
+        bases.append(archive_root)
     patterns = (
         "**/*feature*tape*.jsonl",
         "**/*feature*tape*.jsonl.gz",
