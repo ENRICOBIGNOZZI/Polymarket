@@ -266,7 +266,7 @@ class MakerA0A5Tests(unittest.TestCase):
                 "schema":"polymarket_v7_causal_book_observation_v1",
                 "paper_only":True,"authenticated_execution":False,
                 "real_order_submission":False,
-                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "execution_authority":"ZERO_AUTHORITY_DATA_COLLECTION",
                 "valid":True,"lineage_continuous":True,
                 "model_sha":"d"*40,"receive_wall_ms":ms,
                 "market_id":"m-arch-root","token_id":"y","connection_epoch":1,
