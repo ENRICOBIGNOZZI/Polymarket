@@ -79,7 +79,7 @@ def robust_json_lines(path):
                     continue
                 if isinstance(value,dict):
                     yield value
-    except (OSError,UnicodeDecodeError):
+    except (OSError,EOFError,gzip.BadGzipFile,UnicodeDecodeError):
         return
 
 
