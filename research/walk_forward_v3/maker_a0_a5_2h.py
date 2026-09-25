@@ -1228,14 +1228,26 @@ def run(
     external_venue_csv_specs: Iterable[str]=(),
     market_metadata_path: Path|None=None,
 ):
-    # Native lead-lag decisions are used only as an authoritative source for
-    # static fee/minimum terms. Quote timing comes exclusively from the
-    # continuous alpha-neutral feature tape below.
-    data=build_dataset(root,minimum_wall_ns=minimum_wall_ns,include_settlement_labels=False,use_compact_window_index=True)
-    if data.get("input_state")!="READY":
-        raise ValueError("CAUSAL_DATASET_NOT_READY:"+str(data.get("input_state")))
-    native_terms=[r for r in data["decisions"] if da._valid_state(r)]
-    market_meta,context_meta=build_static_market_metadata(native_terms)
+    # Quote timing must be alpha-neutral. Legacy native decisions are optional
+    # and may contribute static fee/minimum fallbacks only; the model-independent
+    # collection plane is valid research evidence even when it contains no old
+    # directional-decision tape.
+    market_meta={};context_meta={}
+    legacy_static_diag={"state":"UNAVAILABLE","input_state":None,"native_terms":0}
+    try:
+        data=build_dataset(
+            root,minimum_wall_ns=minimum_wall_ns,
+            include_settlement_labels=False,use_compact_window_index=True)
+        legacy_static_diag["input_state"]=data.get("input_state")
+        if data.get("input_state")=="READY":
+            native_terms=[r for r in data["decisions"] if da._valid_state(r)]
+            market_meta,context_meta=build_static_market_metadata(native_terms)
+            legacy_static_diag={
+                "state":"READY","input_state":"READY","native_terms":len(native_terms),
+                "market_terms":len(market_meta),"context_terms":len(context_meta),
+            }
+    except (OSError,ValueError,RuntimeError):
+        pass
     if market_metadata_path is None:
         raise ValueError("MARKET_METADATA_REQUIRED")
     metadata=load_market_metadata(market_metadata_path)
@@ -1337,7 +1349,7 @@ def run(
         "window_seconds":7200,"train_end_ns":cut,
         "split":{"TRAIN_60":len(train),"LOCKED_OOS_40":len(oos)},
         "selection":window,"feature_join":join_diag,"feature_tape_load":rich_load_diag,
-        "anchor_source":feature_diag,
+        "anchor_source":feature_diag,"legacy_static_terms":legacy_static_diag,
         "external_venue_tape":{"load":external_venue_load_diag,"join":external_venue_join_diag},
         "trade_tape":trade_diag,"book_tape":tape_diag,
         "maker_mechanics":{
