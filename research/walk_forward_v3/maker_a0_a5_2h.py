@@ -234,6 +234,10 @@ def load_book_anchor_rows(
                 and "repricing_book" in directory.parts
             ):
                 candidates.extend(directory.glob("*.jsonl*"))
+    archive_root=root/"archive"/"repricing-book"
+    if archive_root.is_dir() and not archive_root.is_symlink():
+        candidates.extend(archive_root.glob("*.jsonl*"))
+        candidates.extend(archive_root.glob("*.gz"))
     paths=sorted(
         {p.resolve() for p in candidates if p.is_file() and not p.is_symlink()},
         key=lambda p:(p.name=="current.jsonl",str(p)),
