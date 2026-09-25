@@ -206,24 +206,18 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
     # repricing observer. Raw causal book rows remain the authoritative source
     # for observed market membership.
     candidates=[]
-    data_root=run_root.parent.resolve()
-    if data_root.exists():
-        for directory in data_root.rglob("book_observations"):
-            if (
-                directory.is_dir()
-                and not directory.is_symlink()
-                and "repricing_book" in directory.parts
-            ):
-                candidates.extend(directory.glob("*.jsonl*"))
-        for directory in data_root.rglob("repricing-book"):
-            if directory.is_dir() and not directory.is_symlink():
-                candidates.extend(directory.glob("*.jsonl*"))
-                candidates.extend(directory.glob("*.gz"))
+    book_root=run_root/"research"/"repricing_book"/"book_observations"
+    archive_root=run_root/"archive"/"repricing-book"
+    if book_root.is_dir() and not book_root.is_symlink():
+        candidates.extend(book_root.glob("*.jsonl*"))
+    if archive_root.is_dir() and not archive_root.is_symlink():
+        candidates.extend(archive_root.glob("*.jsonl*"))
+        candidates.extend(archive_root.glob("*.gz"))
     paths=prune_paths_by_wall_prefix((p for p in candidates if p.is_file() and not p.is_symlink()),minimum_wall_ns)
     if not paths:
         counts["source"]="COMPACT_MANIFEST" if compact_found else "NONE"
         return found,counts
-    seen=set()
+    last_event_key=None
     for path in paths:
         counts["raw_files"]+=1
         for raw in json_lines(path):
@@ -252,10 +246,10 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
                 int(raw.get("observer_sequence") or 0),
                 market,token,wall,
             )
-            if event_key in seen:
+            if event_key==last_event_key:
                 counts["raw_duplicates"] = counts.get("raw_duplicates",0)+1
                 continue
-            seen.add(event_key)
+            last_event_key=event_key
             state=found.setdefault(market,{"market_id":market,"tokens_seen":set(),"tokens":{}})
             state.setdefault("tokens_seen",set()).add(token)
             counts["raw_accepted"]+=1
