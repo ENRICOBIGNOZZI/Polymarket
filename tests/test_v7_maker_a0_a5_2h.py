@@ -215,6 +215,42 @@ class MakerA0A5Tests(unittest.TestCase):
         self.assertEqual(diag["counts"]["files"],1)
         self.assertIn("EXACT_500MS_GRID",diag["timing_selection"])
 
+    def test_book_anchor_reads_canonical_repricing_archive(self):
+        import gzip,json,tempfile
+        metadata={
+            "m-canonical":{
+                "market_id":"m-canonical","asset":"BTC","horizon":"M5",
+                "yes_token":"y","no_token":"n",
+                "start_timestamp_ms":1000,"end_timestamp_ms":4000,
+                "fee_rate":0.07,"fee_exponent":1.0,"minimum":5.0,
+            }
+        }
+        def record(ms,seq):
+            return {
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "paper_only":True,"authenticated_execution":False,
+                "real_order_submission":False,
+                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "valid":True,"lineage_continuous":True,
+                "model_sha":"d"*40,"receive_wall_ms":ms,
+                "market_id":"m-canonical","token_id":"y","connection_epoch":1,
+                "observer_session_id":"canon","observer_sequence":seq,
+                "placement_features":{"imbalance":0.1},
+                "bid_depth_l1":5.0,"ask_depth_l1":6.0,
+            }
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)/"paper_v7_london"
+            archive=root/"archive"/"repricing-book"
+            archive.mkdir(parents=True)
+            with gzip.open(archive/"sealed.segment-000001.jsonl.gz","wt",encoding="utf-8") as handle:
+                for i,ms in enumerate((1100,1600,2100,2600)):
+                    handle.write(json.dumps(record(ms,i+1))+"\n")
+            anchors,diag=load_book_anchor_rows(
+                root,minimum_wall_ns=1_000_000_000,metadata=metadata,
+                market_meta={},context_meta={})
+        self.assertGreaterEqual(len(anchors),3)
+        self.assertEqual(diag["counts"]["files"],1)
+
     def test_recent_trade_flow_excludes_same_millisecond(self):
         row={
             "decision_ns":1_000_000_000,
