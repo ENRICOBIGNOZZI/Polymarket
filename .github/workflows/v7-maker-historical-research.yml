@@ -1,0 +1,114 @@
+name: V7 historical Maker London research
+
+on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-maker-historical-research-request.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: v7-maker-historical-research
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Require explicit PAPER Maker request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          request=deploy/v7-maker-historical-research-request.json
+          test -s "$request"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+
+      - name: Bind taker comparison artifact exactly
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          expected="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["taker_report_blob_sha"])')"
+          path="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["taker_report_path"])')"
+          test "$(git hash-object "$path")" = "$expected"
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::350769147128:role/PolymarketLondonPaperDeployPolicy
+          role-session-name: polymarket-maker-historical-research
+          aws-region: eu-west-2
+
+      - name: Run canonical historical Maker toxicity research
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: python3 ops/v7_maker_historical_research_ssm.py "$REQUEST"
+
+      - name: Build non-promotional maker-vs-taker receipt
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          out="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          taker="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["taker_report_path"])')"
+          python3 -m research.walk_forward_v3.maker_vs_taker \
+            --taker-report "$taker" \
+            --maker-report "$out/maker_toxicity.json" \
+            --output "$out/maker_vs_taker.json"
+
+      - name: Require zero-authority challenger semantics
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          python3 - "$REQUEST" <<'PY'
+          import json,sys
+          from pathlib import Path
+          req=json.loads(Path(sys.argv[1]).read_text())
+          root=Path(req['output_directory'])
+          maker=json.loads((root/'maker_toxicity.json').read_text())
+          receipt=json.loads((root/'maker_history_receipt.json').read_text())
+          challenger=json.loads((root/'maker_vs_taker.json').read_text())
+          assert maker['paper_only'] is True
+          assert maker['authenticated_execution'] is False
+          assert maker['real_order_submission'] is False
+          assert maker['automatic_promotion'] is False
+          assert receipt['automatic_promotion'] is False
+          assert challenger['ranking']=='NONE'
+          assert challenger['winner'] is None
+          assert challenger['maker']['promotion_grade'] is False
+          print(json.dumps({
+            'maker_state':maker.get('state'),
+            'eligible_fill_rows':maker.get('eligible_fill_rows'),
+            'independent_fill_clusters':maker.get('independent_fill_clusters'),
+            'maker_rows_by_model_sha':receipt.get('maker_rows_by_model_sha'),
+            'comparison':challenger.get('comparability'),
+          },sort_keys=True))
+          PY
+
+      - name: Publish immutable Maker historical research
+        env:
+          REQUEST: ${{ steps.request.outputs.request }}
+        run: |
+          set -euo pipefail
+          output="$(python3 -c 'import json,os;print(json.load(open(os.environ["REQUEST"]))["output_directory"])')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$output"
+          git diff --cached --check
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish London historical Maker challenger"
+          git push origin HEAD:main

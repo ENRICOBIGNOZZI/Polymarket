@@ -1,0 +1,15 @@
+{
+  "schema": "polymarket_v7_maker_historical_research_ssm_request_v1",
+  "version": 1,
+  "request_id": "maker-historical-install-20260921T1705CEST",
+  "instance_id": "i-0fba2bac9fdc5cbeb",
+  "markout_horizon": "250ms",
+  "minimum_clusters": 20,
+  "output_directory": "docs/research/maker-historical-2026-09-21",
+  "taker_report_path": "docs/research/direct-action-value-2026-09-21/direct_action.json",
+  "taker_report_blob_sha": "d92b62c8387eb5862dfafa76d443516f193f8bb4",
+  "paper_only": true,
+  "authenticated_execution": false,
+  "real_order_submission": false,
+  "real_capital_at_risk": false
+}
