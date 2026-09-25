@@ -150,6 +150,59 @@ print("A0_A5_DATA_DISCOVERY="+json.dumps(dict(
     run_root=str(root),data_root=str(data),dirs=dirs[:80],
 ),sort_keys=True,separators=(",",":")))
 PYDISC
+python3 - {context['run_root']} {a.minimum_wall_ns} <<'PYBOOK'
+import gzip,json,re,sys
+from collections import Counter
+from pathlib import Path
+root=Path(sys.argv[1]).resolve(); minimum_ns=int(sys.argv[2]); minimum_ms=minimum_ns//1_000_000
+book=root/"research"/"repricing_book"/"book_observations"
+paths=sorted(p for p in book.glob("*.jsonl*") if p.is_file() and not p.is_symlink())
+rx=re.compile(r"^(\d{13})(?:-|_)")
+parsed=[];unparsed=[]
+for p in paths:
+    m=rx.match(p.name)
+    if m: parsed.append((int(m.group(1)),p))
+    else: unparsed.append(p)
+parsed.sort()
+starts=[x[0] for x in parsed]
+import bisect
+pos=bisect.bisect_left(starts,minimum_ms)
+paths=[p for _,p in parsed[max(0,pos-1):]]+unparsed
+authority=Counter();schemas=Counter();paper=Counter();seen=0;accepted_clock=0
+samples=[]
+for p in paths[:12]:
+    try:
+        with p.open("rb") as h: magic=h.read(2)
+        opener=gzip.open if magic==b"\x1f\x8b" else open
+        with opener(p,"rt",encoding="utf-8") as h:
+            for line in h:
+                try:r=json.loads(line)
+                except Exception:continue
+                if not isinstance(r,dict):continue
+                seen+=1
+                wall=int(r.get("receive_wall_ms") or 0)
+                if wall<minimum_ms:continue
+                accepted_clock+=1
+                authority[str(r.get("execution_authority"))]+=1
+                schemas[str(r.get("schema"))]+=1
+                paper[str(r.get("paper_only"))]+=1
+                if len(samples)<5:
+                    samples.append(dict(
+                        file=p.name,schema=r.get("schema"),execution_authority=r.get("execution_authority"),
+                        paper_only=r.get("paper_only"),authenticated_execution=r.get("authenticated_execution"),
+                        real_order_submission=r.get("real_order_submission"),valid=r.get("valid"),
+                        lineage_continuous=r.get("lineage_continuous"),receive_wall_ms=wall,
+                        market_id=str(r.get("market_id") or "")[:32],
+                    ))
+                if accepted_clock>=5000:break
+    except (OSError,EOFError,gzip.BadGzipFile,UnicodeDecodeError):
+        continue
+    if accepted_clock>=5000:break
+print("A0_A5_BOOK_CONTRACT="+json.dumps(dict(
+    files_considered=len(paths),rows_seen=seen,rows_after_cutoff=accepted_clock,
+    authority=dict(authority),schemas=dict(schemas),paper=dict(paper),samples=samples,
+),sort_keys=True,separators=(",",":")))
+PYBOOK
 python3 -m venv {remote}/venv
 {remote}/venv/bin/pip install --disable-pip-version-check --quiet -r {remote}/src/research/requirements-learning.txt
 PYTHONPATH={remote}/src:{context['app_dir']} {remote}/venv/bin/python -m research.walk_forward_v3.maker_market_metadata \
