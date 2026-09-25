@@ -224,14 +224,21 @@ def load_book_anchor_rows(
     quote timestamp. This removes both old-alpha selection and within-slot
     book-activity timing selection.
     """
-    book_root=root/"research"/"repricing_book"/"book_observations"
-    if not book_root.is_dir():
-        raise ValueError("PM_BOOK_OBSERVATION_DIR_MISSING")
+    candidates=[]
+    for base,pattern in (
+        (root,"research/repricing_book/book_observations/*.jsonl*"),
+        (root.parent,"paper_v7_london_archives/**/research/repricing_book/book_observations/*.jsonl*"),
+    ):
+        if base.exists():
+            candidates.extend(base.glob(pattern))
     paths=sorted(
-        (p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()),
-        key=lambda p:(p.name=="current.jsonl",p.name),
+        {p.resolve() for p in candidates if p.is_file() and not p.is_symlink()},
+        key=lambda p:(p.name=="current.jsonl",str(p)),
     )
+    if not paths:
+        raise ValueError("PM_BOOK_OBSERVATION_DIR_MISSING")
     events=defaultdict(list)
+    seen_events=set()
     counts=Counter()
     model_shas=set()
     cadence_ns=ANCHOR_CADENCE_MS*1_000_000
@@ -282,6 +289,15 @@ def load_book_anchor_rows(
             if not finite(minimum):minimum=static.get("minimum")
             if not all(finite(x) for x in (rate,exponent,minimum)):
                 counts["static_terms_unavailable"]+=1;continue
+            event_key=(
+                sha,str(raw.get("observer_session_id") or ""),
+                int(raw.get("connection_epoch") or 0),
+                int(raw.get("observer_sequence") or 0),
+                market,token,observed_ns,
+            )
+            if event_key in seen_events:
+                counts["duplicate_events"]+=1;continue
+            seen_events.add(event_key)
             events[market].append({
                 "observed_ns":observed_ns,"raw":raw,"sha":sha,"outcome":outcome,
                 "asset":asset,"horizon":horizon,"yes":yes,"no":no,
