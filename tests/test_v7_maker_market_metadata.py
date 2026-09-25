@@ -115,6 +115,29 @@ class MakerMarketMetadataTests(unittest.TestCase):
             self.assertEqual(found["m-canonical"]["tokens_seen"],["t-canonical"])
             self.assertEqual(diag["source"],"RAW_CAUSAL_BOOK")
 
+    def test_run_root_repricing_archive_discovers_market(self):
+        import gzip,json,tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)/"paper_v7_london"
+            archive=root/"archive"/"repricing-book"
+            archive.mkdir(parents=True)
+            row={
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "paper_only":True,"authenticated_execution":False,
+                "real_order_submission":False,
+                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "receive_wall_ms":2000,
+                "market_id":"m-root-archive","token_id":"t-root-archive",
+                "model_sha":"e"*40,"observer_session_id":"s","connection_epoch":1,
+                "observer_sequence":1,
+            }
+            with gzip.open(archive/"abc-segment-000001.jsonl.gz","wt",encoding="utf-8") as handle:
+                handle.write(json.dumps(row)+"\n")
+            found,diag=observed_markets(root,1_000_000_000)
+            self.assertIn("m-root-archive",found)
+            self.assertEqual(found["m-root-archive"]["tokens_seen"],["t-root-archive"])
+            self.assertIn(diag["source"],("RAW_CAUSAL_BOOK","COMPACT_MANIFEST_PLUS_RAW_CAUSAL_BOOK"))
+
     def test_hourly_and_daily_context_use_static_horizon(self):
         ctx,start,end=identify_context(
             "bitcoin-up-or-down-september-24-2026-5pm-et",self.registry(),
