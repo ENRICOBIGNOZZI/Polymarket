@@ -67,7 +67,7 @@ def robust_json_lines(path):
             magic=probe.read(2)
     except OSError:
         return
-    opener=gzip.open if magic==b"\\x1f\\x8b" else open
+    opener=gzip.open if magic==b"\x1f\x8b" else open
     try:
         with opener(path,"rt",encoding="utf-8") as stream:
             for line in stream:
