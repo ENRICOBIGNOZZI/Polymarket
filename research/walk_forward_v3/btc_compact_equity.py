@@ -249,10 +249,14 @@ def stream_sessions(root, rows):
 
 def stream_raw_sessions(root, rows):
     book_root=Path(root)/"research/repricing_book/book_observations"
+    archive_root=Path(root)/"archive"/"repricing-book"
     diagnostics={"source":"RAW_CAUSAL_BOOK_JSONL","book_root":str(book_root),
+                 "archive_root":str(archive_root),
                  "files_seen":0,"rows_seen":0,"rows_retained":0,
                  "sessions_loaded":0,"sequence_gaps":0,"lineage_breaks":0}
-    if not book_root.is_dir() or book_root.is_symlink():
+    live_ok=book_root.is_dir() and not book_root.is_symlink()
+    archive_ok=archive_root.is_dir() and not archive_root.is_symlink()
+    if not live_ok and not archive_ok:
         return [],diagnostics
     market_tokens=defaultdict(set)
     windows={}
@@ -265,7 +269,6 @@ def stream_raw_sessions(root, rows):
         lo,hi=windows.get(market,(decision_ms,decision_ms))
         windows[market]=(min(lo,decision_ms),max(hi,decision_ms))
     candidates=[p for p in book_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink()]
-    archive_root=Path(root)/"archive"/"repricing-book"
     if archive_root.is_dir() and not archive_root.is_symlink():
         candidates.extend(p for p in archive_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink())
         candidates.extend(p for p in archive_root.glob("*.gz") if p.is_file() and not p.is_symlink())
