@@ -178,6 +178,43 @@ class MakerA0A5Tests(unittest.TestCase):
             [400_000_000,400_000_000])
         self.assertIn("EXACT_500MS_GRID",diag["timing_selection"])
 
+    def test_book_anchor_reads_london_archive(self):
+        import json,tempfile
+        metadata={
+            "m-arch":{
+                "market_id":"m-arch","asset":"BTC","horizon":"M5",
+                "yes_token":"y","no_token":"n",
+                "start_timestamp_ms":1000,"end_timestamp_ms":4000,
+                "fee_rate":0.07,"fee_exponent":1.0,"minimum":5.0,
+            }
+        }
+        def record(ms,seq):
+            return {
+                "schema":"polymarket_v7_causal_book_observation_v1",
+                "paper_only":True,"authenticated_execution":False,
+                "real_order_submission":False,
+                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "valid":True,"lineage_continuous":True,
+                "model_sha":"b"*40,"receive_wall_ms":ms,
+                "market_id":"m-arch","token_id":"y","connection_epoch":1,
+                "observer_session_id":"arch","observer_sequence":seq,
+                "placement_features":{"imbalance":0.1},
+                "bid_depth_l1":5.0,"ask_depth_l1":6.0,
+            }
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)/"paper_v7_london"
+            archive=root.parent/"paper_v7_london_archives"/"r1"/"research"/"repricing_book"/"book_observations"
+            archive.mkdir(parents=True)
+            (archive/"segment.jsonl").write_text(
+                "".join(json.dumps(record(ms,i+1))+"\n" for i,ms in enumerate((1100,1600,2100,2600))),
+                encoding="utf-8")
+            anchors,diag=load_book_anchor_rows(
+                root,minimum_wall_ns=1_000_000_000,metadata=metadata,
+                market_meta={},context_meta={})
+        self.assertGreaterEqual(len(anchors),3)
+        self.assertEqual(diag["counts"]["files"],1)
+        self.assertIn("EXACT_500MS_GRID",diag["timing_selection"])
+
     def test_recent_trade_flow_excludes_same_millisecond(self):
         row={
             "decision_ns":1_000_000_000,
