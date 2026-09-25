@@ -1,6 +1,9 @@
 name: V7 PAPER server health
 
 on:
+  push:
+    branches: [main]
+    paths: [deploy/v7-paper-server-health-request.json]
   workflow_dispatch:
     inputs:
       expected_sha: {description: "Exact deployed V7 SHA or request SHA", required: false, type: string}
@@ -33,6 +36,7 @@ jobs:
       SERVER_HOST: ${{ vars.POLYMARKET_SERVER_HOST || '100.104.183.109' }}
       LONDON_INSTANCE_ID: ${{ vars.POLYMARKET_LONDON_INSTANCE_ID || 'i-0fba2bac9fdc5cbeb' }}
       SOURCE_SHA: ${{ github.event.inputs.expected_sha || github.event.client_payload.expected_sha || github.event.workflow_run.head_sha || github.sha }}
+      HEALTH_REQUEST_PATH: deploy/v7-paper-server-health-request.json
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -47,13 +51,37 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git fetch --no-tags origin main
+          main_sha="$(git rev-parse origin/main)"
+          test "$(git rev-parse HEAD)" = "$main_sha"
           git cat-file -e "$SOURCE_SHA^{commit}"
 
           target="$SOURCE_SHA"
           request_path=deploy/v7-paper-deploy-aws-oidc-request.json
           fast_request_path=deploy/v7-paper-fast-restart-existing-request.json
           changed="$(git diff-tree --no-commit-id --name-only -r "$SOURCE_SHA")"
-          if [[ "$changed" == "$request_path" ]]; then
+
+          if [[ "$changed" == "$HEALTH_REQUEST_PATH" ]]; then
+            git show "$SOURCE_SHA:$HEALTH_REQUEST_PATH" > "$RUNNER_TEMP/health-request.json"
+            parsed="$(python3 - "$RUNNER_TEMP/health-request.json" <<'PY'
+          import json,re,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert set(v)=={
+              'schema','version','request_id','expected_sha','operation',
+              'paper_only','authenticated_execution','real_order_submission'
+          }
+          assert v['schema']=='polymarket_v7_paper_health_request_v1'
+          assert v['version']==1
+          assert isinstance(v['request_id'],str) and re.fullmatch(r'[A-Za-z0-9._:-]{8,128}',v['request_id'])
+          assert isinstance(v['expected_sha'],str) and re.fullmatch(r'[0-9a-f]{40}',v['expected_sha'])
+          assert v['operation']=='READ_ONLY_HEALTH'
+          assert v['paper_only'] is True
+          assert v['authenticated_execution'] is False
+          assert v['real_order_submission'] is False
+          print(v['expected_sha'])
+          PY
+          )"
+            target="$parsed"
+          elif [[ "$changed" == "$request_path" ]]; then
             parent="$(git rev-parse "$SOURCE_SHA^")"
             git show "$SOURCE_SHA:$request_path" > "$RUNNER_TEMP/deploy-request.json"
             parsed="$(python3 - "$RUNNER_TEMP/deploy-request.json" "$parent" <<'PY'
@@ -99,13 +127,25 @@ jobs:
           )"
             target="$parsed"
           fi
-          git checkout --detach "$target"
 
           [[ "$target" =~ ^[0-9a-f]{40}$ ]]
-          git checkout --detach "$target"
-          python3 scripts/v7_cutover_contract.py --repository-root . --expected-head "$target" >/dev/null
+          git cat-file -e "$target^{commit}"
+
+          # Verify the deployed runtime contract using code frozen at the target
+          # SHA, without replacing the current-main monitoring checkout.
+          contract_root="$RUNNER_TEMP/v7-health-contract-$target"
+          rm -rf "$contract_root"
+          git worktree add --detach "$contract_root" "$target"
+          python3 "$contract_root/scripts/v7_cutover_contract.py"             --repository-root "$contract_root" --expected-head "$target" >/dev/null
+          git worktree remove --force "$contract_root"
+
+          # From here onward we intentionally stay on current main so health
+          # probes/diagnostics evolve independently of the deployed runtime SHA.
+          test "$(git rev-parse HEAD)" = "$main_sha"
           echo "sha=$target" >> "$GITHUB_OUTPUT"
+          echo "monitoring_sha=$main_sha" >> "$GITHUB_OUTPUT"
           echo "health_target_sha=$target" >> "$GITHUB_STEP_SUMMARY"
+          echo "health_monitoring_sha=$main_sha" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Configure AWS credentials through GitHub OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
