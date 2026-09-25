@@ -35,6 +35,7 @@ import hashlib
 import json
 import math
 import re
+import resource
 from pathlib import Path
 import statistics
 from typing import Any, Iterable
@@ -70,6 +71,12 @@ SAFETY_PLUS={
     "research_only":True,
     "canonical_ledger_writes":False,
 }
+
+
+def phase(name: str, **fields) -> None:
+    payload={"phase":name,"rss_kb":int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)}
+    payload.update(fields)
+    print("A0_A5_PHASE="+json.dumps(payload,sort_keys=True,separators=(",",":")),flush=True)
 
 
 def canonical_hash(value: Any) -> str:
@@ -1268,17 +1275,22 @@ def run(
     if market_metadata_path is None:
         raise ValueError("MARKET_METADATA_REQUIRED")
     metadata=load_market_metadata(market_metadata_path)
+    phase("METADATA_READY",markets=len(metadata))
     source,feature_diag=load_book_anchor_rows(
         root,minimum_wall_ns=minimum_wall_ns,metadata=metadata,
         market_meta=market_meta,context_meta=context_meta)
+    phase("ANCHORS_READY",anchors=len(source),anchor_markets=len({str(r["market_id"]) for r in source}))
 
     external_lower_ns=min(int(r["decision_ns"]) for r in source)-2_000_000_000
     external_upper_ns=max(int(r["decision_ns"]) for r in source)+2_000_000_000
     external_venue_index,external_venue_load_diag=load_external_venue_csvs(
         external_venue_csv_specs,lower_ns=external_lower_ns,upper_ns=external_upper_ns)
+    phase("EXTERNAL_INDEX_READY",series=len(external_venue_index),
+          accepted=int((external_venue_load_diag or {}).get("accepted") or 0))
     if not external_venue_index:
         raise ValueError("NO_RECEIVE_TIME_EXTERNAL_VENUE_TAPE")
     source,external_venue_join_diag=attach_external_venue_features(source,external_venue_index)
+    phase("EXTERNAL_JOIN_READY",anchors=len(source))
 
     if root.resolve().name=="polymarket_v7_collection":
         # The independent collection plane's canonical PM source is the raw
@@ -1288,6 +1300,9 @@ def run(
         sessions,raw_diag=stream_raw_sessions(root.resolve(),source)
         tape_diag={**raw_diag,"fallback":"RAW_CAUSAL_BOOK_TOKEN_INDEX",
                    "collection_direct_raw_replay":True}
+        phase("RAW_SESSIONS_READY",sessions=len(sessions),
+              rows_retained=int((raw_diag or {}).get("rows_retained") or 0),
+              rows_seen=int((raw_diag or {}).get("rows_seen") or 0))
     else:
         sessions,tape_diag=stream_sessions(root.resolve().parent,source)
         if not sessions:
@@ -1317,6 +1332,7 @@ def run(
                          float(pair.get("no_tick_size") or 0.0))
         session_cache[str(row["decision_id"])]=(session,None)
         usable.append(row)
+    phase("USABLE_ANCHORS_READY",usable=len(usable),session_cache=len(session_cache))
     if not usable:
         raise ValueError("NO_CONTINUOUS_PM_FEATURE_ANCHORS")
     usable_first=min(int(r["decision_ns"]) for r in usable)
@@ -1335,12 +1351,15 @@ def run(
 
     window=select_two_hour_window(usable,session_cache)
     start_ns,end_ns=int(window["start_ns"]),int(window["end_ns"])
+    phase("WINDOW_SELECTED",rows=int(window.get("rows") or 0),start_ns=start_ns,end_ns=end_ns)
     rows=[r for r in usable if start_ns<=int(r["decision_ns"])<end_ns]
     feature_paths=discover_feature_tapes(root)
     if not feature_paths:
         raise ValueError("NO_RICH_FEATURE_TAPE")
     feature_index,rich_load_diag=load_feature_tape(
         feature_paths,start_ns=start_ns,end_ns=end_ns)
+    phase("RICH_FEATURE_INDEX_READY",markets=len(feature_index),
+          accepted=int(((rich_load_diag or {}).get("counts") or {}).get("accepted") or 0))
     rows,join_diag=attach_rich_state(rows,feature_index,delay_ms=0)
     if not int(join_diag.get("joined_rows") or 0):
         raise ValueError("NO_RICH_FEATURE_ROWS_AT_FIXED_ANCHORS")
@@ -1358,8 +1377,12 @@ def run(
     if not rich_a5_names:raise ValueError("NO_RICH_A5_FEATURES")
     external_model,external_level_names=train_external_fair(train,session_cache,fair_names)
     trades,trade_diag=load_trades(root,rows,start_ns,end_ns)
+    phase("TRADES_READY",series=len(trades),accepted=int((trade_diag or {}).get("accepted") or 0))
     if not trades:raise ValueError("NO_CAUSAL_MAKER_TRADES")
 
+    phase("MODEL_INPUT_READY",train=len(train),oos=len(oos),
+          ext_features=len(ext_names),pm_features=len(pm_names),
+          full_features=len(full_names),fair_features=len(fair_names))
     grid={p:{} for p in POLICIES};receipts={}
     for latency in LATENCIES:
         for horizon in EXITS:
