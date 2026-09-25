@@ -157,7 +157,7 @@ from pathlib import Path
 root=Path(sys.argv[1]).resolve(); minimum_ns=int(sys.argv[2]); minimum_ms=minimum_ns//1_000_000
 book=root/"research"/"repricing_book"/"book_observations"
 paths=sorted(p for p in book.glob("*.jsonl*") if p.is_file() and not p.is_symlink())
-rx=re.compile(r"^(\d{13})(?:-|_)")
+rx=re.compile(r"^([0-9]+)(?:-|_)")
 parsed=[];unparsed=[]
 for p in paths:
     m=rx.match(p.name)
@@ -173,7 +173,7 @@ samples=[]
 for p in paths[:12]:
     try:
         with p.open("rb") as h: magic=h.read(2)
-        opener=gzip.open if magic==b"\x1f\x8b" else open
+        opener=gzip.open if magic==bytes((31,139)) else open
         with opener(p,"rt",encoding="utf-8") as h:
             for line in h:
                 try:r=json.loads(line)
