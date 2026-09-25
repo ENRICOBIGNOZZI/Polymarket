@@ -234,6 +234,9 @@ def load_book_anchor_rows(
                 and "repricing_book" in directory.parts
             ):
                 candidates.extend(directory.glob("*.jsonl*"))
+        for directory in data_root.rglob("repricing-book"):
+            if directory.is_dir() and not directory.is_symlink():
+                candidates.extend(directory.glob("*.jsonl*"))
     archive_root=root/"archive"/"repricing-book"
     if archive_root.is_dir() and not archive_root.is_symlink():
         candidates.extend(archive_root.glob("*.jsonl*"))
