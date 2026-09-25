@@ -169,6 +169,7 @@ import bisect
 pos=bisect.bisect_left(starts,minimum_ms)
 paths=[p for _,p in parsed[max(0,pos-1):]]+unparsed
 authority=Counter();schemas=Counter();paper=Counter();seen=0;accepted_clock=0
+min_wall=None;max_wall=0
 samples=[]
 for p in paths[:12]:
     try:
@@ -181,6 +182,9 @@ for p in paths[:12]:
                 if not isinstance(r,dict):continue
                 seen+=1
                 wall=int(r.get("receive_wall_ms") or 0)
+                if wall>0:
+                    min_wall=wall if min_wall is None else min(min_wall,wall)
+                    max_wall=max(max_wall,wall)
                 if wall<minimum_ms:continue
                 accepted_clock+=1
                 authority[str(r.get("execution_authority"))]+=1
@@ -200,6 +204,7 @@ for p in paths[:12]:
     if accepted_clock>=5000:break
 print("A0_A5_BOOK_CONTRACT="+json.dumps(dict(
     files_considered=len(paths),rows_seen=seen,rows_after_cutoff=accepted_clock,
+    minimum_cutoff_ms=minimum_ms,min_wall_ms=min_wall,max_wall_ms=max_wall,
     authority=dict(authority),schemas=dict(schemas),paper=dict(paper),samples=samples,
 ),sort_keys=True,separators=(",",":")))
 PYBOOK
