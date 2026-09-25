@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import argparse
 import gzip
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 import json
 import math
+import re
 from pathlib import Path
 
 from research.walk_forward_v2.core import SAFETY, atomic_json, build_dataset, fee_per_share, valid_book, book_from_row
@@ -247,6 +248,23 @@ def stream_sessions(root, rows):
 
 
 
+_WALL_PREFIX_RE=re.compile(r"^(\d{13})(?:-|_)")
+
+
+def prune_raw_paths_by_wall(paths, minimum_ms: int):
+    parsed=[];unparsed=[]
+    for path in sorted({Path(p).resolve() for p in paths}):
+        match=_WALL_PREFIX_RE.match(path.name)
+        if match is None:
+            unparsed.append(path);continue
+        parsed.append((int(match.group(1)),path))
+    parsed.sort(key=lambda item:(item[0],str(item[1])))
+    starts=[item[0] for item in parsed]
+    pos=bisect_left(starts,int(minimum_ms))
+    kept=parsed[max(0,pos-1):] if parsed else []
+    return [path for _,path in kept]+unparsed
+
+
 def stream_raw_sessions(root, rows):
     book_root=Path(root)/"research/repricing_book/book_observations"
     archive_root=Path(root)/"archive"/"repricing-book"
@@ -272,7 +290,9 @@ def stream_raw_sessions(root, rows):
     if archive_root.is_dir() and not archive_root.is_symlink():
         candidates.extend(p for p in archive_root.glob("*.jsonl*") if p.is_file() and not p.is_symlink())
         candidates.extend(p for p in archive_root.glob("*.gz") if p.is_file() and not p.is_symlink())
-    paths=sorted({p.resolve() for p in candidates},key=lambda p:(p.name=="current.jsonl",str(p)))
+    minimum_needed_ms=min(lo for lo,_ in windows.values())-5000 if windows else 0
+    paths=prune_raw_paths_by_wall(candidates,minimum_needed_ms)
+    paths.sort(key=lambda p:(p.name=="current.jsonl",str(p)))
     sessions={}
     for path in paths:
         diagnostics["files_seen"]+=1
