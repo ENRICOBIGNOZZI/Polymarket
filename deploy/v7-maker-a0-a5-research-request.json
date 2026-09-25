@@ -1,11 +1,11 @@
 {
   "schema": "polymarket_v7_maker_a0_a5_research_request_v1",
   "version": 1,
-  "request_id": "maker-a0-a5-2h-wall-span-probe-20260925-am",
+  "request_id": "maker-a0-a5-2h-data-window-20260925-an",
   "instance_id": "i-0fba2bac9fdc5cbeb",
   "expected_research_sha": "1448c4ded6e3bceeee60e2abf1c909ced9a135e9",
   "research_branch": "research/full-feature-maker-20260924",
-  "minimum_wall_ns": 1790278818146000000,
+  "minimum_wall_ns": 1790031602186000000,
   "output_directory": "docs/research/maker-a0-a5-2026-09-24",
   "paper_only": true,
   "authenticated_execution": false,
