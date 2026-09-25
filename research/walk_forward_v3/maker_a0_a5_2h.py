@@ -252,6 +252,10 @@ def load_book_anchor_rows(
     if archive_root.is_dir() and not archive_root.is_symlink():
         candidates.extend(archive_root.glob("*.jsonl*"))
         candidates.extend(archive_root.glob("*.gz"))
+    if root.name!="polymarket_v7_collection":
+        legacy=root.parent/"paper_v7_london_archives"
+        if legacy.is_dir() and not legacy.is_symlink():
+            candidates.extend(legacy.glob("**/research/repricing_book/book_observations/*.jsonl*"))
     paths=prune_paths_by_wall_prefix(
         (p for p in candidates if p.is_file() and not p.is_symlink()),
         minimum_wall_ns,
