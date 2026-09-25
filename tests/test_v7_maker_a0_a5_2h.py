@@ -5,13 +5,13 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
-from research.walk_forward_v3.btc_compact_equity import stream_raw_sessions
+from research.walk_forward_v3.btc_compact_equity import stream_raw_sessions, prune_raw_paths_by_wall
 
 from research.walk_forward_v3.maker_a0_a5_2h import (
     Ridge, external_feature, external_fair_feature, pm_feature, full_execution_feature, feature_dict, split_60_40,
     load_external_venue_csvs, external_venue_features, oriented_pm_anchor_features,
     load_feature_anchor_rows, load_book_anchor_rows, recent_trade_flow,
-    build_static_market_metadata, WINDOW_NS,
+    build_static_market_metadata, prune_paths_by_wall_prefix, WINDOW_NS,
 )
 
 
@@ -356,6 +356,28 @@ class MakerA0A5Tests(unittest.TestCase):
         self.assertEqual(diag["rows_seen"],1)
         self.assertEqual(diag["rows_retained"],1)
         self.assertEqual(len(sessions),1)
+
+    def test_wall_prefix_pruning_keeps_boundary_and_newer_files(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            names=[
+                "1790270000000-a.segment-1000000.jsonl",
+                "1790278000000-b.segment-1000000.jsonl",
+                "1790280000000-c.segment-1000000.jsonl",
+                "current.jsonl",
+            ]
+            paths=[]
+            for name in names:
+                p=root/name;p.write_text("{}\n",encoding="utf-8");paths.append(p)
+            kept=prune_paths_by_wall_prefix(paths,1790279000000*1_000_000)
+            self.assertEqual(
+                [p.name for p in kept],
+                ["1790278000000-b.segment-1000000.jsonl",
+                 "1790280000000-c.segment-1000000.jsonl",
+                 "current.jsonl"])
+            raw_kept=prune_raw_paths_by_wall(paths,1790279000000)
+            self.assertEqual([p.name for p in raw_kept],[p.name for p in kept])
 
     def test_split_is_exact_time_60_40(self):
         start=1_000_000_000_000
