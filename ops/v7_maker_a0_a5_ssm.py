@@ -106,17 +106,17 @@ for directory in candidates:
                 total+=size
     if files:
         files.sort()
-        dirs.append({
-            "path":str(directory),
-            "files":len(files),
-            "bytes":total,
-            "first":files[0][0],
-            "last":files[-1][0],
-        })
+        dirs.append(dict(
+            path=str(directory),
+            files=len(files),
+            bytes=total,
+            first=files[0][0],
+            last=files[-1][0],
+        ))
 dirs.sort(key=lambda x:x["path"])
-print("A0_A5_DATA_DISCOVERY="+json.dumps({
-    "run_root":str(root),"data_root":str(data),"dirs":dirs[:80],
-},sort_keys=True,separators=(",",":")))
+print("A0_A5_DATA_DISCOVERY="+json.dumps(dict(
+    run_root=str(root),data_root=str(data),dirs=dirs[:80],
+),sort_keys=True,separators=(",",":")))
 PYDISC
 python3 -m venv {remote}/venv
 {remote}/venv/bin/pip install --disable-pip-version-check --quiet -r {remote}/src/research/requirements-learning.txt
