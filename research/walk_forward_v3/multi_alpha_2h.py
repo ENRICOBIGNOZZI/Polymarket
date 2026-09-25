@@ -143,7 +143,7 @@ def robust_json_lines(path: Path) -> Iterable[dict[str, Any]]:
                     continue
                 if isinstance(row, dict):
                     yield row
-    except (OSError, UnicodeDecodeError):
+    except (OSError, EOFError, gzip.BadGzipFile, UnicodeDecodeError):
         return
 
 
