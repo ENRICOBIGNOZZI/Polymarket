@@ -267,7 +267,7 @@ def stream_raw_sessions(root, rows):
     sessions={}
     for path in paths:
         diagnostics["files_seen"]+=1
-        for raw in json_lines(path):
+        for raw in robust_json_lines(path):
             if not isinstance(raw,dict) or raw.get("schema")!="polymarket_v7_causal_book_observation_v1":
                 continue
             diagnostics["rows_seen"]+=1
