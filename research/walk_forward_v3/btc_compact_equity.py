@@ -309,7 +309,8 @@ def stream_raw_sessions(root, rows):
             key=(sid,epoch)
             state=sessions.setdefault(key,{"session_id":sid,"epoch":epoch,"last_seq":None,
                                            "span":0,"span_watermark":defaultdict(int),
-                                           "rows":[],"first_wall_ms":None,"last_wall_ms":None})
+                                           "raw_rows":defaultdict(list),
+                                           "first_wall_ms":None,"last_wall_ms":None})
             prior=state["last_seq"]
             if prior is not None and seq!=prior+1:
                 state["span"]+=1; diagnostics["sequence_gaps"]+=1
@@ -336,22 +337,21 @@ def stream_raw_sessions(root, rows):
                 continue
             if raw.get("valid") is not True or not (0<bid<ask<1 and bid_depth>=0 and ask_depth>=0 and tick>0):
                 continue
-            state["rows"].append({"market_id":market,"token_id":token,"time_ms":wall,
-                                  "bid":bid,"ask":ask,"bid_depth":bid_depth,
-                                  "ask_depth":ask_depth,"tick":tick,"span":span})
+            # Compact tuple: wall,bid,ask,bid_depth,ask_depth,tick,span.
+            # Market/token live once in the index key rather than once per event.
+            state["raw_rows"][(market,token)].append(
+                (wall,bid,ask,bid_depth,ask_depth,tick,span))
             diagnostics["rows_retained"]+=1
     output=[]
     for state in sessions.values():
-        if not state["rows"]:
+        if not state["raw_rows"]:
             continue
-        indexed=defaultdict(list)
-        for row in state["rows"]:
-            indexed[(row["market_id"],row["token_id"])].append(row)
         index={}
-        for key,seq in indexed.items():
-            seq.sort(key=lambda r:r["time_ms"])
-            index[key]={"rows":seq,"stamps":[r["time_ms"] for r in seq]}
-        state["raw_index"]=dict(index)
+        for key,seq in state["raw_rows"].items():
+            seq.sort(key=lambda r:r[0])
+            index[key]={"rows":seq,"stamps":[r[0] for r in seq]}
+        state.pop("raw_rows",None)
+        state["raw_index"]=index
         output.append(state)
     diagnostics["sessions_loaded"]=len(output)
     return output,diagnostics
@@ -364,10 +364,15 @@ def raw_token_asof(session, market, token, target_ms):
     pos=bisect_right(idx["stamps"],target_ms)-1
     if pos<0:
         return None
-    row=idx["rows"][pos]
-    if session["span_watermark"].get(row["span"],0)<target_ms:
+    packed=idx["rows"][pos]
+    wall,bid,ask,bid_depth,ask_depth,tick,span=packed
+    if session["span_watermark"].get(span,0)<target_ms:
         return None
-    return row
+    return {
+        "time_ms":wall,"bid":bid,"ask":ask,
+        "bid_depth":bid_depth,"ask_depth":ask_depth,
+        "tick":tick,"span":span,
+    }
 
 
 def pair_asof_session(session, row, target_ms):
