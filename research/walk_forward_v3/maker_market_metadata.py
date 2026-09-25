@@ -149,6 +149,25 @@ def identify_context(slug: str, registry: dict[str,Any], raw: dict[str,Any]):
     return ctx,start,close
 
 
+_WALL_PREFIX_RE=re.compile(r"^(\d{13})(?:-|_)")
+
+
+def prune_paths_by_wall_prefix(paths, minimum_wall_ns: int):
+    minimum_ms=int(minimum_wall_ns)//1_000_000
+    parsed=[];unparsed=[]
+    for path in sorted({Path(p).resolve() for p in paths}):
+        match=_WALL_PREFIX_RE.match(path.name)
+        if match is None:
+            unparsed.append(path);continue
+        parsed.append((int(match.group(1)),path))
+    parsed.sort(key=lambda item:(item[0],str(item[1])))
+    starts=[item[0] for item in parsed]
+    import bisect
+    pos=bisect.bisect_left(starts,minimum_ms)
+    kept=parsed[max(0,pos-1):] if parsed else []
+    return [path for _,path in kept]+unparsed
+
+
 def observed_markets(run_root: Path, minimum_wall_ns: int):
     """Find market IDs from compact manifests or, when absent, the raw causal book."""
     roots=(run_root,run_root.parent)
@@ -200,7 +219,7 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
             if directory.is_dir() and not directory.is_symlink():
                 candidates.extend(directory.glob("*.jsonl*"))
                 candidates.extend(directory.glob("*.gz"))
-    paths=sorted({p.resolve() for p in candidates if p.is_file() and not p.is_symlink()})
+    paths=prune_paths_by_wall_prefix((p for p in candidates if p.is_file() and not p.is_symlink()),minimum_wall_ns)
     if not paths:
         counts["source"]="COMPACT_MANIFEST" if compact_found else "NONE"
         return found,counts
