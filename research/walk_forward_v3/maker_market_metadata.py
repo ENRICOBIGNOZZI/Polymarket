@@ -189,12 +189,15 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
     # repricing observer. Raw causal book rows remain the authoritative source
     # for observed market membership.
     candidates=[]
-    for base,pattern in (
-        (run_root,"research/repricing_book/book_observations/*.jsonl*"),
-        (run_root.parent,"paper_v7_london_archives/**/research/repricing_book/book_observations/*.jsonl*"),
-    ):
-        if base.exists():
-            candidates.extend(base.glob(pattern))
+    data_root=run_root.parent.resolve()
+    if data_root.exists():
+        for directory in data_root.rglob("book_observations"):
+            if (
+                directory.is_dir()
+                and not directory.is_symlink()
+                and "repricing_book" in directory.parts
+            ):
+                candidates.extend(directory.glob("*.jsonl*"))
     paths=sorted({p.resolve() for p in candidates if p.is_file() and not p.is_symlink()})
     if not paths:
         return found,counts
