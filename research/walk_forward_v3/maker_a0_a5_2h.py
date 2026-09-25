@@ -237,12 +237,12 @@ def load_book_anchor_rows(
     market_meta: dict[str,dict[str,float]],
     context_meta: dict[tuple[str,str],dict[str,float]],
 ):
-    """Exact 500ms alpha-neutral quote clock with causal PM-book as-of state.
+    """Exact 500ms alpha-neutral quote clock with bounded-memory causal as-of state.
 
-    Quote timestamps are fixed grid points. Book events only provide the latest
-    information available at or before each grid point; they never choose the
-    quote timestamp. This removes both old-alpha selection and within-slot
-    book-activity timing selection.
+    Raw book events are consumed in receive-time order.  For each market we keep
+    only the latest admissible event and the next fixed 500ms grid timestamp.
+    Thus memory is O(markets + anchors), not O(raw book events), while quote
+    timestamps remain independent of alpha, PnL, and within-slot event timing.
     """
     candidates=[]
     book_root=root/"research"/"repricing_book"/"book_observations"
@@ -263,11 +263,51 @@ def load_book_anchor_rows(
     paths.sort(key=lambda p:(p.name=="current.jsonl",str(p)))
     if not paths:
         raise ValueError("PM_BOOK_OBSERVATION_DIR_MISSING")
-    events=defaultdict(list)
-    last_event_key=None
+
+    rows=[]
+    states={}
     counts=Counter()
     model_shas=set()
     cadence_ns=ANCHOR_CADENCE_MS*1_000_000
+
+    def emit(event: dict[str,Any], slot: int) -> None:
+        raw=event["raw"]
+        age_ns=int(slot)-int(event["observed_ns"])
+        if age_ns<0:
+            raise RuntimeError("PM_ANCHOR_ASOF_FUTURE_LEAK")
+        features=oriented_pm_anchor_features(raw,outcome=str(event["outcome"]))
+        features["execution.tte_seconds"]=(int(event["end_ns"])-int(slot))/1e9
+        features["pm.anchor_age_ms"]=age_ns/1e6
+        market=str(event["market"])
+        decision_id=canonical_hash([
+            "maker-book-anchor-v3",str(event["sha"]),market,int(slot),
+            str(raw.get("observer_session_id") or ""),
+            int(raw.get("observer_sequence") or 0),
+        ])
+        rows.append({
+            "decision_id":decision_id,
+            "market_id":market,"asset":event["asset"],"horizon":event["horizon"],
+            "decision_ns":int(slot),"information_end_ns":int(event["observed_ns"]),
+            "yes_token_id":event["yes"],"no_token_id":event["no"],"token_id":event["yes"],
+            "tte_ns":int(event["end_ns"])-int(slot),"signal_age_ns":age_ns,"direction":0,
+            "fee_rate":event["fee_rate"],"fee_exponent":event["fee_exponent"],
+            "minimum":event["minimum"],"epoch":int(raw.get("connection_epoch") or 0),
+            "pair":{},"features":features,
+            "anchor_outcome":event["outcome"],
+            "anchor_observer_sequence":int(raw.get("observer_sequence") or 0),
+            "anchor_source":"CAUSAL_PM_BOOK_EXACT_FIXED_CADENCE_ASOF_STREAMING",
+        })
+        counts["grid_slots"]+=1
+
+    def flush_before(state: dict[str,Any], boundary_ns: int) -> None:
+        event=state["latest"]
+        slot=int(state["next_slot"])
+        stop=min(int(boundary_ns)-1,int(event["end_ns"])-1)
+        while slot<=stop:
+            emit(event,slot)
+            slot+=cadence_ns
+        state["next_slot"]=slot
+
     for path in paths:
         counts["files"]+=1
         for raw in robust_json_lines(path):
@@ -299,9 +339,9 @@ def load_book_anchor_rows(
             meta=metadata.get(market)
             if meta is None:
                 counts["metadata_unavailable"]+=1;continue
-            start=int(meta["start_timestamp_ms"])*1_000_000
-            end=int(meta["end_timestamp_ms"])*1_000_000
-            if not start<=observed_ns<end:
+            start_ns=int(meta["start_timestamp_ms"])*1_000_000
+            end_ns=int(meta["end_timestamp_ms"])*1_000_000
+            if not start_ns<=observed_ns<end_ns:
                 counts["outside_contract_window"]+=1;continue
             yes=str(meta["yes_token"]);no=str(meta["no_token"])
             if token==yes:outcome="YES"
@@ -310,90 +350,68 @@ def load_book_anchor_rows(
                 counts["token_mismatch"]+=1;continue
             asset=str(meta["asset"]).upper();horizon=str(meta["horizon"]).upper()
             static=market_meta.get(market) or context_meta.get((asset,horizon)) or {}
-            rate=meta.get("fee_rate")
-            exponent=meta.get("fee_exponent")
-            minimum=meta.get("minimum")
+            rate=meta.get("fee_rate"); exponent=meta.get("fee_exponent"); minimum=meta.get("minimum")
             if not finite(rate):rate=static.get("fee_rate")
             if not finite(exponent):exponent=static.get("fee_exponent")
             if not finite(minimum):minimum=static.get("minimum")
             if not all(finite(x) for x in (rate,exponent,minimum)):
                 counts["static_terms_unavailable"]+=1;continue
+
             event_key=(
                 sha,str(raw.get("observer_session_id") or ""),
                 int(raw.get("connection_epoch") or 0),
                 int(raw.get("observer_sequence") or 0),
                 market,token,observed_ns,
             )
-            if event_key==last_event_key:
-                counts["duplicate_events"]+=1;continue
-            last_event_key=event_key
-            events[market].append({
-                "observed_ns":observed_ns,"raw":raw,"sha":sha,"outcome":outcome,
+            state=states.get(market)
+            if state is not None:
+                latest=state["latest"]
+                latest_key=state["event_key"]
+                latest_ns=int(latest["observed_ns"])
+                if event_key==latest_key:
+                    counts["duplicate_events"]+=1;continue
+                if observed_ns<latest_ns:
+                    counts["out_of_order_events"]+=1;continue
+                if observed_ns>latest_ns:
+                    flush_before(state,observed_ns)
+
+            event={
+                "market":market,"observed_ns":observed_ns,"raw":raw,"sha":sha,"outcome":outcome,
                 "asset":asset,"horizon":horizon,"yes":yes,"no":no,
-                "start_ns":start,"end_ns":end,
+                "start_ns":start_ns,"end_ns":end_ns,
                 "fee_rate":float(rate),"fee_exponent":float(exponent),
                 "minimum":float(minimum),
-            })
+            }
+            if state is None:
+                first=max(int(minimum_wall_ns),start_ns,observed_ns)
+                next_slot=((first+cadence_ns-1)//cadence_ns)*cadence_ns
+                states[market]={"latest":event,"next_slot":next_slot,"event_key":event_key}
+            else:
+                state["latest"]=event
+                state["event_key"]=event_key
             counts["eligible_events"]+=1
 
-    rows=[]
-    for market,seq in sorted(events.items()):
-        seq.sort(key=lambda e:(
-            int(e["observed_ns"]),
-            int(e["raw"].get("observer_sequence") or 0),
-            str(e["raw"].get("token_id") or ""),
-        ))
-        stamps=[int(e["observed_ns"]) for e in seq]
-        first=max(int(minimum_wall_ns),int(seq[0]["start_ns"]),stamps[0])
-        last=min(int(seq[-1]["end_ns"])-1,stamps[-1])
-        slot=((first+cadence_ns-1)//cadence_ns)*cadence_ns
-        stop=(last//cadence_ns)*cadence_ns
+    # Match the prior semantics: never extrapolate beyond each market's final
+    # observed event, but include a grid point exactly at that final receive time.
+    for state in states.values():
+        event=state["latest"]
+        slot=int(state["next_slot"])
+        stop=min(int(event["observed_ns"]),int(event["end_ns"])-1)
         while slot<=stop:
-            pos=bisect_right(stamps,slot)-1
-            if pos<0:
-                slot+=cadence_ns;continue
-            event=seq[pos]
-            raw=event["raw"]
-            if not int(event["start_ns"])<=slot<int(event["end_ns"]):
-                slot+=cadence_ns;continue
-            age_ns=slot-int(event["observed_ns"])
-            if age_ns<0:
-                raise RuntimeError("PM_ANCHOR_ASOF_FUTURE_LEAK")
-            features=oriented_pm_anchor_features(raw,outcome=str(event["outcome"]))
-            features["execution.tte_seconds"]=(int(event["end_ns"])-slot)/1e9
-            features["pm.anchor_age_ms"]=age_ns/1e6
-            decision_id=canonical_hash([
-                "maker-book-anchor-v2",str(event["sha"]),market,slot,
-                str(raw.get("observer_session_id") or ""),
-                int(raw.get("observer_sequence") or 0),
-            ])
-            rows.append({
-                "decision_id":decision_id,
-                "market_id":market,"asset":event["asset"],"horizon":event["horizon"],
-                "decision_ns":slot,"information_end_ns":int(event["observed_ns"]),
-                "yes_token_id":event["yes"],"no_token_id":event["no"],"token_id":event["yes"],
-                "tte_ns":int(event["end_ns"])-slot,"signal_age_ns":age_ns,"direction":0,
-                "fee_rate":event["fee_rate"],"fee_exponent":event["fee_exponent"],
-                "minimum":event["minimum"],"epoch":int(raw.get("connection_epoch") or 0),
-                "pair":{},"features":features,
-                "anchor_outcome":event["outcome"],
-                "anchor_observer_sequence":int(raw.get("observer_sequence") or 0),
-                "anchor_source":"CAUSAL_PM_BOOK_EXACT_FIXED_CADENCE_ASOF",
-            })
-            counts["grid_slots"]+=1
+            emit(event,slot)
             slot+=cadence_ns
 
     rows.sort(key=lambda r:(int(r["decision_ns"]),str(r["market_id"]),str(r["decision_id"])))
+    counts["markets"]=len(states)
     counts["anchors"]=len(rows)
     if not rows:
         raise ValueError("NO_ALPHA_NEUTRAL_BOOK_ANCHORS")
     return rows,{
         "counts":dict(counts),"model_shas":sorted(model_shas),
         "anchor_cadence_ms":ANCHOR_CADENCE_MS,
-        "timing_selection":"EXACT_500MS_GRID_PER_ACTIVE_MARKET;LATEST_VALID_PM_EVENT_ASOF_GRID;NO_ALPHA_NO_PNL_NO_WITHIN_SLOT_EVENT_TIMING",
+        "timing_selection":"EXACT_500MS_GRID_PER_ACTIVE_MARKET;LATEST_VALID_PM_EVENT_ASOF_GRID;STREAMING_BOUNDED_MEMORY;NO_ALPHA_NO_PNL_NO_WITHIN_SLOT_EVENT_TIMING",
         "feature_semantics":"PM_EVENT_FEATURES_ORIENTED_TO_YES_PROBABILITY;FEATURE_AGE_EXPLICIT",
     }
-
 
 def load_feature_anchor_rows(
     paths: Iterable[Path], *, minimum_wall_ns: int,
