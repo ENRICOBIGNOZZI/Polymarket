@@ -170,7 +170,7 @@ def prune_paths_by_wall_prefix(paths, minimum_wall_ns: int):
 
 def observed_markets(run_root: Path, minimum_wall_ns: int):
     """Find market IDs from compact manifests or, when absent, the raw causal book."""
-    roots=(run_root,run_root.parent)
+    roots=(run_root,) if run_root.name=="polymarket_v7_collection" else (run_root,run_root.parent)
     found={}
     counts={"manifests":0,"status_rejected":0,"manifest_tokens":0,
             "raw_files":0,"raw_rows":0,"raw_accepted":0}
@@ -213,6 +213,10 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
     if archive_root.is_dir() and not archive_root.is_symlink():
         candidates.extend(archive_root.glob("*.jsonl*"))
         candidates.extend(archive_root.glob("*.gz"))
+    if run_root.name!="polymarket_v7_collection":
+        legacy=run_root.parent/"paper_v7_london_archives"
+        if legacy.is_dir() and not legacy.is_symlink():
+            candidates.extend(legacy.glob("**/research/repricing_book/book_observations/*.jsonl*"))
     paths=prune_paths_by_wall_prefix((p for p in candidates if p.is_file() and not p.is_symlink()),minimum_wall_ns)
     if not paths:
         counts["source"]="COMPACT_MANIFEST" if compact_found else "NONE"
