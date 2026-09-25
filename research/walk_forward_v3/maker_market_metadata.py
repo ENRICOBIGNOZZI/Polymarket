@@ -198,6 +198,9 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
                 and "repricing_book" in directory.parts
             ):
                 candidates.extend(directory.glob("*.jsonl*"))
+        for directory in data_root.rglob("repricing-book"):
+            if directory.is_dir() and not directory.is_symlink():
+                candidates.extend(directory.glob("*.jsonl*"))
     paths=sorted({p.resolve() for p in candidates if p.is_file() and not p.is_symlink()})
     if not paths:
         return found,counts
