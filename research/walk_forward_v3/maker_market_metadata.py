@@ -51,7 +51,7 @@ def json_lines(path: Path):
                     continue
                 if isinstance(value,dict):
                     yield value
-    except (OSError,UnicodeDecodeError):
+    except (OSError,EOFError,gzip.BadGzipFile,UnicodeDecodeError):
         return
 
 
