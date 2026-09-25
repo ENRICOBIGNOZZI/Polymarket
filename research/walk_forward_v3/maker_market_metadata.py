@@ -236,7 +236,10 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
                 raw.get("paper_only") is not True
                 or raw.get("authenticated_execution") is not False
                 or raw.get("real_order_submission") is not False
-                or raw.get("execution_authority")!="ZERO_AUTHORITY_RESEARCH_ONLY"
+                or raw.get("execution_authority") not in (
+                    "ZERO_AUTHORITY_RESEARCH_ONLY",
+                    "ZERO_AUTHORITY_DATA_COLLECTION",
+                )
             ):
                 continue
             market=str(raw.get("market_id") or "")
