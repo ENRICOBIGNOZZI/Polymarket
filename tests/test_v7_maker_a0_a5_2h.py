@@ -75,6 +75,23 @@ class MakerA0A5Tests(unittest.TestCase):
             self.assertIn("external.cross_venue_agreement_100ms",features)
             self.assertEqual(diag["accepted"],6)
 
+    def test_external_csv_loader_respects_causal_window(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/"btc.csv"
+            path.write_text(
+                "100,1,2,7,100.0\n"
+                "200,1,2,7,101.0\n"
+                "300,1,2,7,102.0\n",
+                encoding="utf-8")
+            index,diag=load_external_venue_csvs(
+                [f"BTC={path}"],lower_ns=150,upper_ns=250)
+            rows=index[("BTC","binance")]["rows"]
+        self.assertEqual(rows,[(200,7,101.0)])
+        self.assertEqual(diag["accepted"],1)
+        self.assertEqual(diag["before_window"],1)
+        self.assertEqual(diag["after_window"],1)
+
     def test_pm_anchor_features_orient_no_toward_yes_probability(self):
         raw={
             "placement_features":{
