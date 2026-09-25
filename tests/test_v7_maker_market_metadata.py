@@ -102,7 +102,7 @@ class MakerMarketMetadataTests(unittest.TestCase):
                 "schema":"polymarket_v7_causal_book_observation_v1",
                 "paper_only":True,"authenticated_execution":False,
                 "real_order_submission":False,
-                "execution_authority":"ZERO_AUTHORITY_RESEARCH_ONLY",
+                "execution_authority":"ZERO_AUTHORITY_DATA_COLLECTION",
                 "receive_wall_ms":2000,
                 "market_id":"m-canonical","token_id":"t-canonical",
                 "model_sha":"e"*40,"observer_session_id":"s","connection_epoch":1,
