@@ -245,19 +245,10 @@ def load_book_anchor_rows(
     book-activity timing selection.
     """
     candidates=[]
-    data_root=root.parent.resolve()
-    if data_root.exists():
-        for directory in data_root.rglob("book_observations"):
-            if (
-                directory.is_dir()
-                and not directory.is_symlink()
-                and "repricing_book" in directory.parts
-            ):
-                candidates.extend(directory.glob("*.jsonl*"))
-        for directory in data_root.rglob("repricing-book"):
-            if directory.is_dir() and not directory.is_symlink():
-                candidates.extend(directory.glob("*.jsonl*"))
+    book_root=root/"research"/"repricing_book"/"book_observations"
     archive_root=root/"archive"/"repricing-book"
+    if book_root.is_dir() and not book_root.is_symlink():
+        candidates.extend(book_root.glob("*.jsonl*"))
     if archive_root.is_dir() and not archive_root.is_symlink():
         candidates.extend(archive_root.glob("*.jsonl*"))
         candidates.extend(archive_root.glob("*.gz"))
@@ -269,7 +260,7 @@ def load_book_anchor_rows(
     if not paths:
         raise ValueError("PM_BOOK_OBSERVATION_DIR_MISSING")
     events=defaultdict(list)
-    seen_events=set()
+    last_event_key=None
     counts=Counter()
     model_shas=set()
     cadence_ns=ANCHOR_CADENCE_MS*1_000_000
@@ -329,9 +320,9 @@ def load_book_anchor_rows(
                 int(raw.get("observer_sequence") or 0),
                 market,token,observed_ns,
             )
-            if event_key in seen_events:
+            if event_key==last_event_key:
                 counts["duplicate_events"]+=1;continue
-            seen_events.add(event_key)
+            last_event_key=event_key
             events[market].append({
                 "observed_ns":observed_ns,"raw":raw,"sha":sha,"outcome":outcome,
                 "asset":asset,"horizon":horizon,"yes":yes,"no":no,
