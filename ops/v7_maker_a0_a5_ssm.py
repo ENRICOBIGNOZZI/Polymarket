@@ -68,6 +68,56 @@ def main() -> int:
 rm -rf {remote}/src {remote}/output
 mkdir -p {remote}/src {remote}/output
 tar -xzf {remote}/source.tgz -C {remote}/src
+python3 - {context['run_root']} <<'PYDISC'
+import json,sys
+from pathlib import Path
+root=Path(sys.argv[1]).resolve()
+data=root.parent
+dirs=[]
+seen=set()
+candidates=[
+    root/"research"/"repricing_book"/"book_observations",
+    root/"archive"/"repricing-book",
+]
+if data.is_dir():
+    for name in ("book_observations","repricing-book"):
+        try:
+            candidates.extend(data.rglob(name))
+        except OSError:
+            pass
+for directory in candidates:
+    try:
+        directory=directory.resolve()
+    except OSError:
+        continue
+    if str(directory) in seen or not directory.is_dir() or directory.is_symlink():
+        continue
+    seen.add(str(directory))
+    files=[]
+    total=0
+    for pattern in ("*.jsonl","*.jsonl.gz","*.gz","*.bin","*.bin.open"):
+        for p in directory.glob(pattern):
+            if p.is_file() and not p.is_symlink():
+                try:
+                    size=p.stat().st_size
+                except OSError:
+                    continue
+                files.append((p.name,size))
+                total+=size
+    if files:
+        files.sort()
+        dirs.append({
+            "path":str(directory),
+            "files":len(files),
+            "bytes":total,
+            "first":files[0][0],
+            "last":files[-1][0],
+        })
+dirs.sort(key=lambda x:x["path"])
+print("A0_A5_DATA_DISCOVERY="+json.dumps({
+    "run_root":str(root),"data_root":str(data),"dirs":dirs[:80],
+},sort_keys=True,separators=(",",":")))
+PYDISC
 python3 -m venv {remote}/venv
 {remote}/venv/bin/pip install --disable-pip-version-check --quiet -r {remote}/src/research/requirements-learning.txt
 PYTHONPATH={remote}/src:{context['app_dir']} {remote}/venv/bin/python -m research.walk_forward_v3.maker_market_metadata \
