@@ -110,7 +110,7 @@ for asset in assets:
         lines.append(asset+"="+str(csv))
 if len(lines)!=len(assets):
     raise SystemExit("EXTERNAL_VENUE_EXPORT_INCOMPLETE:required="+",".join(assets)+";ready="+",".join(lines))
-(remote/"external_specs.txt").write_text("\n".join(lines)+"\n",encoding="utf-8")
+(remote/"external_specs.txt").write_text("\\n".join(lines)+"\\n",encoding="utf-8")
 PYEXT
 {remote}/venv/bin/python - {remote}/venv/bin/python {remote}/src {context['app_dir']} {context['run_root']} {a.minimum_wall_ns} {a.expected_sha} {remote}/output/a0-a5 {remote}/external_specs.txt <<'PYRUN'
 import os,subprocess,sys
