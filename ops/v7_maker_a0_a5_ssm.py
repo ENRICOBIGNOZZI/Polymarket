@@ -10,7 +10,7 @@ import tarfile
 from pathlib import Path
 
 from v7_london_ssm_deploy import REGION, run
-from v7_direct_action_research_ssm import remote_context, upload, download, extract
+from v7_direct_action_research_ssm import upload, download, extract
 
 SHA=re.compile(r"^[0-9a-f]{40}$")
 INSTANCE=re.compile(r"^i-[0-9a-f]+$")
@@ -41,6 +41,38 @@ REQUIRED=(
 )
 
 
+def collection_context(instance: str) -> dict:
+    """Resolve the model-independent collection root; never the trading run root."""
+    command=r"""python3 - <<'PY'
+import json,shlex,subprocess
+from pathlib import Path
+unit='polymarket-v7-collection.service'
+assert subprocess.call(['systemctl','is-active','--quiet',unit])==0
+env=subprocess.check_output(['systemctl','show',unit,'-p','Environment','--value'],text=True)
+items=shlex.split(env)
+root=Path(next(v.split('=',1)[1] for v in items if v.startswith('PM_V7_COLLECTION_ROOT='))).resolve()
+app=Path(subprocess.check_output(['systemctl','show',unit,'-p','WorkingDirectory','--value'],text=True).strip()).resolve()
+state=json.loads((root/'control/runtime_status.json').read_text())
+assert root==Path('/mnt/polymarket-data/polymarket_v7_collection')
+assert state.get('model_independent') is True
+assert state.get('live_model_required') is False
+assert state.get('execution_authority')=='ZERO_AUTHORITY_DATA_COLLECTION'
+assert state.get('paper_only') is True
+assert state.get('authenticated_execution') is False
+assert state.get('real_order_submission') is False
+assert state.get('real_capital_at_risk') is False
+assert state.get('state')=='COLLECTING'
+assert app.is_dir()
+print('A0_A5_COLLECTION_CONTEXT='+json.dumps({
+    'run_root':str(root),'app_dir':str(app),
+    'collector_sha':state.get('collector_sha'),
+},sort_keys=True))
+PY"""
+    stdout,_=run(REGION,instance,command,60)
+    line=next(x for x in stdout.splitlines() if x.startswith("A0_A5_COLLECTION_CONTEXT="))
+    return json.loads(line.split("=",1)[1])
+
+
 def archive(repo: Path) -> bytes:
     buf=io.BytesIO()
     with tarfile.open(fileobj=buf,mode="w:gz") as tf:
@@ -61,7 +93,7 @@ def main() -> int:
     if not INSTANCE.fullmatch(a.instance_id):p.error("invalid instance")
     if not SHA.fullmatch(a.expected_sha):p.error("exact SHA required")
     repo=Path(__file__).resolve().parents[1]
-    context=remote_context(a.instance_id)
+    context=collection_context(a.instance_id)
     remote="/tmp/polymarket-maker-a0-a5-"+a.expected_sha[:12]
     upload(a.instance_id,remote,archive(repo))
     command=f"""set -euo pipefail
