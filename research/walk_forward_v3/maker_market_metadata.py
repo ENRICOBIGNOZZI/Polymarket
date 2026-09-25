@@ -181,9 +181,7 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
                     raise ValueError("CONFLICTING_MANIFEST_TOKEN:"+market+":"+outcome)
                 state["tokens"][outcome]=token
                 counts["manifest_tokens"]+=1
-    if found:
-        counts["source"]="COMPACT_MANIFEST"
-        return found,counts
+    compact_found=bool(found)
 
     # Current London runtime does not enable compact-label output on the
     # repricing observer. Raw causal book rows remain the authoritative source
@@ -203,6 +201,7 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
                 candidates.extend(directory.glob("*.jsonl*"))
     paths=sorted({p.resolve() for p in candidates if p.is_file() and not p.is_symlink()})
     if not paths:
+        counts["source"]="COMPACT_MANIFEST" if compact_found else "NONE"
         return found,counts
     seen=set()
     for path in paths:
@@ -235,11 +234,11 @@ def observed_markets(run_root: Path, minimum_wall_ns: int):
                 continue
             seen.add(event_key)
             state=found.setdefault(market,{"market_id":market,"tokens_seen":set(),"tokens":{}})
-            state["tokens_seen"].add(token)
+            state.setdefault("tokens_seen",set()).add(token)
             counts["raw_accepted"]+=1
     for state in found.values():
         state["tokens_seen"]=sorted(state.get("tokens_seen") or ())
-    counts["source"]="RAW_CAUSAL_BOOK"
+    counts["source"]="COMPACT_MANIFEST_PLUS_RAW_CAUSAL_BOOK" if compact_found else "RAW_CAUSAL_BOOK"
     return found,counts
 
 
